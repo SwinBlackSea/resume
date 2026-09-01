@@ -1,0 +1,12 @@
+# 密钥配置（含 API Key，绝不提交）
+.env
+
+# 运行时数据（SQLite 与对象存储，启动自动生成）
+data/
+
+# 依赖（仅测试用 jsdom）
+node_modules/
+
+# 日志与临时文件
+*.log
+.DS_Store

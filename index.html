@@ -1,0 +1,1136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>简历星球｜AI Native 简历工作台</title>
+<style>
+:root{--ink:#1d1d1f;--muted:#737378;--line:rgba(0,0,0,.075);--bg:#f5f5f7;--card:#fff;--blue:#0071e3;--blue2:#005ac7;--purple:#7c5ce7;--green:#28a36a;--orange:#e88424;--shadow:0 18px 60px rgba(0,0,0,.08)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;-webkit-font-smoothing:antialiased}button,input,textarea{font:inherit}button{cursor:pointer}::selection{background:rgba(0,113,227,.18)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:3px solid rgba(0,113,227,.24);outline-offset:2px}
+.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(620px,1fr) 344px;grid-template-rows:68px 1fr 104px}
+.topbar{position:sticky;top:0;z-index:30;grid-column:1/-1;display:flex;align-items:center;padding:0 20px;border-bottom:1px solid var(--line);background:rgba(250,250,252,.8);backdrop-filter:saturate(180%) blur(24px)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:720;letter-spacing:-.2px}.brand-mark{width:34px;height:34px;display:grid;place-items:center;border-radius:11px;color:#fff;background:linear-gradient(145deg,#202025,#494950);box-shadow:0 6px 18px rgba(0,0,0,.18)}
+.project-pill{display:flex;align-items:center;gap:9px;margin-left:38px;padding:8px 12px;border:1px solid var(--line);border-radius:99px;background:rgba(255,255,255,.72)}.project-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px rgba(40,163,106,.1)}.project-pill span{color:var(--muted);font-size:11px}
+.top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}.save-state{margin-right:5px;color:#318354;font-size:10px}.save-state:before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:#34c759}.save-version-btn:disabled{opacity:.42;cursor:default}.save-version-btn.ready{color:#0066cc;background:#eaf3ff;box-shadow:inset 0 0 0 1px rgba(0,113,227,.08)}
+.btn,.soft-btn,.icon-btn{border:0;border-radius:99px;font-weight:630;transition:.2s}.btn{height:40px;padding:0 18px;color:#fff;background:var(--blue);box-shadow:0 5px 16px rgba(0,113,227,.2)}.btn:hover{background:#0879e9;transform:translateY(-1px)}.soft-btn{height:38px;padding:0 14px;color:#3a3a3d;background:rgba(118,118,128,.09)}.soft-btn:hover,.icon-btn:hover{background:rgba(118,118,128,.15)}.icon-btn{width:36px;height:36px;color:#4a4a4f;background:rgba(118,118,128,.09)}
+.context{position:sticky;top:68px;grid-row:2/4;height:calc(100vh - 68px);padding:24px 14px 18px;border-right:1px solid var(--line);background:rgba(250,250,252,.76);backdrop-filter:blur(20px);overflow:auto}.side-head{display:flex;align-items:center;padding:0 9px 12px}.side-head b{font-size:12px}.side-head span{margin-left:auto;color:#8e8e93;font-size:10px}
+.goal{padding:14px;margin-bottom:16px;border:1px solid rgba(0,113,227,.14);border-radius:16px;background:linear-gradient(145deg,rgba(0,113,227,.08),rgba(124,92,231,.05))}.goal-label{display:flex;align-items:center;gap:6px;color:var(--blue);font-size:10px;font-weight:700}.goal h3{margin:8px 0 3px;font-size:14px;letter-spacing:-.25px}.goal p{margin:0;color:var(--muted);font-size:10px}.goal button{margin-top:11px;padding:0;border:0;background:transparent;color:var(--blue);font-size:10px;font-weight:650}
+.group{margin:18px 0}.group-title{padding:0 9px 7px;color:#939398;font-size:9px;font-weight:730;letter-spacing:1px}
+.context-health{padding:13px;margin-top:18px;border-radius:14px;background:#fff;box-shadow:0 7px 24px rgba(0,0,0,.045)}.health-top{display:flex;align-items:center}.health-top b{font-size:11px}.health-top span{margin-left:auto;color:var(--blue);font-size:10px}.health-bar{height:5px;margin:9px 0;border-radius:6px;background:#ececf0}.health-bar i{display:block;width:84%;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--blue),#65a9ff)}.context-health p{margin:0;color:#8e8e93;font-size:9px}
+.canvas{grid-column:2;grid-row:2;padding:26px 34px 38px;overflow:auto}.canvas-inner{max-width:780px;margin:0 auto}
+.ai-orb{position:relative;width:32px;height:32px;display:grid;place-items:center;flex:none;border-radius:50%;color:white;background:conic-gradient(from 210deg,#0071e3,#8e5ce6,#50b7ff,#0071e3);box-shadow:0 5px 15px rgba(75,93,215,.23)}.ai-orb:after{content:"✦";font-size:13px}
+.doc-toolbar{display:flex;align-items:center;margin-bottom:10px;padding:0 2px}.doc-toolbar b{font-size:11px}.doc-tools{position:relative;margin-left:auto;display:flex;align-items:center;gap:5px}.doc-tools button{height:28px;padding:0 9px;border:0;border-radius:8px;background:rgba(118,118,128,.08);color:#66666b;font-size:9px}.doc-tools button:hover{background:rgba(118,118,128,.14)}.zoom-control{position:relative}.zoom-menu{position:absolute;z-index:30;top:34px;right:0;display:none;min-width:112px;padding:5px;border:1px solid rgba(0,0,0,.07);border-radius:12px;background:rgba(255,255,255,.96);box-shadow:0 12px 34px rgba(0,0,0,.13);backdrop-filter:blur(18px)}.zoom-menu.show{display:block;animation:pop .16s ease}.zoom-menu button{width:100%;display:block;text-align:left;background:transparent}.zoom-menu button.active{background:#eaf3ff;color:#0066cc}
+.resume{position:relative;min-height:900px;padding:58px 64px 64px;background:#fff;box-shadow:0 24px 70px rgba(0,0,0,.12);font-family:Arial,"PingFang SC",sans-serif}.resume-top{padding-bottom:19px;border-bottom:2px solid #1d1d1f}.resume-top h1{margin:0;font-size:30px;letter-spacing:4px}.resume-top p{margin:7px 0 0;color:#5f6265;font-size:10px}.resume-section{margin-top:25px}.resume-section h2{margin:0 0 11px;padding-bottom:6px;border-bottom:1px solid #d1d1d6;font-size:12px;letter-spacing:1.5px}.resume-section p,.resume-section li{font-size:9.5px;line-height:1.75;color:#414448}.resume-section p{margin:5px 0}.resume-section ul{margin:7px 0;padding-left:16px}.resume-section li{position:relative;margin:5px 0;padding:3px 4px;border-radius:5px;transition:.18s}.resume-section li:hover,.editable.selected{background:#f2f7ff;box-shadow:0 0 0 1px rgba(0,113,227,.12)}.resume-row{display:flex;align-items:baseline;margin-top:12px;font-size:10px;font-weight:700}.resume-row .role{margin-left:12px;color:#4d5155;font-weight:500}.resume-row time{margin-left:auto;color:#73767a;font-size:9px;font-weight:400}
+.resume.template-modern .resume-top{border-bottom-color:#0071e3}.resume.template-modern .resume-top h1,.resume.template-modern .resume-section h2{color:#0066cc}.resume.template-modern .resume-section h2{border-bottom-color:#bad7f2}.resume.template-minimal{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}.resume.template-minimal .resume-top{border-bottom:1px solid #d9d9de}.resume.template-minimal .resume-section h2{border:0;padding-bottom:0;color:#55555a;letter-spacing:2px}.resume.template-minimal .resume-section{margin-top:29px}
+.selection-tools{position:fixed;z-index:45;display:none;padding:5px;border:1px solid rgba(255,255,255,.6);border-radius:12px;background:rgba(36,36,39,.92);box-shadow:0 12px 35px rgba(0,0,0,.2);backdrop-filter:blur(18px)}.selection-tools.show{display:flex;animation:pop .18s ease}.selection-tools button{height:29px;padding:0 9px;border:0;border-radius:8px;background:transparent;color:#fff;font-size:9px}.selection-tools button:hover{background:rgba(255,255,255,.13)}.selection-tools .spark{color:#a9cfff}
+.advisor{position:sticky;top:68px;grid-column:3;grid-row:2;height:calc(100vh - 172px);padding:22px 18px 30px;border-left:1px solid var(--line);background:rgba(250,250,252,.72);overflow:auto}.advisor-head{display:flex;align-items:center}.advisor-head .ai-orb{width:28px;height:28px}.advisor-head b{margin-left:9px}.live{margin-left:auto;display:flex;align-items:center;gap:5px;color:#318354;font-size:9px}.live i{width:6px;height:6px;border-radius:50%;background:#34c759}
+.tabs{display:flex;margin:18px 0 14px;padding:3px;border-radius:11px;background:rgba(118,118,128,.09)}.tabs button{flex:1;height:30px;border:0;border-radius:8px;background:transparent;color:#737378;font-size:10px}.tabs button.active{background:#fff;color:#1d1d1f;box-shadow:0 2px 8px rgba(0,0,0,.07);font-weight:650}.tab-panel{display:none}.tab-panel.active{display:block}
+.insight{padding:15px;margin-bottom:11px;border:1px solid rgba(0,0,0,.06);border-radius:17px;background:rgba(255,255,255,.9);box-shadow:0 7px 24px rgba(0,0,0,.04)}.insight.important{border-color:rgba(232,132,36,.16);background:linear-gradient(145deg,#fff,rgba(255,248,237,.8))}.insight-label{display:flex;align-items:center;color:#87878c;font-size:9px;font-weight:650}.insight-label .priority{margin-left:auto;padding:3px 6px;border-radius:99px;background:rgba(232,132,36,.1);color:#bc681e}.insight h3{margin:8px 0 5px;font-size:12px;letter-spacing:-.15px}.insight p{margin:0;color:#6e6e73;font-size:10px;line-height:1.6}.insight-actions{display:flex;gap:6px;margin-top:12px}.insight-actions button{height:31px;padding:0 10px;border:0;border-radius:9px;background:#f2f2f7;color:#5c5c62;font-size:9px}.insight-actions .accept{background:rgba(0,113,227,.1);color:var(--blue);font-weight:650}
+.answer-box{display:none;margin-top:11px}.answer-box.show{display:flex;gap:6px}.answer-box input{min-width:0;flex:1;height:34px;padding:0 9px;border:1px solid rgba(0,113,227,.25);border-radius:9px;outline:0}.answer-box button{height:34px;border:0;border-radius:9px;background:var(--blue);color:#fff;font-size:9px}
+.diff-mini{margin-top:10px;padding:9px;border-radius:10px;background:#f6f6f8;color:#69696e;font-size:9px;line-height:1.55}.diff-mini ins{text-decoration:none;color:#0066cc;background:rgba(0,113,227,.09)}
+
+.composer-wrap{position:sticky;bottom:0;z-index:25;grid-column:2/4;grid-row:3;padding:10px 32px 16px;border-top:1px solid var(--line);background:rgba(248,248,250,.8);backdrop-filter:saturate(180%) blur(24px)}.quick-prompts{max-width:1040px;margin:0 auto 7px;display:flex;gap:6px;overflow:auto}.quick-prompts button{height:25px;padding:0 9px;white-space:nowrap;border:0;border-radius:99px;background:rgba(118,118,128,.08);color:#77777c;font-size:9px}.quick-prompts button:hover{background:rgba(0,113,227,.09);color:var(--blue)}
+.composer{max-width:1040px;height:58px;margin:auto;display:flex;align-items:center;gap:8px;padding:7px 8px 7px 10px;border:1px solid rgba(0,0,0,.08);border-radius:19px;background:rgba(255,255,255,.94);box-shadow:0 12px 40px rgba(0,0,0,.09);transition:.2s}.composer:focus-within,.composer.drag{border-color:rgba(0,113,227,.35);box-shadow:0 12px 44px rgba(0,0,0,.1),0 0 0 4px rgba(0,113,227,.08)}.composer button{width:38px;height:38px;flex:none;border:0;border-radius:12px;background:#f2f2f7;color:#5f5f64}.composer .mic.on{background:#ffebe9;color:#d84d42;animation:pulse 1.1s infinite}.composer input{min-width:0;flex:1;border:0;outline:0;background:transparent;font-size:12px}.composer .send{background:var(--blue);color:#fff}.composer .send:disabled{background:#d1d1d6}
+.overlay{position:fixed;inset:0;z-index:80;display:none;place-items:center;padding:20px;background:rgba(0,0,0,.24);backdrop-filter:blur(14px)}.overlay.show{display:grid;animation:fade .2s ease}.modal{width:min(720px,100%);max-height:calc(100vh - 40px);overflow:auto;border:1px solid rgba(255,255,255,.65);border-radius:26px;background:rgba(250,250,252,.95);box-shadow:0 35px 100px rgba(0,0,0,.25);animation:modal .3s cubic-bezier(.2,.8,.2,1)}.modal-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;padding:21px 23px 16px;border-bottom:1px solid var(--line);background:rgba(250,250,252,.86);backdrop-filter:blur(20px)}.modal-head h2{margin:0;font-size:19px;letter-spacing:-.5px}.modal-head p{margin:3px 0 0;color:#8e8e93;font-size:9px}.close{margin-left:auto;width:34px;height:34px;border:0;border-radius:50%;background:rgba(118,118,128,.11);color:#6e6e73;font-size:17px}.modal-body{padding:20px 23px 24px}
+.history-browser{width:min(920px,100%)}.history-back{display:none;width:34px;height:34px;margin-right:10px;border:0;border-radius:50%;background:#eeeef2;color:#55555a}.history-back.show{display:block}.history-view{display:none}.history-view.active{display:block}.history-list{padding:18px 23px 24px}.history-day{margin:4px 2px 8px;color:#8e8e93;font-size:9px;font-weight:700}.history-day:not(:first-child){margin-top:18px}.version-row{width:100%;display:grid;grid-template-columns:54px minmax(0,1fr) auto;align-items:center;gap:13px;padding:11px;margin-bottom:7px;border:1px solid transparent;border-radius:16px;background:rgba(255,255,255,.78);text-align:left;transition:.18s}.version-row:hover{border-color:rgba(0,0,0,.06);background:#fff;box-shadow:0 8px 26px rgba(0,0,0,.06);transform:translateY(-1px)}.version-thumb{width:54px;height:70px;padding:9px 7px;border-radius:5px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.11)}.version-thumb:before{content:"";display:block;width:55%;height:4px;margin-bottom:7px;background:#36363a}.version-thumb:after{content:"";display:block;height:40px;background:repeating-linear-gradient(#b7b7bc 0 1px,transparent 1px 7px)}.version-row-copy{min-width:0}.version-row-copy b,.version-row-copy span{display:block}.version-row-copy b{font-size:11px}.version-row-copy span{margin-top:4px;color:#8e8e93;font-size:8px}.version-row-copy em{display:block;margin-top:5px;color:#66666b;font-size:8.5px;font-style:normal}.version-row-end{display:flex;align-items:center;gap:10px}.current-version{padding:4px 7px;border-radius:99px;background:#eaf3ff;color:#0066cc;font-size:8px}.version-arrow{color:#aaaab0;font-size:18px}
+.snapshot-layout{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}.snapshot-paper{min-height:520px;padding:42px 45px;border-radius:4px;background:#fff;box-shadow:0 16px 45px rgba(0,0,0,.1);font-family:Arial,"PingFang SC";font-size:8px}.snapshot-paper h3{margin:0;font-size:21px;letter-spacing:3px}.snapshot-paper>p{margin:7px 0 0;color:#727277}.snapshot-paper h4{margin:20px 0 7px;padding-bottom:5px;border-bottom:1px solid #d8d8dc;font-size:9px;letter-spacing:1px}.snapshot-paper .snapshot-role{font-weight:700;color:#37373b}.snapshot-paper .snapshot-copy{line-height:1.75;color:#55555a}.snapshot-side{padding:16px;border-radius:17px;background:#fff}.snapshot-side h3{margin:0 0 13px;font-size:12px}.snapshot-meta{display:grid;grid-template-columns:74px 1fr;gap:7px;padding-bottom:13px;border-bottom:1px solid rgba(0,0,0,.06);font-size:8.5px}.snapshot-meta span:nth-child(odd){color:#8e8e93}.snapshot-changes{margin-top:13px}.snapshot-change{padding:9px 10px;margin-top:6px;border-radius:10px;background:#f5f5f7;color:#55555a;font-size:8.5px}.snapshot-data-toggle{width:100%;height:33px;margin-top:13px;border:0;border-radius:10px;background:#edf5ff;color:#0066cc;font-size:9px}.snapshot-data{display:none;margin-top:8px;padding:4px 11px;border-radius:11px;background:#f8f8fa}.snapshot-data.show{display:block}.snapshot-data div{padding:8px 0;border-bottom:1px solid rgba(0,0,0,.055)}.snapshot-data div:last-child{border:0}.snapshot-data b,.snapshot-data span{display:block}.snapshot-data b{font-size:8px}.snapshot-data span{margin-top:2px;color:#818187;font-size:8px;line-height:1.45}.history-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:15px}.history-actions button{height:35px;padding:0 12px;border:0;border-radius:10px;background:#eeeef2;color:#55555a;font-size:9px}.history-actions .primary{background:#0071e3;color:#fff}.history-actions button:disabled{opacity:.45}.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.compare-card{padding:16px;border-radius:16px;background:#fff}.compare-card h3{margin:0 0 3px;font-size:11px}.compare-card>span{color:#8e8e93;font-size:8px}.compare-copy{margin-top:14px;padding:11px;border-radius:11px;background:#f6f6f8;color:#55555a;font-size:9px;line-height:1.7}.compare-card.old .compare-copy{background:#fff3f1}.compare-card.current .compare-copy{background:#eef8f2}.compare-note{padding:12px;margin-top:12px;border-radius:13px;background:#edf5ff;color:#476378;font-size:9px;line-height:1.6}
+.rewrite-modal{width:min(600px,100%)}.rewrite-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.rewrite-box{padding:14px;border-radius:14px;background:#f2f2f7;color:#626267;font-size:10px;line-height:1.65}.rewrite-box.new{background:#edf5ff}.rewrite-box label{display:block;margin-bottom:7px;color:#8e8e93;font-size:8px;font-weight:700}.rewrite-box ins{text-decoration:none;background:rgba(0,113,227,.1);color:#0066cc}.modal-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:15px}
+.template-modal{width:min(650px,100%)}.template-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.template-choice{padding:13px;border:1px solid rgba(0,0,0,.07);border-radius:16px;background:#fff;text-align:left;transition:.18s}.template-choice:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(0,0,0,.07)}.template-choice.active{border-color:rgba(0,113,227,.38);box-shadow:0 0 0 3px rgba(0,113,227,.08)}.template-preview{height:112px;margin-bottom:10px;padding:14px;border-radius:8px;background:#f5f5f7}.template-preview:before{content:"";display:block;width:48%;height:8px;margin-bottom:12px;background:#343437}.template-preview:after{content:"";display:block;height:58px;background:repeating-linear-gradient(#a8a8ad 0 2px,transparent 2px 10px)}.template-choice[data-template="modern"] .template-preview{border-top:7px solid #0071e3}.template-choice[data-template="minimal"] .template-preview{background:#fff;border:1px solid #ededf0}.template-choice b,.template-choice span{display:block}.template-choice b{font-size:10px}.template-choice span{margin-top:3px;color:#8e8e93;font-size:8px}.template-upload{display:flex;align-items:center;margin-top:13px;padding:12px 14px;border-radius:14px;background:#f2f2f7}.template-upload span{color:#77777c;font-size:9px}.template-upload button{margin-left:auto;height:31px;padding:0 10px;border:0;border-radius:9px;background:#fff;color:#55555a;font-size:9px}
+.save-version-modal{width:min(520px,100%)}.version-name-field{display:block;color:#77777c;font-size:9px}.version-name-field input{width:100%;height:42px;margin-top:7px;padding:0 12px;border:1px solid rgba(0,0,0,.1);border-radius:11px;background:#fff;outline:0;font-size:11px}.version-name-field input:focus{border-color:rgba(0,113,227,.38);box-shadow:0 0 0 4px rgba(0,113,227,.07)}.save-change-summary{margin-top:15px;padding:13px;border-radius:14px;background:#f5f5f7}.save-change-summary b{font-size:10px}.save-change-list{margin:8px 0 0;padding:0;list-style:none}.save-change-list li{padding:5px 0;color:#626267;font-size:9px}.save-change-list li:before{content:"✓";margin-right:7px;color:#278052}.save-version-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:16px}.save-version-actions button{height:35px;padding:0 13px;border:0;border-radius:10px;background:#eeeef2;color:#55555a}.save-version-actions .primary{background:#0071e3;color:#fff}
+.agent-run{text-align:center;padding:34px}.agent-run .ai-orb{width:46px;height:46px;margin:auto}.agent-run h2{margin:15px 0 4px;font-size:18px}.agent-run>p{margin:0;color:#8e8e93;font-size:10px}.run-log{max-width:420px;margin:21px auto 0;text-align:left}.run-step{display:flex;align-items:center;gap:9px;padding:8px 0;color:#9a9aa0;font-size:10px}.run-step i{width:17px;height:17px;display:grid;place-items:center;border-radius:50%;background:#e9e9ed;font-style:normal;font-size:8px}.run-step.done{color:#3a3a3e}.run-step.done i{background:#e8f7ef;color:var(--green)}.run-step.active{color:var(--blue);font-weight:650}.run-step.active i{background:#eaf4ff;animation:pulse 1s infinite}
+.toast{position:fixed;z-index:100;left:50%;bottom:118px;padding:10px 15px;border-radius:99px;background:rgba(29,29,31,.92);color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translate(-50%,12px);pointer-events:none;transition:.22s}.toast.show{opacity:1;transform:translate(-50%,0)}
+@keyframes fade{from{opacity:0}}@keyframes modal{from{opacity:0;transform:translateY(12px) scale(.97)}}@keyframes pop{from{opacity:0;transform:translateY(5px) scale(.96)}}@keyframes pulse{50%{opacity:.55;transform:scale(.93)}}
+@media(max-width:1160px){.app{grid-template-columns:220px 1fr;grid-template-rows:68px 1fr 104px}.advisor{display:none}.composer-wrap{grid-column:2}.context{grid-row:2/4}.canvas{grid-column:2}.resume{padding:48px}}
+@media(max-width:760px){.app{display:block;padding-bottom:100px}.topbar{height:60px;padding:0 12px}.project-pill,.save-state,.top-actions .soft-btn{display:none}.context{position:sticky;top:60px;z-index:20;width:100%;height:auto;display:flex;gap:6px;padding:8px;border-right:0;border-bottom:1px solid var(--line);overflow:auto}.side-head,.goal,.group-title,.context-health{display:none}.group{display:contents}.canvas{padding:22px 13px 28px}.resume{min-height:780px;padding:37px 27px}.composer-wrap{position:fixed;left:0;right:0;bottom:0;padding:8px 10px 11px}.quick-prompts{display:none}.snapshot-layout,.compare-grid,.rewrite-grid{grid-template-columns:1fr}.version-row{grid-template-columns:45px minmax(0,1fr) auto}.version-thumb{width:45px;height:60px}.snapshot-paper{min-height:430px;padding:30px}.history-actions{flex-wrap:wrap}.modal{border-radius:22px}.resume-top h1{font-size:24px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+.composer button{width:auto;min-width:38px;padding:0 10px}.composer .send{width:38px;padding:0}
+
+.undo-bar{display:none;align-items:center;gap:8px;padding:10px 12px;margin:-6px 0 14px;border-radius:13px;background:#1d1d1f;color:#fff;font-size:10px}.undo-bar.show{display:flex;animation:pop .2s ease}.undo-bar button{margin-left:auto;border:0;background:transparent;color:#8fc3ff;font-size:10px}
+.guide-modal{width:min(620px,100%)}.guide-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.guide-step{padding:17px;border-radius:16px;background:#f2f2f7}.guide-step i{width:26px;height:26px;display:grid;place-items:center;margin-bottom:11px;border-radius:50%;background:#0071e3;color:#fff;font-style:normal;font-size:10px}.guide-step b,.guide-step span{display:block}.guide-step b{font-size:11px}.guide-step span{margin-top:4px;color:#77777c;font-size:9px;line-height:1.55}
+
+@media(max-width:700px){.guide-steps{grid-template-columns:1fr}}
+.app{grid-template-columns:248px minmax(620px,1fr) 360px;grid-template-rows:68px 1fr}
+.context{grid-row:2}.canvas{grid-column:2;grid-row:2;padding-bottom:40px}
+.assistant-panel{position:sticky;top:68px;grid-column:3;grid-row:2;height:calc(100vh - 68px);display:flex;flex-direction:column;border-left:1px solid rgba(0,0,0,.075);background:rgba(250,250,252,.82);backdrop-filter:blur(22px)}
+.assistant-close{position:absolute;z-index:2;top:10px;right:10px;display:none;width:30px;height:30px;border:0;border-radius:50%;background:#eeeef2;color:#6e6e73}
+.scope-bar{display:flex;align-items:center;margin:0 12px 7px;color:#8e8e93;font-size:8px}.scope-target{min-width:0;display:flex;align-items:center;gap:5px;padding:5px 6px 5px 8px;border-radius:99px;background:#eaf3ff;color:#0066cc;font-weight:650}.scope-target span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.scope-target button{width:18px;height:18px;flex:none;border:0;border-radius:50%;background:rgba(0,113,227,.09);color:#6e6e73;line-height:1}.scope-bar.data-scope .scope-target{background:#eaf8f1;color:#267a4c}.scope-bar.data-scope .scope-target button{background:rgba(38,122,76,.1)}.scope-bar.global .scope-target button{display:none}
+.assistant-messages{min-height:0;flex:1;padding:16px 14px;overflow:auto}.bubble{max-width:88%;padding:10px 12px;margin-bottom:9px;border-radius:14px;background:#fff;color:#55555a;box-shadow:0 3px 12px rgba(0,0,0,.04);font-size:10px;line-height:1.6}.bubble.ai{border-bottom-left-radius:5px}.bubble.user{margin-left:auto;border-bottom-right-radius:5px;background:#0071e3;color:#fff}.bubble.thinking{width:52px;color:#8e8e93;animation:pulse 1s infinite}.message-scope{margin-bottom:4px;font-size:7px;font-weight:650;opacity:.72}.message-text{line-height:1.55}
+.assistant-quick{display:flex;flex-wrap:wrap;gap:5px;padding:0 14px 10px}.assistant-quick button{height:27px;padding:0 9px;border:0;border-radius:99px;background:rgba(118,118,128,.09);color:#66666b;font-size:8px}.assistant-quick button:hover{background:rgba(0,113,227,.09);color:#0066cc}
+.assistant-input{margin:0 12px 14px;padding:9px;border:1px solid rgba(0,0,0,.09);border-radius:16px;background:#fff;box-shadow:0 8px 30px rgba(0,0,0,.07);transition:.2s}.assistant-input:focus-within{border-color:rgba(0,113,227,.35);box-shadow:0 8px 30px rgba(0,0,0,.08),0 0 0 4px rgba(0,113,227,.07)}.assistant-input textarea{width:100%;padding:3px 4px 8px;border:0;outline:0;resize:none;background:transparent;font-size:10px;line-height:1.5}.assistant-tools{display:flex;gap:5px}.assistant-tools button{height:29px;padding:0 8px;border:0;border-radius:9px;background:#f2f2f7;color:#66666b;font-size:8px}.assistant-tools .send{margin-left:auto;background:#0071e3;color:#fff;font-weight:650}.assistant-tools .mic.on{background:#ffebe9;color:#d84d42}
+.chat-proposal{padding:12px;margin:8px 0 10px;border:1px solid rgba(0,113,227,.14);border-radius:15px;background:#f7fbff}.chat-proposal label{display:block;margin-bottom:4px;color:#8e8e93;font-size:8px;font-weight:700}.chat-proposal p{margin:0;color:#4e5256;font-size:9px;line-height:1.65}.proposal-old{padding-bottom:9px;margin-bottom:9px;border-bottom:1px solid rgba(0,0,0,.07);opacity:.72}.proposal-actions{display:flex;gap:5px;margin-top:11px}.proposal-actions button{height:30px;padding:0 9px;border:0;border-radius:8px;background:#eeeef2;color:#5c5c62;font-size:8px}.proposal-actions .replace{background:#0071e3;color:#fff;font-weight:650}
+.assistant-panel.attention{box-shadow:inset 3px 0 #0071e3}.assistant-toggle{display:none}
+@media(max-width:1160px){.app{grid-template-columns:220px 1fr;grid-template-rows:68px 1fr}.assistant-panel{position:fixed;z-index:60;top:76px;right:10px;bottom:10px;width:min(360px,calc(100vw - 20px));height:auto;display:none;border:1px solid rgba(0,0,0,.08);border-radius:22px;box-shadow:0 25px 80px rgba(0,0,0,.2);overflow:hidden}.assistant-panel.open{display:flex;animation:panelIn .25s ease}.assistant-panel .assistant-messages{padding-top:50px}.assistant-close{display:block}.assistant-toggle{position:fixed;z-index:45;right:16px;bottom:16px;display:block;height:42px;padding:0 15px;border:0;border-radius:99px;background:#0071e3;color:#fff;box-shadow:0 8px 25px rgba(0,113,227,.25);font-weight:650}.canvas{grid-column:2}.context{grid-row:2}}
+@media(max-width:760px){.app{display:block}.assistant-panel{top:68px}.assistant-toggle{bottom:14px}.canvas{padding-bottom:78px}}
+@keyframes panelIn{from{opacity:0;transform:translateY(8px) scale(.98)}}
+.ai-marker{display:inline-flex;align-items:center;height:18px;margin-left:5px;padding:0 6px;border:0;border-radius:99px;background:linear-gradient(100deg,rgba(124,92,231,.11),rgba(0,113,227,.1));color:#5856d6;font-size:7px;font-weight:650;vertical-align:middle;transition:.2s}.ai-marker:hover{background:linear-gradient(100deg,rgba(124,92,231,.2),rgba(0,113,227,.17));transform:translateY(-1px)}
+.ai-marker.pulse{animation:markerPulse 1s ease 3}.has-ai-note{box-shadow:inset 2px 0 rgba(88,86,214,.28)}
+@keyframes markerPulse{50%{box-shadow:0 0 0 5px rgba(88,86,214,.11);transform:translateY(-1px)}}
+.context{padding:18px 12px}.info-stack{display:grid;gap:10px}.info-card{width:100%;padding:14px;border:1px solid rgba(0,0,0,.065);border-radius:17px;background:rgba(255,255,255,.82);box-shadow:0 7px 24px rgba(0,0,0,.035);text-align:left;transition:.2s}.info-card:hover{border-color:rgba(0,113,227,.18);box-shadow:0 10px 30px rgba(0,0,0,.065);transform:translateY(-1px)}.info-card-top{display:flex;align-items:center;margin-bottom:12px}.info-symbol{width:31px;height:31px;display:grid;place-items:center;margin-right:9px;border-radius:10px;background:#edf5ff;color:#0071e3;font-size:10px;font-weight:750}.info-card.job .info-symbol{background:#f2edff;color:#7c5ce7}.info-card-top b{font-size:12px}.info-arrow{margin-left:auto;color:#a0a0a5;font-size:18px}.info-card strong,.info-card p{display:block}.info-card strong{font-size:11px}.info-card p{margin:3px 0 11px;color:#7a7a80;font-size:9px;line-height:1.5}.info-meta{display:flex;align-items:center;color:#8e8e93;font-size:8px}.info-status{margin-left:auto;padding:3px 7px;border-radius:99px;background:#fff4e8;color:#b96519;font-weight:650}.info-status.ready{background:#eaf8f1;color:#25804d}
+.data-modal{width:min(760px,100%)}.pending-panel{padding:14px;margin-bottom:16px;border:1px solid rgba(232,132,36,.15);border-radius:16px;background:#fffaf4}.panel-title{display:flex;align-items:center;margin-bottom:9px}.panel-title b{font-size:11px}.panel-count{margin-left:6px;padding:2px 6px;border-radius:99px;background:#ffead4;color:#b96519;font-size:8px}.panel-title span:last-child{margin-left:auto;color:#8e8e93;font-size:8px}.pending-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid rgba(0,0,0,.06)}.pending-copy{min-width:0;flex:1}.pending-copy b,.pending-copy span{display:block}.pending-copy b{font-size:10px}.pending-copy span{margin-top:2px;color:#77777c;font-size:8px}.pending-actions{display:flex;gap:5px}.pending-actions button,.data-row button,.import-actions button,.candidate-actions button{height:29px;padding:0 9px;border:0;border-radius:8px;background:#eeeef2;color:#5d5d62;font-size:8px}.pending-actions .confirm,.import-actions .primary,.candidate-actions .primary{background:#0071e3;color:#fff}.empty-data{padding:12px;color:#278052;text-align:center;font-size:9px}
+.data-section{margin-top:17px}.data-section-title{margin:0 0 7px;color:#8e8e93;font-size:8px;font-weight:750;letter-spacing:.7px}.data-block{border-bottom:1px solid rgba(0,0,0,.065)}.data-row{display:flex;align-items:center;gap:10px;padding:11px 2px}.data-row-icon{width:29px;height:29px;display:grid;place-items:center;flex:none;border-radius:9px;background:#f2f2f7;color:#66666b;font-size:9px}.data-row-copy{min-width:0;flex:1}.data-row-copy b,.data-row-copy span{display:block}.data-row-copy b{font-size:10px}.data-row-copy span{margin-top:2px;color:#85858a;font-size:8px}.inline-editor{display:none;align-items:center;gap:6px;padding:0 2px 11px 41px}.inline-editor.show{display:flex}.inline-editor input{min-width:0;flex:1;height:34px;padding:0 9px;border:1px solid rgba(0,0,0,.1);border-radius:9px;background:#fff;outline:0;font-size:9px}.inline-editor button{height:34px;padding:0 11px;border:0;border-radius:9px;background:#0071e3;color:#fff;font-size:9px}.import-zone{display:flex;align-items:center;gap:12px;padding:13px;margin-top:18px;border:1px dashed rgba(0,113,227,.28);border-radius:15px;background:#f7fbff}.import-zone.drag{border-color:#0071e3;background:#edf6ff}.import-zone-copy{min-width:0;flex:1}.import-zone-copy b,.import-zone-copy span{display:block}.import-zone-copy b{font-size:10px}.import-zone-copy span{margin-top:2px;color:#838388;font-size:8px}.import-actions{display:flex;gap:6px}
+.job-hero{display:flex;align-items:center;padding:15px;border-radius:17px;background:linear-gradient(145deg,#f3f7ff,#f7f2ff)}.job-hero-icon{width:39px;height:39px;display:grid;place-items:center;margin-right:11px;border-radius:12px;background:#fff;color:#5856d6;font-size:10px;font-weight:750}.job-hero b,.job-hero span{display:block}.job-hero b{font-size:13px}.job-hero span{margin-top:3px;color:#77777c;font-size:9px}.job-confirmed{margin-left:auto;padding:4px 8px;border-radius:99px;background:#e8f7ef;color:#25804d;font-size:8px}.job-analysis{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}.analysis-item{padding:12px;border-radius:13px;background:#fff}.analysis-item b,.analysis-item span{display:block}.analysis-item b{font-size:10px}.analysis-item span{margin-top:3px;color:#7e7e84;font-size:8px;line-height:1.5}.job-candidate{display:none;padding:13px;margin:14px 0;border:1px solid rgba(0,113,227,.15);border-radius:15px;background:#f7fbff}.job-candidate.show{display:block}.job-candidate b,.job-candidate span{display:block}.job-candidate b{font-size:11px}.job-candidate span{margin-top:3px;color:#77777c;font-size:8px}.candidate-actions{display:flex;gap:6px;margin-top:10px}
+.record-group{margin-top:8px;border:1px solid rgba(0,0,0,.065);border-radius:14px;background:#fff;overflow:hidden}.record-toggle{width:100%;display:flex;align-items:center;gap:10px;padding:12px;border:0;background:#fff;text-align:left}.record-toggle:hover{background:#fafafd}.record-toggle .data-row-icon{margin:0}.record-title{min-width:0;flex:1}.record-title b,.record-title span{display:block}.record-title b{font-size:10px}.record-title span{margin-top:2px;color:#88888d;font-size:8px}.record-chevron{color:#9a9aa0;transition:.2s}.record-group.open .record-chevron{transform:rotate(180deg)}.record-detail{display:none;padding:2px 13px 13px;border-top:1px solid rgba(0,0,0,.055)}.record-group.open .record-detail{display:block}.fact-line{display:flex;align-items:center;gap:8px;min-height:36px;border-bottom:1px solid rgba(0,0,0,.05);font-size:9px}.fact-label{width:76px;flex:none;color:#8e8e93}.fact-value{min-width:0;flex:1;color:#3f4246}.quick-edit,.ask-ai-record{height:27px;padding:0 8px;border:0;border-radius:8px;background:#f2f2f7;color:#616167;font-size:8px}.fact-input{min-width:0;flex:1;height:29px;padding:0 8px;border:1px solid rgba(0,113,227,.25);border-radius:8px;outline:0;font-size:9px}.experience-card{padding:11px 0;border-bottom:1px solid rgba(0,0,0,.06)}.experience-card:last-child{border-bottom:0}.experience-head{display:flex;align-items:flex-start;gap:8px}.experience-head>div{min-width:0;flex:1}.experience-head b,.experience-head span{display:block}.experience-head b{font-size:10px}.experience-head span{margin-top:2px;color:#85858a;font-size:8px}.fact-bullets{margin:8px 0;padding-left:17px;color:#53565a;font-size:8.5px;line-height:1.7}.fact-meta{display:flex;align-items:center;gap:6px;color:#8e8e93;font-size:7.5px}.usage-pill{padding:3px 6px;border-radius:99px;background:#eaf4ff;color:#0066cc}.usage-pill.unused{background:#f2f2f7;color:#77777c}.fact-warning{color:#c06b20}.skill-chips,.keyword-chips{display:flex;flex-wrap:wrap;gap:5px;padding-top:9px}.skill-chips span,.keyword-chips span{padding:4px 7px;border-radius:7px;background:#f2f2f7;color:#5e5e64;font-size:8px}.coverage-summary{padding:12px 14px;margin-top:13px;border-radius:13px;background:#edf6ff}.coverage-summary b,.coverage-summary span{display:block}.coverage-summary b{font-size:10px;color:#0066cc}.coverage-summary span{margin-top:3px;color:#687078;font-size:8px}.requirement-list{margin:4px 0 0;padding:0;list-style:none}.requirement-list li{display:flex;align-items:center;gap:7px;min-height:38px;padding:6px 0;border-bottom:1px solid rgba(0,0,0,.05);color:#484b4f;font-size:8.5px}.requirement-list li:last-child{border-bottom:0}.requirement-text{min-width:0;flex:1}.req-state{flex:none;padding:3px 6px;border-radius:99px;background:#eaf8f1;color:#278052;font-size:7px}.req-state.gap{background:#fff1e4;color:#b96519}
+@media(max-width:760px){.context{padding:8px}.info-stack{display:flex;gap:7px}.info-card{min-width:210px;padding:10px}.info-card-top{margin-bottom:7px}.info-card p{display:none}.info-meta>span:first-child{display:none}.data-modal{width:100%}.job-analysis{grid-template-columns:1fr}.import-zone{align-items:flex-start;flex-direction:column}.import-actions{width:100%}}
+</style>
+<style id="implementation-interaction-styles">
+.editable,.chat-proposal p{white-space:pre-line}.resume-section li:hover{background:#f7f9fc;box-shadow:0 0 0 1px rgba(0,0,0,.055)}.editable.selected{background:#f2f7ff;box-shadow:0 0 0 1px rgba(0,113,227,.14)}.editable.ai-target{position:relative;background:linear-gradient(90deg,rgba(88,86,214,.11),rgba(0,113,227,.055));box-shadow:inset 3px 0 #5856d6,0 0 0 1px rgba(88,86,214,.2)}.editable.ai-target:after{content:attr(data-ai-target-label);position:absolute;z-index:4;left:-61px;top:50%;width:51px;padding:4px 3px;border-radius:7px;background:#5856d6;color:#fff;box-shadow:0 4px 12px rgba(88,86,214,.2);font-size:7px;font-weight:700;line-height:1.25;text-align:center;transform:translateY(-50%);pointer-events:none}.editable.ai-target-thinking{background:linear-gradient(90deg,rgba(124,92,231,.15),rgba(0,113,227,.06));box-shadow:inset 3px 0 #7c5ce7,0 0 0 1px rgba(124,92,231,.24);animation:targetThinking 1.35s ease-in-out infinite}.editable.ai-target-thinking:after{background:linear-gradient(110deg,#7c5ce7,#0071e3)}.editable.ai-target-ready{background:linear-gradient(90deg,rgba(0,113,227,.12),rgba(0,113,227,.045));box-shadow:inset 3px 0 #0071e3,0 0 0 1px rgba(0,113,227,.2)}.editable.ai-target-ready:after{background:#0071e3}.editable.locate-pulse{animation:locateTarget .7s ease 2}
+.scope-target span[role=button]{cursor:pointer;outline:0}.scope-target span[role=button]:focus-visible{text-decoration:underline;text-underline-offset:2px}
+.assistant-tools .send{min-width:44px;display:inline-flex;align-items:center;justify-content:center;gap:5px;transition:.18s}.assistant-tools .send.is-thinking{min-width:63px;background:linear-gradient(110deg,#695bd6,#0071e3);cursor:wait}.assistant-tools .send.is-thinking:before{content:"";width:9px;height:9px;flex:none;border:1.5px solid rgba(255,255,255,.38);border-top-color:#fff;border-radius:50%;animation:sendThinking .7s linear infinite}.assistant-tools .send:disabled{opacity:1}
+@keyframes sendThinking{to{transform:rotate(360deg)}}@keyframes targetThinking{50%{box-shadow:inset 3px 0 #7c5ce7,0 0 0 3px rgba(88,86,214,.08)}}@keyframes locateTarget{50%{box-shadow:inset 3px 0 #0071e3,0 0 0 5px rgba(0,113,227,.14)}}
+@media(prefers-reduced-motion:reduce){.assistant-tools .send.is-thinking:before,.editable.ai-target-thinking,.editable.locate-pulse{animation:none!important}}
+@media(max-width:760px){.editable.ai-target:after{left:4px;top:-19px;width:auto;padding:3px 6px;transform:none}.editable.ai-target{margin-top:24px}}
+</style>
+</head>
+<body>
+<div class="app">
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">简</span>简历星球</div>
+  <div class="top-actions"><span class="save-state" id="save-state">已自动保存</span><button class="soft-btn save-version-btn" id="save-version-button" disabled>保存为版本</button><button class="soft-btn history-open">历史版本 · 3</button><button class="btn generate">生成简历</button><button class="icon-btn" aria-label="个人中心">陈</button></div>
+</header>
+
+<aside class="context">
+  <div class="info-stack">
+    <button class="info-card" id="profile-card"><span class="info-card-top"><span class="info-symbol">人</span><b>个人信息</b><span class="info-arrow">›</span></span><strong id="profile-card-name">陈知行 · 5 年产品经验</strong><p id="profile-card-summary">3 段工作 · 2 个项目 · 7 项技能</p><span class="info-meta"><span>旧简历及对话已整理</span><span class="info-status" id="profile-card-status">2 项待确认</span></span></button>
+    <button class="info-card job" id="job-card"><span class="info-card-top"><span class="info-symbol">岗</span><b>岗位信息</b><span class="info-arrow">›</span></span><strong id="job-card-title">高级产品经理 · 企业服务</strong><p id="job-card-summary">上海 · 5 年以上 · 3 张岗位截图</p><span class="info-meta"><span>职责与能力已识别</span><span class="info-status ready" id="job-card-status">已确认</span></span></button>
+  </div>
+</aside>
+
+<main class="canvas">
+<div class="canvas-inner">
+  <div class="undo-bar" id="undo-bar"><span id="undo-message">已应用修改</span><button id="undo-action">撤销</button></div>
+
+  <div class="doc-toolbar"><b>当前简历</b><div class="doc-tools"><button id="template-button">模板：经典商务</button><div class="zoom-control"><button id="zoom-button">缩放：90%</button><div class="zoom-menu" id="zoom-menu"><button data-zoom=".75">75%</button><button class="active" data-zoom=".9">90%</button><button data-zoom="1">100%</button><button data-zoom="fit">适应宽度</button></div></div></div></div>
+  <article class="resume template-classic" id="resume-document" style="zoom:.9"></article>
+</div>
+</main>
+
+<aside class="assistant-panel" id="assistant-panel">
+  <button class="assistant-close" aria-label="关闭 AI 助手">×</button>
+  <div class="assistant-tools" style="padding:10px 14px 0"><button id="new-chat-button" aria-label="开始新对话">＋ 开始新对话</button></div>
+  <div class="assistant-messages" id="chat-messages"><div class="bubble ai">你可以直接询问整份简历，也可以选择中间的内容并点击“帮我改写”，让我只修改这一段。</div></div>
+  <div class="assistant-quick"><button>更简洁</button><button>突出工作成果</button><button>更符合岗位</button><button>检查是否夸张</button></div>
+  <div class="scope-bar global" id="selection-context"><div class="scope-target"><span id="selection-label" role="button" tabindex="0" title="查看对应内容">@整份简历</span><button id="clear-selection" aria-label="改为针对整份简历" title="改为针对整份简历">×</button></div></div>
+  <div class="assistant-input" id="composer"><textarea id="prompt" rows="2" placeholder="告诉我你想怎么修改整份简历…"></textarea><div class="assistant-tools"><button class="attach" aria-label="上传资料">＋ 上传</button><button class="mic" aria-label="语音输入">◉ 语音</button><button class="send" aria-label="发送">发送</button></div></div>
+  <input type="file" id="file-input" hidden multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp">
+</aside>
+<button class="assistant-toggle" aria-label="打开 AI 助手">✦ AI 助手</button>
+
+
+</div>
+
+<div class="overlay" id="guide-modal"><div class="modal guide-modal"><div class="modal-head"><div><h2>三步完成一份好简历</h2><p>不用懂 AI，像平常说话一样告诉我们你的需求</p></div><button class="close">×</button></div><div class="modal-body"><div class="guide-steps"><div class="guide-step"><i>1</i><b>管理真实资料</b><span>在左侧确认个人信息和目标岗位。</span></div><div class="guide-step"><i>2</i><b>告诉 AI</b><span>选择作用范围，再说出希望怎么处理。</span></div><div class="guide-step"><i>3</i><b>确认后修改</b><span>只有你确认，资料或简历才会发生变化。</span></div></div><div class="modal-actions"><button class="btn guide-done">开始使用</button></div></div></div></div>
+
+<div class="overlay" id="profile-modal"><div class="modal data-modal"><div class="modal-head"><div><h2>个人信息</h2><p>这里保存 AI 可以使用的真实履历</p></div><button class="close">×</button></div><div class="modal-body">
+  <div class="pending-panel" id="profile-pending-panel"><div class="panel-title"><b>待你确认</b><span class="panel-count" id="profile-pending-count">2</span><span>确认后才会用于生成简历</span></div><div id="profile-pending-list"></div></div>
+  <div class="data-section"><div class="data-section-title">完整资料 · 点击分类展开</div><div id="profile-records"></div></div>
+  <div class="import-zone" id="profile-drop"><div class="import-zone-copy"><b>补充个人资料</b><span>可拖入旧简历、证书、PDF 或 Word，AI 提取后需你确认</span></div><div class="import-actions"><button id="profile-upload">上传资料</button><button class="primary" id="profile-ai">和 AI 补充</button></div></div>
+  <input type="file" id="profile-file" hidden multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp">
+</div></div></div>
+
+<div class="overlay" id="job-modal"><div class="modal data-modal"><div class="modal-head"><div><h2>岗位信息</h2><p>确认后，AI 才会按这个岗位调整简历</p></div><button class="close">×</button></div><div class="modal-body">
+  <div class="job-hero"><span class="job-hero-icon">JD</span><span><b id="job-modal-title">高级产品经理</b><span id="job-modal-meta">企业服务 · 上海 · 5 年以上</span></span><span class="job-confirmed">当前岗位</span></div>
+  <div class="coverage-summary" id="coverage-summary"><b>当前简历已覆盖 8/11 项核心要求</b><span>3 项仍需补充或加强，具体状态已标在每条要求右侧。</span></div>
+  <div class="data-section"><div class="data-section-title">AI 整理结果 · 点击分类展开</div><div id="job-records"></div></div>
+  <div class="job-candidate" id="job-candidate"><b>识别到一个新岗位：增长产品经理</b><span>AI 已整理职责与能力，确认后才会替换当前岗位。</span><div class="candidate-actions"><button class="primary" id="set-current-job">设为当前岗位</button><button id="discard-job">暂不使用</button></div></div>
+  <div class="import-zone" id="job-drop"><div class="import-zone-copy"><b>更换或补充岗位信息</b><span>拖入截图、图片、PDF、Word，也可以选择整个文件夹</span></div><div class="import-actions"><button id="job-upload">选择文件</button><button id="job-folder">选择文件夹</button><button class="primary" id="job-ai">和 AI 分析</button></div></div>
+  <input type="file" id="job-file" hidden multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp"><input type="file" id="job-folder-file" hidden multiple webkitdirectory>
+</div></div></div>
+
+<div class="selection-tools" id="selection-tools"><button class="spark rewrite-action">✦ 帮我改写</button><button data-intent="简洁">更精炼</button><button data-intent="成果">强调成果</button><button data-intent="岗位">更符合岗位</button></div>
+
+<div class="overlay" id="history-modal"><div class="modal history-browser">
+  <div class="modal-head" id="history-head"><button class="history-back" id="history-back" aria-label="返回">←</button><div><h2 id="history-title">历史版本</h2><p id="history-subtitle">生成或主动保存的版本都会保存在这里</p></div><button class="close">×</button></div>
+  <div class="history-view history-list active" id="history-list"></div>
+
+  <div class="history-view modal-body" id="history-detail">
+    <div class="snapshot-layout"><div class="snapshot-paper"><h3 id="snapshot-name">陈 知 行</h3><p id="snapshot-contact">高级产品经理｜上海｜chen.zhixing@example.com</p><h4>个人优势</h4><p class="snapshot-copy" id="snapshot-advantage"></p><h4>工作经历</h4><p class="snapshot-role" id="snapshot-role"></p><p class="snapshot-copy" id="snapshot-work"></p><h4>项目经历</h4><p class="snapshot-copy" id="snapshot-project"></p></div>
+    <div class="snapshot-side"><h3>这个版本</h3><div class="snapshot-meta"><span>目标岗位</span><span id="snapshot-job"></span><span>模板</span><span id="snapshot-template"></span><span>生成时间</span><span id="snapshot-time"></span></div><div class="snapshot-changes"><h3>主要调整</h3><div id="snapshot-change-list"></div></div><button class="snapshot-data-toggle" id="snapshot-data-toggle">查看当时的资料</button><div class="snapshot-data" id="snapshot-data"><div><b>个人资料</b><span id="snapshot-profile-data"></span></div><div><b>岗位信息</b><span id="snapshot-job-data"></span></div><div><b>简历模板</b><span id="snapshot-template-data"></span></div></div></div></div>
+    <div class="history-actions"><button id="compare-version">与当前版本比较</button><button id="download-version">下载</button><button class="primary" id="copy-version">复制此版本继续修改</button></div>
+  </div>
+  <div class="history-view modal-body" id="history-compare"><div class="compare-grid"><div class="compare-card old"><h3 id="compare-old-title"></h3><span id="compare-old-time"></span><div class="compare-copy" id="compare-old-copy"></div></div><div class="compare-card current"><h3>当前版本</h3><span id="compare-current-time">今天 15:48</span><div class="compare-copy" id="compare-current-copy"></div></div></div><div class="compare-note" id="compare-note"></div></div>
+</div></div>
+
+<div class="overlay" id="save-version-modal"><div class="modal save-version-modal">
+  <div class="modal-head"><div><h2>保存为历史版本</h2><p>当前草稿会固定下来，之后可以随时恢复</p></div><button class="close">×</button></div>
+  <div class="modal-body"><label class="version-name-field">版本名称<input id="version-name-input" maxlength="32" value="完善简历内容"></label><div class="save-change-summary"><b id="save-change-title">本次包含 1 处修改</b><ul class="save-change-list" id="save-change-list"></ul></div><div class="save-version-actions"><button id="cancel-save-version">取消</button><button class="primary" id="confirm-save-version">保存</button></div></div>
+</div></div>
+
+<div class="overlay" id="new-chat-modal"><div class="modal save-version-modal">
+  <div class="modal-head"><div><h2>开始新对话？</h2><p>重新开始不会改变已经保存的内容</p></div><button class="close">×</button></div>
+  <div class="modal-body"><p id="new-chat-summary" style="margin:0;color:#626267;font-size:10px;line-height:1.8"></p><div class="save-version-actions"><button id="cancel-new-chat">取消</button><button class="primary" id="confirm-new-chat">开始新对话</button></div></div>
+</div></div>
+
+<div class="overlay" id="template-modal"><div class="modal template-modal">
+  <div class="modal-head"><div><h2>选择简历模板</h2><p>内容不会变化，只调整排版和视觉风格</p></div><button class="close">×</button></div>
+  <div class="modal-body"><div class="template-grid" id="template-grid"></div><div class="template-upload"><span id="template-upload-status">已有自己的图片、PDF 或 Word 模板？</span><button id="template-upload-button">上传模板</button><input type="file" id="template-file" hidden accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp"></div></div>
+</div></div>
+
+<div class="overlay" id="run-modal"><div class="modal" style="width:min(540px,100%)"><div class="agent-run"><div class="ai-orb"></div><h2>AI 正在生成新简历</h2><p id="generation-status">你可以关闭窗口，任务会继续运行</p><div class="run-log" id="run-log"><div class="run-step active"><i>1</i>正在校验资料与岗位</div><div class="run-step"><i>2</i>正在冻结本次输入</div><div class="run-step"><i>3</i>正在重组简历内容</div><div class="run-step"><i>4</i>正在渲染 PDF 与 DOCX</div><div class="run-step"><i>5</i>正在检查内容是否真实</div></div></div></div></div>
+<div class="toast" id="toast">已完成</div>
+
+<script>
+/* =========================================================================
+   简历星球 · 前端工作台
+   - 视觉与结构 100% 还原 index.prototype.backup.html
+   - 所有数据来自后端 API（PRD/TECH 约束由服务端保证）
+   - AI 只提出方案，界面只在后端真实执行后展示完成状态
+   ========================================================================= */
+var $=function(s,p){return(p||document).querySelector(s)},$$=function(s,p){return Array.from((p||document).querySelectorAll(s))};
+/* API 基址按页面所在目录推导：
+   直接访问服务根（http://host:8787/）时为 /api/v1；
+   经网关子目录（https://host/resume/）时为 /resume/api/v1。 */
+var API=(function(){
+  var p=location.pathname;
+  if(!/\.[a-z0-9]+$/i.test(p)&&p.charAt(p.length-1)!=='/')p+='/';
+  return p.replace(/[^/]*$/,'')+'api/v1';})(),PROJECT_ID=null,WS=null;
+/** 把后端返回的 /api/v1 路径换算到当前部署位置。 */
+function toApiUrl(url){return String(url||'').replace(/^\/api\/v1/,API)}
+var SCOPE_LABEL={DATA_PROFILE:'@资料 · 个人信息',DATA_JOB:'@资料 · 岗位信息',RESUME_BLOCK:'@简历 · 具体内容',RESUME_DOCUMENT:'@整份简历'};
+
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function toast(msg){var t=$("#toast");t.textContent=msg;t.classList.add("show");clearTimeout(window.toastTimer);window.toastTimer=setTimeout(function(){t.classList.remove("show")},1800)}
+function openModal(id){$(id).classList.add("show")}
+function closeModal(el){el.closest(".overlay").classList.remove("show")}
+function uid(){return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+function pad(n){return n<10?'0'+n:''+n}
+/** 时间显示：同一天显示「今天 HH:MM」，否则「M 月 D 日 HH:MM」，与原型一致 */
+function fmtTime(iso){var d=new Date(iso),now=new Date();var hm=pad(d.getHours())+':'+pad(d.getMinutes());
+  if(d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth()&&d.getDate()===now.getDate())return '今天 '+hm;
+  return (d.getMonth()+1)+' 月 '+d.getDate()+' 日 '+hm}
+function dayLabel(iso){var d=new Date(iso),now=new Date();
+  if(d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth()&&d.getDate()===now.getDate())return '今天';
+  return (d.getMonth()+1)+' 月 '+d.getDate()+' 日'}
+
+function api(path,opts){
+  opts=opts||{};
+  var headers={'content-type':'application/json'};
+  if(opts.idemKey)headers['Idempotency-Key']=opts.idemKey;
+  var doFetch=function(signal){
+    return fetch(API+path,{method:opts.method||'GET',headers:headers,body:opts.body?JSON.stringify(opts.body):undefined,signal:signal});
+  };
+  return doFetch(opts.signal).catch(function(err){
+    // 跨 realm 的 AbortSignal 不可用时（如测试环境）降级为不带 signal
+    if(opts.signal&&err instanceof TypeError)return doFetch(undefined);
+    throw err;})
+    .then(function(r){
+      // 响应容错：即使后端返回空 body / 非 JSON，也给出可读错误而不是解析崩溃
+      return r.text().then(function(text){
+        var b=null;
+        if(text){try{b=JSON.parse(text);}catch(_){b=null;}}
+        if(!b&&r.ok){var e3=new Error('服务返回了空响应，请稍后重试');e3.code='EMPTY_RESPONSE';throw e3;}
+        if(!b&&!r.ok){
+          var e2=new Error(r.status===401?'登录状态已失效，请刷新页面':('服务返回异常（HTTP '+r.status+'）'));
+          e2.code='HTTP_'+r.status;throw e2;}
+        if(!r.ok){var e=new Error(b.detail||b.title||'请求失败');e.code=b.title;e.payload=b;throw e}
+        return b;});});}
+function refresh(){return api('/projects/'+PROJECT_ID).then(function(data){WS=data;renderAll();return data})}
+
+/* ---------------- 待成版修改（草稿层，不自动进入历史） ---------------- */
+var pendingChanges=[],lastChange=null;
+function labelOfScope(scopeLabel,changeType){
+  var short=String(scopeLabel||'').replace('@简历 · ','');
+  if(changeType==='template')return short;
+  return '修改'+short;
+}
+function syncPendingFromServer(){
+  pendingChanges=(WS.draft.pending_changes||[]).map(function(c){
+    return (c.after&&c.after.label)||labelOfScope(c.scope_label,c.change_type);});
+  refreshPendingUI();
+}
+function refreshPendingUI(){
+  var button=$("#save-version-button"),has=pendingChanges.length>0;
+  button.disabled=!has;button.classList.toggle("ready",has);
+  $("#save-state").textContent=has?"草稿已自动保存":"已保存为版本";
+}
+function markUnsaved(change){if(change&&pendingChanges.indexOf(change)===-1)pendingChanges.push(change);refreshPendingUI()}
+function removeLastPendingChange(){if(pendingChanges.length)pendingChanges.pop();refreshPendingUI()}
+function showUndo(el,oldText,message,meta){
+  lastChange={el:el,text:oldText,meta:meta||null};
+  $("#undo-message").textContent=message;$("#undo-bar").classList.add("show");
+  clearTimeout(window.undoTimer);window.undoTimer=setTimeout(function(){$("#undo-bar").classList.remove("show")},6000)}
+
+/* ---------------- 渲染：全部数据来自后端，DOM 结构与原型一致 ---------------- */
+function periodOf(item){
+  var s=item.start||item.start_date||'',e=item.end||item.end_date||'';
+  if(!s&&!e)return '';return s+' — '+(e||'至今');}
+function maskPhone(p){p=String(p||'');return p.length>=7?p.slice(0,3)+' **** '+p.slice(-4):p}
+function layoutKey(){return ((WS.draft.resume_json||{}).layout_hints||{}).layout||'classic'}
+function usageCount(expId){
+  var r=WS.draft.resume_json||{},n=0;
+  ['experience','projects'].forEach(function(s){
+    (r[s]||[]).forEach(function(item){if(item.source_exp===expId)n+=(item.bullets||[]).length;});});
+  return n;}
+function exps(type){return (WS.profile.experiences||[]).filter(function(e){return e.type===type})}
+
+function renderAll(){
+  renderContextCards();renderResume();renderProfileModal();renderJobModal();
+  renderTemplates();renderChat();renderHistory();syncPendingFromServer();
+  $(".history-open").textContent='历史版本 · '+WS.versions.length;
+  $("#template-button").textContent='模板：'+(WS.template?WS.template.name:'未选择');
+}
+
+function renderContextCards(){
+  var b=WS.profile.basics||{},works=exps('work'),projs=exps('project'),skills=exps('skill');
+  $("#profile-card-name").textContent=(b.name||'未填写')+(b.years?' · '+b.years+' 年产品经验':'');
+  $("#profile-card-summary").textContent=works.length+' 段工作 · '+projs.length+' 个项目 · '+skills.length+' 项技能';
+  var pend=(WS.pending_facts||[]).length,st=$("#profile-card-status");
+  st.textContent=pend?pend+' 项待确认':'已确认';
+  st.className='info-status'+(pend?'':' ready');
+  var job=WS.job;
+  if(job){
+    $("#job-card-title").textContent=job.title+(job.company?' · '+job.company:'');
+    var a=job.analysis||{};[a.location,a.experience].filter(Boolean).join(' · ');
+    $("#job-card-summary").textContent=[a.location,a.experience,(job.sources||[]).length+' 张岗位截图'].filter(Boolean).join(' · ');
+    var js=$("#job-card-status");
+    js.textContent=job.status==='confirmed'?'已确认':'待确认';
+    js.className='info-status'+(job.status==='confirmed'?' ready':'');
+  }
+}
+
+function renderResume(){
+  var r=WS.draft.resume_json||{},doc=$("#resume-document"),b=r.basics||{};
+  var name=String(b.name||'').split('').join(' ');
+  var contact=[r.headline,b.city,b.phone,b.email].filter(Boolean).join('　|　');
+  var html='<div class="resume-top"><h1>'+esc(name)+'</h1><p>'+esc(contact)+'</p></div>';
+  if(r.summary)html+='<section class="resume-section"><h2>个人优势</h2><p class="editable" data-bullet-id="summary">'+esc(r.summary)+'</p></section>';
+  if((r.experience||[]).length){
+    html+='<section class="resume-section"><h2>工作经历</h2>';
+    (r.experience||[]).forEach(function(item){
+      html+='<div class="resume-row">'+esc(item.organization)+' <span class="role">'+esc(item.title||'')+'</span><time>'+esc(periodOf(item))+'</time></div>';
+      html+='<ul>'+bulletsHtml(item.bullets)+'</ul>';});
+    html+='</section>';}
+  if((r.projects||[]).length){
+    html+='<section class="resume-section"><h2>项目经历</h2>';
+    (r.projects||[]).forEach(function(item){
+      html+='<div class="resume-row">'+esc(item.name||item.organization||'')+' <span class="role">'+esc(item.role||item.title||'')+'</span><time>'+esc(periodOf(item))+'</time></div>';
+      html+='<ul>'+bulletsHtml(item.bullets)+'</ul>';});
+    html+='</section>';}
+  if((r.education||[]).length){
+    html+='<section class="resume-section"><h2>教育经历</h2>';
+    (r.education||[]).forEach(function(item){
+      html+='<div class="resume-row">'+esc(item.school||item.organization||'')+' <span class="role">'+esc(item.major||'')+'</span><time>'+esc(periodOf(item))+'</time></div>';});
+    html+='</section>';}
+  if((r.skills||[]).length){
+    html+='<section class="resume-section"><h2>专业技能</h2><p>'+esc((r.skills||[]).map(function(s){return typeof s==='string'?s:s.name}).join('　'))+'</p></section>';}
+  doc.innerHTML=html;
+  doc.className='resume template-'+layoutKey();
+  bindEditables();bindAiMarkers();
+  syncResumeTargetMarkers();
+}
+/** AI 建议标记：选中对应内容、切换作用范围并预填意图（原型交互） */
+function bindAiMarkers(){
+  $$("#resume-document .ai-marker").forEach(function(marker){
+    marker.onclick=function(e){
+      e.stopPropagation();
+      selectedText=marker.closest(".editable");
+      $$(".editable").forEach(function(x){x.classList.remove("selected")});
+      selectedText.classList.add("selected");
+      $("#selection-tools").classList.remove("show");
+      if(marker.dataset.suggestion==="scale"){
+        beginEdit("");
+        addBubble("ai","为了补充项目规模，请告诉我这个项目覆盖了多少客户或用户。");
+        $("#prompt").placeholder="例如：覆盖 120 家付费客户";$("#prompt").focus();
+      }else{
+        beginEdit("更突出付费转化成果");
+        addBubble("ai","我会保留原有数字，只调整表达，让付费转化成果更突出。");
+        $("#prompt").focus();}};});}
+function bulletsHtml(bullets){
+  return (bullets||[]).map(function(bl){
+    var cls='editable'+(bl.ai_note?' has-ai-note':'');
+    var id=bl.id?' id="'+esc(bl.id)+'"':'';
+    var marker=bl.ai_note?'<button class="ai-marker" data-suggestion="'+esc(bl.ai_note.suggestion)+'">✦ '+esc(bl.ai_note.label)+'</button>':'';
+    return '<li class="'+cls+'"'+id+' data-bullet-id="'+esc(bl.id||'')+'">'+esc(bl.text)+marker+'</li>';}).join('');
+}
+
+/* ---------------- 个人信息浮层 ---------------- */
+function factLine(label,value,field,raw){
+  var rawAttr=raw?' data-raw="'+esc(raw)+'"':'';
+  return '<div class="fact-line"><span class="fact-label">'+esc(label)+'</span><span class="fact-value"'+rawAttr+'>'+esc(value)+'</span>'+(field?'<button class="quick-edit" data-field="'+field+'">修改</button>':'')+'</div>';}
+function expCard(exp,showPending){
+  var usage=usageCount(exp.id);
+  var bullets=(exp.bullets||[]).map(function(t){return '<li>'+esc(t)+'</li>'}).join('');
+  if(showPending){
+    (WS.pending_facts||[]).forEach(function(f){
+      if(f.target_id===exp.id)bullets+='<li class="fact-warning">'+esc(f.label)+'：待确认 '+esc(f.value)+'</li>';});}
+  // 项目经历标题只显示项目名（角色已在下方时间行展示，与原型一致）
+  var headTitle=exp.type==='project'?exp.organization:(exp.organization+' · '+exp.title);
+  return '<div class="experience-card"><div class="experience-head"><div><b>'+esc(headTitle)+'</b><span>'+esc(exp.period_label||periodOf(exp))+'</span></div>'+
+    '<button class="ask-ai-record" data-scope="@资料 · '+esc(exp.organization)+'" data-exp-id="'+esc(exp.id)+'">和 AI 聊</button></div>'+
+    '<ul class="fact-bullets">'+bullets+'</ul>'+
+    '<div class="fact-meta"><span class="usage-pill'+(usage?'':' unused')+'">'+(usage?'当前简历使用 '+usage+' 项':'当前简历未使用')+'</span></div></div>';}
+function renderProfileModal(){
+  var b=WS.profile.basics||{};
+  // 待确认资料
+  var list=$("#profile-pending-list"),facts=WS.pending_facts||[];
+  $("#profile-pending-count").textContent=facts.length;
+  if(!facts.length)list.innerHTML='<div class="empty-data">没有待确认资料</div>';
+  else list.innerHTML=facts.map(function(f){
+    return '<div class="pending-item" data-fact="'+esc(f.id)+'"><div class="pending-copy"><b>'+esc(f.label)+'：'+esc(f.value)+'</b><span>识别自：'+esc(f.source_label)+'</span></div>'+
+      '<div class="pending-actions"><button class="confirm">确认保存</button><button class="reject">忽略</button></div></div>';}).join('');
+  $$("#profile-pending-list .pending-item").forEach(bindPendingItem);
+
+  var works=exps('work'),projs=exps('project'),edus=exps('education'),skills=exps('skill'),certs=exps('certificate');
+  // 口径：工作成果 = 工作经历与项目经历合计的已确认条目数（初始为 8 项）
+  var outcomes=works.concat(projs).reduce(function(n,e){return n+(e.bullets||[]).length},0);
+  var pendingProj=(WS.pending_facts||[]).filter(function(f){return f.target_type==='project_experience'}).length;
+  var html='';
+  html+='<section class="record-group open"><button class="record-toggle"><span class="data-row-icon">基</span><span class="record-title"><b>基础信息</b><span>姓名、联系方式、城市与求职状态</span></span><span class="record-chevron">⌄</span></button><div class="record-detail">'+
+    factLine('姓名',b.name||'','name')+factLine('手机',maskPhone(b.phone),'phone',b.phone)+factLine('邮箱',b.email||'','email')+
+    factLine('所在城市',b.city||'','city')+factLine('当前职位',(b.current_title||'')+(b.years?' · '+b.years+' 年经验':''),'current_title')+
+    '<div class="fact-meta"><span class="usage-pill">当前简历已使用</span></div></div></section>';
+  html+='<section class="record-group"><button class="record-toggle"><span class="data-row-icon">工</span><span class="record-title"><b>工作经历</b><span>'+works.length+' 段经历 · '+outcomes+' 项工作成果</span></span><span class="record-chevron">⌄</span></button><div class="record-detail">'+
+    works.map(function(e){return expCard(e,false)}).join('')+'</div></section>';
+  html+='<section class="record-group"><button class="record-toggle"><span class="data-row-icon">项</span><span class="record-title"><b>项目经历</b><span>'+projs.length+' 个项目'+(pendingProj?' · '+pendingProj+' 项信息待补充':'')+'</span></span><span class="record-chevron">⌄</span></button><div class="record-detail">'+
+    projs.map(function(e){return expCard(e,true)}).join('')+'</div></section>';
+  html+='<section class="record-group"><button class="record-toggle"><span class="data-row-icon">教</span><span class="record-title"><b>教育经历</b><span>'+(edus[0]?edus[0].organization+' · '+edus[0].title+(edus[0].description?' · '+edus[0].description:''):'尚未填写')+'</span></span><span class="record-chevron">⌄</span></button><div class="record-detail">'+
+    (edus[0]?factLine('学校',edus[0].organization,'')+factLine('专业与学历',edus[0].title+(edus[0].description?' · '+edus[0].description:''),'')+factLine('时间',periodOf(edus[0]),'')+
+      '<div class="fact-meta"><span class="usage-pill">当前简历已使用</span></div>':'')+'</div></section>';
+  html+='<section class="record-group"><button class="record-toggle"><span class="data-row-icon">技</span><span class="record-title"><b>技能与证书</b><span>'+skills.length+' 项技能'+(certs.length?' · '+certs.length+' 个证书':'')+'</span></span><span class="record-chevron">⌄</span></button><div class="record-detail">'+
+    '<div class="skill-chips">'+skills.concat(certs).map(function(s){return '<span>'+esc(s.title)+'</span>'}).join('')+'</div>'+
+    '<div class="fact-meta" style="margin-top:10px"><span class="usage-pill">当前简历使用 '+skills.length+' 项</span></div></div></section>';
+  $("#profile-records").innerHTML=html;
+  $$("#profile-records .record-toggle").forEach(function(btn){btn.onclick=function(){btn.closest(".record-group").classList.toggle("open")}});
+  $$("#profile-records .quick-edit").forEach(bindQuickEdit);
+  $$("#profile-records .ask-ai-record").forEach(function(btn){btn.onclick=function(){
+    $("#profile-modal").classList.remove("show");
+    setNamedScope(btn.dataset.scope,'profile',btn.dataset.expId||null);
+    focusAssistant("你可以继续补充这段经历。新事实会先进入待确认，不会直接改写简历。");}});
+}
+
+/* ---------------- 岗位信息浮层 ---------------- */
+function reqState(state){
+  if(state==='covered')return '<span class="req-state">已覆盖</span>';
+  if(state==='partial')return '<span class="req-state gap">待加强</span>';
+  return '<span class="req-state gap">待补充</span>';}
+function reqGroup(icon,title,items,open){
+  if(!items||!items.length)return '';
+  var covered=items.filter(function(i){return i.state==='covered'}).length;
+  return '<section class="record-group'+(open?' open':'')+'"><button class="record-toggle"><span class="data-row-icon">'+icon+'</span><span class="record-title"><b>'+title+'</b><span>'+items.length+' 项 · 已覆盖 '+covered+' 项</span></span><span class="record-chevron">⌄</span></button><div class="record-detail"><ol class="requirement-list">'+
+    items.map(function(i){return '<li><span class="requirement-text">'+esc(i.text)+'</span>'+reqState(i.state)+'</li>'}).join('')+
+    '</ol></div></section>';}
+function renderJobModal(){
+  var job=WS.job;if(!job)return;
+  var a=job.analysis||{};
+  $("#job-modal-title").textContent=a.title||job.title||'';
+  $("#job-modal-meta").textContent=[a.company||job.company,a.location,a.experience].filter(Boolean).join(' · ');
+  var core=(a.responsibilities||[]).length+(a.must_have||[]).length;
+  var coreCovered=(a.responsibilities||[]).filter(function(i){return i.state==='covered'}).length+
+    (a.must_have||[]).filter(function(i){return i.state==='covered'}).length;
+  $("#coverage-summary").innerHTML='<b>当前简历已覆盖 '+coreCovered+'/'+core+' 项核心要求</b><span>'+(core-coreCovered)+' 项仍需补充或加强，具体状态已标在每条要求右侧。</span>';
+  var html=reqGroup('责','岗位职责',a.responsibilities,true)+reqGroup('必','必备能力',a.must_have,false)+reqGroup('加','加分能力',a.nice_to_have,false);
+  if((a.keywords||[]).length)html+='<section class="record-group"><button class="record-toggle"><span class="data-row-icon">词</span><span class="record-title"><b>核心关键词</b><span>AI 用于匹配经历，不会写成虚构事实</span></span><span class="record-chevron">⌄</span></button><div class="record-detail"><div class="keyword-chips">'+
+    a.keywords.map(function(k){return '<span>'+esc(k)+'</span>'}).join('')+'</div></div></section>';
+  $("#job-records").innerHTML=html;
+  $$("#job-records .record-toggle").forEach(function(btn){btn.onclick=function(){btn.closest(".record-group").classList.toggle("open")}});
+}
+
+/* ---------------- 模板选择 ---------------- */
+function renderTemplates(){
+  var map={classic:'经典商务',modern:'现代分栏',minimal:'极简留白'};
+  var desc={classic:'稳重清晰，适合多数岗位',modern:'更有识别度，突出重点',minimal:'克制轻盈，强调内容'};
+  var current=(WS.template||{}).key||'classic';
+  var items=(WS.templates||[]).slice().sort(function(x,y){
+    var o={classic:0,modern:1,minimal:2};return (o[x.key]==null?9:o[x.key])-(o[y.key]==null?9:o[y.key]);});
+  $("#template-grid").innerHTML=items.map(function(t){
+    var key=t.key==='custom'?'custom':t.key;
+    return '<button class="template-choice'+(t.template_version_id===(WS.template||{}).template_version_id?' active':'')+'" data-template="'+esc(key)+'" data-name="'+esc(t.name)+'" data-version="'+esc(t.template_version_id)+'"><span class="template-preview"></span><b>'+esc(t.name)+'</b><span>'+esc(desc[key]||'自定义模板')+'</span></button>';}).join('');
+  $$("#template-grid .template-choice").forEach(function(b){b.onclick=function(){pickTemplate(b)}});
+}
+
+/* ---------------- AI 对话 ---------------- */
+function addBubble(type,text,scopeLabel){
+  var box=document.createElement('div');box.className='bubble '+(type||'ai');
+  if(scopeLabel){var l=document.createElement('div');l.className='message-scope';l.textContent='针对 '+scopeLabel;
+    var m=document.createElement('div');m.className='message-text';m.textContent=text;box.append(l,m);}
+  else box.textContent=text;
+  $("#chat-messages").appendChild(box);scrollChat();return box;}
+function scrollChat(){var c=$("#chat-messages");c.scrollTop=c.scrollHeight}
+/** 按 id 找到简历中的具体内容，用于把作用范围显示成具体名称。 */
+function findBulletById(id){
+  var r=(WS&&WS.draft&&WS.draft.resume_json)||{},sections=['experience','projects'];
+  for(var i=0;i<sections.length;i++){
+    var list=r[sections[i]]||[];
+    for(var j=0;j<list.length;j++){
+      var bullets=list[j].bullets||[];
+      for(var k=0;k<bullets.length;k++){
+        if(bullets[k].id===id){
+          return {bullet:bullets[k],item:list[j],
+            sectionKey:sections[i],
+            sectionTitle:sections[i]==='experience'?'工作经历':'项目经历'};}}}}
+  return null;}
+/** 用户消息的作用范围显示：与选中时的 getScopeName 保持一致（含段落标题，如「工作经历」）。 */
+function scopeLabelOf(m){
+  if(m.scope_type==='RESUME_SUMMARY')return '@简历 · 个人优势';
+  if(m.scope_type==='RESUME_BLOCK'&&m.scope_id){
+    var hit=findBulletById(m.scope_id);
+    if(hit&&hit.bullet){
+      if(hit.bullet.scope_name)return hit.bullet.scope_name;
+      var t=String(hit.bullet.text||'');
+      var short=t.slice(0,10)+(t.length>10?'…':'');
+      return '@简历 · '+hit.sectionTitle+' · '+short;}}
+  return m.scope_label||SCOPE_LABEL[m.scope_type]||'@整份简历';}
+function renderChat(){
+  var box=$("#chat-messages");box.innerHTML='';
+  var msgs=(WS.conversation&&WS.conversation.messages)||[];
+  if(!msgs.length)addBubble('ai','你可以直接询问整份简历，也可以选择中间的内容并点击“帮我改写”，让我只修改这一段。');
+  msgs.forEach(function(m){
+    if(m.role==='user')addBubble('user',m.content,scopeLabelOf(m));
+    else{addBubble('ai',m.content);
+      (m.actions||[]).forEach(function(a){renderAction(a);});}});
+  // 岗位候选面板与聊天动作保持一致：没有待确认的岗位候选时隐藏
+  var hasJobPending=msgs.some(function(m){
+    return (m.actions||[]).some(function(a){return a.action_type==='JOB_CANDIDATE'&&(a.status==='awaiting_confirmation'||a.status==='proposed');});
+  });
+  var jc=$("#job-candidate");
+  if(jc)jc.classList.toggle('show',hasJobPending);
+}
+/**
+ * 渲染一条动作：只渲染「需要用户操作的卡片」——改写方案、字段更新回执、待确认岗位。
+ * 不再插入固定说明气泡：解释性的内容由模型回复承担，避免系统插话与模型回复互相矛盾或重复。
+ */
+function renderAction(a){
+  if(a.action_type==='RESUME_REWRITE_PROPOSAL'&&a.payload&&a.payload.proposal){
+    renderProposal(a);return;}
+  if(a.action_type==='FACT_CANDIDATE'){
+    // 仅当关联事实仍为「待确认」时才展示卡片；已确认/已忽略/已失效的一律不再出现
+    if(a.status==='awaiting_confirmation'&&a.fact_status==='pending')renderFactCard(a);
+    return;}
+  if(a.action_type==='JOB_CANDIDATE'){
+    // 仅在动作仍待确认时展示岗位候选面板（确认/忽略后不再出现）
+    if(a.status==='awaiting_confirmation'||a.status==='proposed'){
+      var cand=$("#job-candidate");cand.classList.add('show');
+      cand.dataset.action=a.id;
+      cand.querySelector('b').textContent='识别到一个新岗位：'+(a.payload&&a.payload.title||'待补充岗位文本');
+    }
+    return;}
+  if(a.action_type==='PROFILE_FIELD_UPDATE'&&a.receipt&&a.receipt.after&&a.status==='applied'){
+    var field=Object.keys(a.receipt.after)[0]||'';
+    var label={name:'姓名',phone:'手机',email:'邮箱',city:'所在城市',current_title:'当前职位',job_status:'求职状态'}[field]||field;
+    renderReceipt(a,label,a.receipt.before[field],a.receipt.after[field]);return;}
+  if(a.action_type==='NO_OP'||a.action_type==='TEMPORARY_CONTEXT'){return;}
+}
+/** 当前输入所属任务及建议父子关系；正文 A、建议 B/C 均由服务端保存。 */
+var activeTaskId=null,continuationContext=null,chatEpoch=0;
+
+function openNewChatDialog(){
+  var msgs=(WS.conversation&&WS.conversation.messages)||[],unused=0;
+  msgs.forEach(function(m){(m.actions||[]).forEach(function(a){
+    if((a.action_type==='RESUME_REWRITE_PROPOSAL'||a.action_type==='JOB_CANDIDATE')&&
+      (a.status==='awaiting_confirmation'||a.status==='proposed'))unused++;});});
+  var pending=(WS.pending_facts||[]).length;
+  var text='当前聊天将结束。个人信息、岗位、简历和历史版本不会改变。';
+  if(pending)text+=' 还有 '+pending+' 项待确认资料会保留在左侧。';
+  if(unused)text+=' '+unused+' 条未应用建议将不再可用。';
+  $("#new-chat-summary").textContent=text;
+  openModal("#new-chat-modal");
+}
+function resetChatScope(){
+  selectedText=null;activeContext=null;activeTaskId=null;continuationContext=null;
+  proposalResumeScopeId=null;abandonPromptUi();
+  $("#selection-label").textContent='@整份简历';
+  $("#selection-context").classList.add("global");
+  $("#selection-context").classList.remove("data-scope");
+  $$(".editable").forEach(function(x){x.classList.remove("selected")});
+  syncResumeTargetMarkers();
+  $("#prompt").value='';$("#prompt").placeholder="告诉我你想怎么修改整份简历…";
+}
+function startNewChat(){
+  var button=$("#confirm-new-chat"),conversationId=WS.conversation&&WS.conversation.id;
+  button.disabled=true;chatEpoch++;
+  api('/projects/'+PROJECT_ID+'/ai/conversations',{
+    method:'POST',idemKey:'new-chat-'+conversationId,
+  }).then(function(){
+    resetChatScope();
+    return refresh();
+  }).then(function(){
+    $("#new-chat-modal").classList.remove("show");
+    toast('已开始新对话');$("#prompt").focus();
+  }).catch(function(e){
+    toast(e.message);return refresh();
+  }).finally(function(){button.disabled=false;});
+}
+/** 待确认新事实卡片：确认/忽略后联动当前建议。 */
+function renderFactCard(a){
+  var p=a.payload||{},factId=p.fact_id;
+  if(!factId)return;
+  var card=document.createElement('div');card.className='chat-proposal';card.dataset.action=a.id;card.dataset.fact=factId;
+  card.innerHTML='<div><label>待你确认的新事实</label><p class="fact-value-p"></p></div><div class="proposal-actions"><button class="confirm">确认保存</button><button class="reject">不是这样</button><button class="later">稍后处理</button></div>';
+  card.querySelector('.fact-value-p').textContent=(p.label?(p.label+'：'):'')+(p.value||'');
+  $("#chat-messages").appendChild(card);scrollChat();
+  card.querySelector('.confirm').onclick=function(){
+    api('/projects/'+PROJECT_ID+'/ai/facts/'+factId+'/confirm',{method:'POST',idemKey:'f-conf-'+factId,body:{expected_revision:WS.profile.revision}})
+      .then(function(res){card.querySelector('.proposal-actions').innerHTML='<button disabled>已确认</button>';if(res.proposal)activeTaskId=res.proposal.task_id||activeTaskId;toast('已确认，已生成新的建议');return refresh();})
+      .catch(function(e){toast(e.message);});};
+  card.querySelector('.reject').onclick=function(){
+    api('/projects/'+PROJECT_ID+'/ai/facts/'+factId+'/reject',{method:'POST',idemKey:'f-rej-'+factId,body:{reason:'用户忽略'}})
+      .then(function(){card.remove();toast('已忽略，资料没有变化');return refresh();})
+      .catch(function(e){toast(e.message);});};
+  card.querySelector('.later').onclick=function(){card.remove();toast('已保留在待确认资料中');};}
+function renderProposal(a){
+  var p=a.payload.proposal,card=document.createElement('div');card.className='chat-proposal';card.dataset.action=a.id;card.dataset.scope=p.scope_id||'';
+  var hasBase=p.editing_base&&p.editing_base!==(p.current_text||p.original);
+  var active=a.status==='awaiting_confirmation'&&(!a.task_id||a.is_active_proposal);
+  var stateText={superseded:'已有新版建议',stale:'正文或资料已变化，需要重新生成',applied:'已应用到正文',rejected:'已暂不使用'}[a.status]||'当前不可应用';
+  card.innerHTML='<div class="proposal-old"><label>简历当前内容</label><p class="current-copy"></p></div>'+
+    (hasBase?'<div class="proposal-old"><label>沿用上一版建议</label><p class="base-copy"></p></div>':'')+
+    '<div><label>本轮建议</label><p class="suggestion-copy"></p></div><div class="proposal-actions">'+
+    (active?'<button class="replace">应用修改</button><button class="continue">继续调整</button><button class="cancel">暂不使用</button>':'<button disabled>'+stateText+'</button>')+'</div>';
+  card.querySelector('.current-copy').textContent=p.current_text||p.original||'';
+  if(hasBase)card.querySelector('.base-copy').textContent=p.editing_base;
+  card.querySelector('.suggestion-copy').textContent=p.suggestion||'';
+  $("#chat-messages").appendChild(card);scrollChat();
+  if(!active)return;
+  card.querySelector('.replace').onclick=function(){applyProposal(a,p,card)};
+  card.querySelector('.continue').onclick=function(){
+    var target=p.scope_id&&document.querySelector('[data-bullet-id="'+p.scope_id+'"]');
+    proposalResumeScopeId=null;
+    if(target)setScope(target);
+    activeTaskId=a.task_id||p.task_id||null;
+    continuationContext={taskId:activeTaskId,parentProposalId:a.id,scopeId:p.scope_id};
+    $("#prompt").value='请继续调整：';$("#prompt").focus();};
+  card.querySelector('.cancel').onclick=function(){
+    api('/ai/actions/'+a.id+'/reject',{method:'POST',idemKey:'reject-'+a.id,body:{reason:'用户取消方案'}})
+      .then(function(){proposalResumeScopeId=null;syncResumeTargetMarkers();card.remove();addBubble('ai','已取消这次修改，原文没有变化。');})
+      .catch(function(e){toast(e.message)});};
+}
+function renderReceipt(a,label,before,after){
+  var card=document.createElement('div');card.className='chat-proposal';card.dataset.action=a.id;
+  card.innerHTML='<div class="proposal-old"><label>修改前</label><p></p></div><div><label>修改后</label><p></p></div><div class="proposal-actions"><button class="replace">撤销这次修改</button></div>';
+  card.querySelector('.proposal-old p').textContent=String(before==null?'（空）':before);
+  card.querySelector('div:nth-child(2) p').textContent=String(after==null?'（空）':after);
+  $("#chat-messages").appendChild(card);scrollChat();
+  addBubble('ai','已把'+label+'从「'+before+'」更新为「'+after+'」。这次修改可以撤销。');
+  card.querySelector('.replace').onclick=function(){
+    api('/ai/actions/'+a.id+'/revert',{method:'POST',idemKey:'revert-'+a.id}).then(function(){
+      card.querySelector('.proposal-actions').innerHTML='<button disabled>已撤销</button>';
+      addBubble('ai','已撤销修改，'+label+'恢复为「'+before+'」。');refresh();})
+      .catch(function(e){toast(e.message)});};
+}
+
+/* ---------------- 历史版本 ---------------- */
+function renderHistory(){
+  var list=$("#history-list");if(!list)return;
+  var html='',lastDay=null;
+  WS.versions.forEach(function(v){
+    var day=dayLabel(v.created_at);
+    if(day!==lastDay){html+='<div class="history-day">'+esc(day)+'</div>';lastDay=day;}
+    html+='<button class="version-row" data-version="'+esc(v.id)+'"><span class="version-thumb"></span><span class="version-row-copy"><b>'+esc(v.name)+'</b><span>'+esc((v.time_label||fmtTime(v.created_at))+' · '+v.template)+'</span><em>'+esc(v.list_summary||(v.changes.length+' 处修改'))+'</em></span><span class="version-row-end">'+(v.is_current?'<span class="current-version">当前版本</span>':'')+'<span class="version-arrow">›</span></span></button>';});
+  list.innerHTML=html;
+  $$("#history-list .version-row").forEach(function(b){b.onclick=function(){openHistoryDetail(b.dataset.version)}});
+}
+
+/* ---------------- 作用范围与选区（PRD §6.6：一次只锁定一个范围） ---------------- */
+var selectedText=null,activeContext=null,tools=$("#selection-tools");
+var promptBusy=false,promptRequestSeq=0,activePromptRequest=0;
+var pendingResumeScopeId=null,proposalResumeScopeId=null;
+function findResumeTarget(scopeId){
+  if(!scopeId)return null;
+  return $$("#resume-document [data-bullet-id]").find(function(el){return el.dataset.bulletId===String(scopeId)})||null;
+}
+function markResumeTarget(scopeId,state,label,priority){
+  var target=findResumeTarget(scopeId);
+  if(!target||Number(target.dataset.aiTargetPriority||0)>priority)return;
+  target.classList.remove("ai-target-thinking","ai-target-ready");
+  target.classList.add("ai-target");
+  if(state==="thinking")target.classList.add("ai-target-thinking");
+  if(state==="ready")target.classList.add("ai-target-ready");
+  target.dataset.aiTargetLabel=label;
+  target.dataset.aiTargetPriority=String(priority);
+}
+function syncResumeTargetMarkers(){
+  $$("#resume-document .ai-target").forEach(function(el){
+    el.classList.remove("ai-target","ai-target-thinking","ai-target-ready","locate-pulse");
+    el.removeAttribute("data-ai-target-label");el.removeAttribute("data-ai-target-priority");});
+  if(activeContext&&activeContext.scopeType==="RESUME_BLOCK"){
+    markResumeTarget(activeContext.scopeId,"selected","AI 修改位置",1);}
+  if(proposalResumeScopeId)markResumeTarget(proposalResumeScopeId,"ready","建议对应这里",2);
+  if(promptBusy&&pendingResumeScopeId)markResumeTarget(pendingResumeScopeId,"thinking","AI 正在修改",3);
+}
+function setPromptPending(pending){
+  var button=$(".assistant-input .send");
+  promptBusy=pending;
+  button.disabled=pending;
+  button.classList.toggle("is-thinking",pending);
+  button.textContent=pending?"思考中":"发送";
+  button.setAttribute("aria-busy",pending?"true":"false");
+  button.setAttribute("aria-label",pending?"AI 正在思考":"发送");
+  syncResumeTargetMarkers();
+}
+function abandonPromptUi(){
+  activePromptRequest=++promptRequestSeq;
+  pendingResumeScopeId=null;
+  setPromptPending(false);
+}
+function bindEditables(){
+  $$(".editable").forEach(function(el){
+    el.onclick=function(e){
+      $$(".editable").forEach(function(x){x.classList.remove("selected")});
+      el.classList.add("selected");selectedText=el;
+      var activeId=activeContext&&activeContext.scopeType==="RESUME_BLOCK"?activeContext.scopeId:null;
+      if(activeContext&&(activeContext.scopeType!=="RESUME_BLOCK"||activeId!==el.dataset.bulletId)){setScope(el);toast("已切换到 "+getScopeName(el))}
+      var r=el.getBoundingClientRect();
+      tools.style.left=Math.min(r.left,window.innerWidth-tools.offsetWidth-18)+"px";
+      tools.style.top=(r.bottom+7)+"px";tools.classList.add("show");e.stopPropagation();};});}
+function getScopeName(target){
+  if(target&&target.scopeName)return target.scopeName;
+  var id=target&&target.dataset?target.dataset.bulletId:'';
+  if(id==='target-bullet')return '@简历 · 付费转化成果';
+  if(id==='scale-bullet')return '@简历 · 项目覆盖规模';
+  var section=target.closest(".resume-section"),title=section?$("h2",section).textContent:"正文内容";
+  var raw=(target.childNodes[0]&&target.childNodes[0].nodeValue||'').trim();
+  var short=raw.slice(0,10)+(raw.length>10?'…':'');
+  return '@简历 · '+title+' · '+short;}
+function setScope(target){
+  var nextId=target&&target.dataset?target.dataset.bulletId:null;
+  var prevId=activeContext&&(activeContext.scopeId||(activeContext.dataset&&activeContext.dataset.bulletId));
+  if(!activeContext||activeContext.scopeType!=='RESUME_BLOCK'||prevId!==nextId){activeTaskId=null;continuationContext=null;}
+  var scopeName=getScopeName(target);
+  activeContext={scopeName:scopeName,scopeType:'RESUME_BLOCK',scopeLayer:'document',scopeId:nextId};
+  selectedText=target;
+  if(proposalResumeScopeId&&proposalResumeScopeId!==nextId)proposalResumeScopeId=null;
+  $("#selection-label").textContent=scopeName;
+  $("#selection-context").classList.remove("global","data-scope");
+  $("#prompt").placeholder="告诉我你希望怎么修改这段简历内容…";
+  syncResumeTargetMarkers();}
+function setNamedScope(name,type,id){
+  var scopeType=type==='profile'?'DATA_PROFILE':type==='job'?'DATA_JOB':type;
+  if(!activeContext||activeContext.scopeType!==scopeType||String(activeContext.scopeId||'')!==String(id||'')){activeTaskId=null;continuationContext=null;}
+  selectedText=null;activeContext={scopeName:name,scopeType:scopeType,scopeLayer:'data',scopeId:id||null};
+  proposalResumeScopeId=null;
+  $$(".editable").forEach(function(x){x.classList.remove("selected")});
+  $("#selection-tools").classList.remove("show");
+  $("#selection-label").textContent=name;
+  $("#selection-context").classList.remove("global");
+  $("#selection-context").classList.add("data-scope");
+  $("#prompt").placeholder=scopeType==="DATA_PROFILE"?"告诉我你想补充或修改什么个人资料…":"告诉我你想了解或调整什么岗位资料…";
+  syncResumeTargetMarkers();}
+function beginEdit(intent){if(!selectedText)return;setScope(selectedText);focusAssistant();if(intent){$("#prompt").value=intent;$("#prompt").focus()}}
+function focusAssistant(message){
+  $("#assistant-panel").classList.add("open","attention");
+  if(message)addBubble("ai",message);
+  setTimeout(function(){$("#assistant-panel").classList.remove("attention");$("#prompt").focus()},250);}
+$(".assistant-close").onclick=function(){$("#assistant-panel").classList.remove("open")};
+$(".assistant-toggle").onclick=function(){focusAssistant()};
+$("#clear-selection").onclick=function(){
+  selectedText=null;activeContext=null;activeTaskId=null;continuationContext=null;
+  proposalResumeScopeId=null;
+  $("#selection-label").textContent='@整份简历';
+  $("#selection-context").classList.add("global");
+  $("#selection-context").classList.remove("data-scope");
+  $$(".editable").forEach(function(x){x.classList.remove("selected")});
+  syncResumeTargetMarkers();
+  $("#prompt").placeholder="告诉我你想怎么修改整份简历…";$("#prompt").focus();};
+
+function locateActiveScope(){
+  var target=activeContext&&activeContext.scopeType==="RESUME_BLOCK"
+    ?findResumeTarget(activeContext.scopeId)
+    :(!activeContext?$("#resume-document"):null);
+  if(!target)return;
+  if(window.innerWidth<=760)$("#assistant-panel").classList.remove("open");
+  if(typeof target.scrollIntoView==="function")target.scrollIntoView({behavior:"smooth",block:"center"});
+  target.classList.remove("locate-pulse");
+  requestAnimationFrame(function(){target.classList.add("locate-pulse")});
+  clearTimeout(window.locateTargetTimer);
+  window.locateTargetTimer=setTimeout(function(){target.classList.remove("locate-pulse")},1600);
+}
+$("#selection-label").onclick=locateActiveScope;
+$("#selection-label").addEventListener("keydown",function(e){
+  if(e.key==="Enter"||e.key===" "){e.preventDefault();locateActiveScope();}});
+
+/* ---------------- 发送消息：范围在发送时冻结（P0-17） ---------------- */
+function sendPrompt(){
+  var input=$("#prompt"),value=input.value.trim(),requestContext=activeContext;
+  if(!value||promptBusy)return;
+  var scope=requestContext?(requestContext.scopeType||'RESUME_DOCUMENT'):'RESUME_DOCUMENT';
+  var scopeId=requestContext?(requestContext.scopeId||(requestContext.dataset?requestContext.dataset.bulletId:null)):null;
+  var scopeName=requestContext?getScopeName(requestContext):'@整份简历';
+  var requestTaskId=activeTaskId;
+  var requestEpoch=chatEpoch;
+  var requestToken=++promptRequestSeq;activePromptRequest=requestToken;
+  var parentProposalId=continuationContext&&continuationContext.scopeId===scopeId?continuationContext.parentProposalId:null;
+  pendingResumeScopeId=scope==="RESUME_BLOCK"?scopeId:null;
+  if(pendingResumeScopeId)proposalResumeScopeId=null;
+  setPromptPending(true);
+  focusAssistant();
+  // 先立即展示用户自己的消息，再展示思考占位（不要等模型返回后才出现）
+  addBubble('user',value,scopeName);
+  input.value='';
+  var wait=addBubble("thinking","正在思考…");
+  // 原型的 .thinking 是 52px 窄占位（只适合“•••”）；用内联样式放宽为正常气泡、去掉整段闪烁
+  wait.style.width='auto';wait.style.maxWidth='88%';wait.style.animation='none';
+  // 等待反馈：超过 6 秒给出进度提示，超过 45 秒主动结束，避免用户干等
+  var slowTimer=setTimeout(function(){wait.textContent='模型正在思考，请稍候…';},6000);
+  // 超时只做提示、不中断请求：后端有流式读取与熔断，请求最终会返回并正常展示
+  var killTimer=setTimeout(function(){
+    wait.textContent='已等待很久，模型仍在作答…可以再等一会儿，或换一句话重试。';
+  },90000);
+  function clearTimers(){clearTimeout(slowTimer);clearTimeout(killTimer);}
+  api('/projects/'+PROJECT_ID+'/ai/messages',{method:'POST',body:{
+    content:value,scope_type:scope,scope_id:scopeId,scope_revision:WS.draft.revision,
+    task_id:requestTaskId,parent_proposal_id:parentProposalId}}).then(function(res){
+    clearTimers();wait.remove();
+    if(requestEpoch!==chatEpoch)return;
+    activeTaskId=res.task_id||requestTaskId||null;continuationContext=null;
+    var proposal=(res.actions||[]).find(function(a){
+      return a.action_type==="RESUME_REWRITE_PROPOSAL"&&a.payload&&a.payload.proposal;});
+    proposalResumeScopeId=proposal&&(proposal.payload.proposal.scope_id||scopeId)||null;
+    return refresh().then(function(){
+      if(res.saved)toast('已更新个人资料，可撤销');
+      (res.rejected||[]).forEach(function(r){
+        if(r.reason==='REVISION_CONFLICT')toast('资料已变化，请重新确认');});
+    });}).catch(function(e){
+    clearTimers();wait.remove();
+    if(requestEpoch!==chatEpoch)return;
+    // 配置了模型：失败即失败，明明白白展示，不做任何引擎兜底
+    var msg=(e&&e.code==='MODEL_UNAVAILABLE')
+      ? ('模型暂时不可用：'+(e.detail||'请稍后重试'))
+      : ('这次请求没有成功：'+(e&&e.message||'未知错误'));
+    addBubble('ai',msg);}).finally(function(){
+    if(activePromptRequest!==requestToken)return;
+    pendingResumeScopeId=null;setPromptPending(false);});}
+$(".assistant-input .send").onclick=sendPrompt;
+$("#new-chat-button").onclick=openNewChatDialog;
+$("#cancel-new-chat").onclick=function(){$("#new-chat-modal").classList.remove("show")};
+$("#confirm-new-chat").onclick=startNewChat;
+$("#prompt").addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendPrompt()}});
+$$(".assistant-quick button").forEach(function(b){b.onclick=function(){focusAssistant();$("#prompt").value=b.textContent;$("#prompt").focus()}});
+
+/* ---------------- 应用改写方案（只更新草稿，不自动创建版本） ---------------- */
+function applyProposal(action,proposal,card){
+  var confirmBody=typeof action.expected_revision==='number'?{expected_revision:action.expected_revision}:{};
+  api('/ai/actions/'+action.id+'/confirm',{method:'POST',idemKey:'apply-'+action.id,body:confirmBody})
+    .then(function(res){
+      proposalResumeScopeId=null;
+      lastChange={el:null,text:proposal.original,meta:{changeId:res.change_id}};
+      showUndo(null,proposal.original,'已替换'+(proposal.scope_label||'').replace('@简历 · ',''));
+      return refresh();})
+    .then(function(){activeTaskId=null;continuationContext=null;addBubble('ai','已经应用修改。草稿已自动保存，你也可以把当前状态保存为历史版本。');})
+    .catch(function(e){toast(e.message);if(e&&/变化|最新建议/.test(e.message||''))refresh();});}
+
+/* ---------------- 撤销 ---------------- */
+$("#undo-action").onclick=function(){
+  var meta=lastChange&&lastChange.meta;
+  $("#undo-bar").classList.remove("show");
+  if(meta&&meta.changeId){
+    api('/projects/'+PROJECT_ID+'/resume-draft/changes/'+meta.changeId+'/revert',{method:'POST',idemKey:'undo-'+meta.changeId})
+      .then(function(){toast('已撤销修改');return refresh()})
+      .catch(function(e){toast(e.message)});
+  }else if(meta&&meta.revertUrl){
+    api(meta.revertUrl,{method:'POST',idemKey:'undo-'+uid()})
+      .then(function(){toast('已撤销修改');return refresh()}).catch(function(e){toast(e.message)});
+  }else{toast('这次修改没有可撤销记录');}
+  lastChange=null;};
+
+/* ---------------- 模板 ---------------- */
+function pickTemplate(btn){
+  var previous=(WS.template||{}).name,changed=btn.dataset.name!==previous;
+  api('/projects/'+PROJECT_ID+'/template',{method:'PUT',body:{template_version_id:btn.dataset.version,mutation_id:uid()}})
+    .then(function(){return refresh()})
+    .then(function(){
+      $("#template-modal").classList.remove("show");
+      toast(changed?('已应用'+btn.dataset.name+'模板'):('当前已使用'+btn.dataset.name+'模板'));})
+    .catch(function(e){toast(e.message)});}
+$("#template-button").onclick=function(){openModal("#template-modal")};
+
+/* ---------------- 历史版本浏览器 ---------------- */
+function setHistoryView(view){
+  $$(".history-view").forEach(function(x){x.classList.toggle("active",x.id==="history-"+view)});
+  $("#history-back").classList.toggle("show",view!=="list");
+  if(view==="list"){$("#history-title").textContent="历史版本";$("#history-subtitle").textContent="生成或主动保存的版本都会保存在这里";}
+  else if(view==="compare"){$("#history-title").textContent="与当前版本比较";$("#history-subtitle").textContent="只展示两个版本之间发生变化的内容";}}
+function openHistoryList(){setHistoryView("list");$(".history-browser").scrollTop=0;openModal("#history-modal")}
+function openHistoryDetail(id){
+  activeHistoryId=id;
+  api('/versions/'+id).then(function(d){
+    $("#history-title").textContent=d.name;
+    $("#history-subtitle").textContent=(d.time_label||fmtTime(d.created_at))+' · '+(d.is_current?'当前版本':'历史版本');
+    var r=d.resume||{},b=(r.basics)||{};
+    $("#snapshot-name").textContent=String(b.name||'').split('').join(' ');
+    $("#snapshot-contact").textContent=[r.headline,b.city,b.phone,b.email].filter(Boolean).join('｜');
+    $("#snapshot-advantage").textContent=r.summary||'';
+    $("#snapshot-role").textContent=(r.experience&&r.experience[0])?(r.experience[0].organization+'｜'+(r.experience[0].title||'')):'';
+    $("#snapshot-work").textContent=mainWorkOf(r);
+    $("#snapshot-project").textContent=(r.projects&&r.projects[0]&&(r.projects[0].bullets||[])[0])?r.projects[0].bullets[0].text:'';
+    $("#snapshot-job").textContent=d.summary&&d.job_payload?(d.job_payload.title+(d.job_payload.company?' · '+d.job_payload.company:'')):'';
+    $("#snapshot-template").textContent=(d.template_payload||{}).name||'';
+    $("#snapshot-time").textContent=d.time_label||fmtTime(d.created_at);
+    $("#snapshot-change-list").innerHTML=(d.summary.changes||[]).map(function(c){return '<div class="snapshot-change">'+esc(c)+'</div>'}).join('');
+    $("#snapshot-profile-data").textContent=d.summary.profile_data||'';
+    $("#snapshot-job-data").textContent=d.summary.job_data||'';
+    $("#snapshot-template-data").textContent=d.summary.template_data||'';
+    $("#snapshot-data").classList.remove("show");$("#snapshot-data-toggle").textContent="查看当时的资料";
+    $("#compare-version").disabled=d.is_current;
+    $("#compare-version").textContent=d.is_current?"当前版本无需比较":"与当前版本比较";
+    setHistoryView("detail");$(".history-browser").scrollTop=0;})
+    .catch(function(e){toast(e.message)});}
+function mainWorkOf(r){
+  var exp=(r.experience||[])[0];if(!exp)return '';
+  var list=exp.bullets||[];var pick=list.filter(function(b){return b.id==='target-bullet'})[0]||list[0];
+  return pick?(typeof pick==='string'?pick:pick.text):'';}
+var activeHistoryId=null;
+$$(".history-open").forEach(function(b){b.onclick=openHistoryList});
+$("#history-back").onclick=function(){
+  if($("#history-compare").classList.contains("active"))openHistoryDetail(activeHistoryId);else setHistoryView("list");};
+$("#snapshot-data-toggle").onclick=function(){
+  var panel=$("#snapshot-data"),show=!panel.classList.contains("show");
+  panel.classList.toggle("show",show);this.textContent=show?"收起当时的资料":"查看当时的资料";};
+$("#compare-version").onclick=function(){
+  api('/versions/'+activeHistoryId+'/compare').then(function(d){
+    $("#compare-old-title").textContent=d.old.title;$("#compare-old-time").textContent=d.old.time_label;
+    $("#compare-old-copy").textContent=d.old.copy;$("#compare-current-time").textContent=d.current.time_label;
+    $("#compare-current-copy").textContent=d.current.copy;$("#compare-note").textContent=d.note;
+    setHistoryView("compare");$(".history-browser").scrollTop=0;}).catch(function(e){toast(e.message)});};
+$("#download-version").onclick=function(){
+  toast('正在准备 PDF…');
+  api('/versions/'+activeHistoryId+'/export',{method:'POST',body:{}})
+    .then(function(d){
+      var pdf=(d.artifacts||[]).filter(function(a){return a.type==='pdf'})[0];
+      if(!pdf)throw new Error('没有可下载的文件');
+      return api('/artifacts/'+pdf.id+'/download-url',{method:'POST'});})
+    .then(function(d){window.location.href=toApiUrl(d.url);toast('已开始下载');})
+    .catch(function(e){toast(e.message)});};
+$("#copy-version").onclick=function(){
+  api('/versions/'+activeHistoryId+'/clone',{method:'POST',idemKey:'clone-'+activeHistoryId})
+    .then(function(){$("#history-modal").classList.remove("show");toast('已复制此版本，当前版本仍会保留');return refresh()})
+    .catch(function(e){toast(e.message)});};
+
+/* ---------------- 保存为版本 ---------------- */
+function suggestedVersionName(){
+  var text=pendingChanges.join(' ');
+  if(/转化|商业化/.test(text))return '突出商业化成果';
+  if(/模板/.test(text)&&pendingChanges.length===1)return '调整简历风格';
+  if(/项目覆盖/.test(text))return '补充项目规模';
+  return '完善简历内容';}
+function openSaveVersion(){
+  if(!pendingChanges.length){toast('当前没有需要保存的修改');return;}
+  $("#version-name-input").value=suggestedVersionName();
+  $("#save-change-title").textContent='本次包含 '+pendingChanges.length+' 处修改';
+  $("#save-change-list").innerHTML=pendingChanges.map(function(c){return '<li>'+esc(c)+'</li>'}).join('');
+  openModal("#save-version-modal");
+  setTimeout(function(){$("#version-name-input").select()},50);}
+$("#save-version-button").onclick=openSaveVersion;
+$("#cancel-save-version").onclick=function(){$("#save-version-modal").classList.remove("show")};
+$("#confirm-save-version").onclick=function(){
+  var name=$("#version-name-input").value.trim();
+  if(!name){$("#version-name-input").focus();return;}
+  api('/projects/'+PROJECT_ID+'/versions',{method:'POST',idemKey:'save-'+uid(),body:{
+    name:name,draft_revision:WS.draft.revision,profile_revision:WS.profile.revision,
+    job_revision:WS.job?WS.job.revision:undefined,
+    template_version_id:(WS.template||{}).template_version_id}})
+    .then(function(){$("#save-version-modal").classList.remove("show");toast('已保存为历史版本');return refresh()})
+    .catch(function(e){toast(e.message)});};
+$("#version-name-input").addEventListener("keydown",function(e){if(e.key==="Enter")$("#confirm-save-version").click()});
+
+/* ---------------- 一键生成 ---------------- */
+$$(".generate").forEach(function(b){b.onclick=startRun});
+function startRun(){
+  openModal("#run-modal");
+  var steps=$$(".run-step"),i=0;
+  steps.forEach(function(s,n){s.className="run-step"+(n===0?" active":"");s.querySelector("i").textContent=String(n+1);});
+  function advance(n){
+    for(var k=0;k<steps.length;k++){
+      if(k<n){steps[k].className="run-step done";steps[k].querySelector("i").textContent="✓";}
+      else if(k===n){steps[k].className="run-step active";}
+      else steps[k].className="run-step";}}
+  advance(1);
+  api('/projects/'+PROJECT_ID+'/generations',{method:'POST',idemKey:'gen-'+uid(),body:{
+    client_request_id:uid(),project_revision:WS.project.revision,profile_revision:WS.profile.revision,
+    job_revision:WS.job?WS.job.revision:undefined,template_version_id:(WS.template||{}).template_version_id}})
+    .then(function(res){
+      var es=new EventSource(toApiUrl(res.events_url));
+      es.addEventListener('progress',function(ev){
+        var d=JSON.parse(ev.data);
+        var n=Math.min(4,Math.floor((d.progress||0)/20));
+        advance(n);
+        if(d.label)$("#generation-status").textContent=d.label;
+        if(['succeeded','partial','failed'].indexOf(d.status)>-1){
+          es.close();
+          setTimeout(function(){
+            $("#run-modal").classList.remove("show");
+            if(d.status==='failed'){toast('生成失败：'+(d.error_message||'请重试'));refresh();return;}
+            refresh().then(function(){openHistoryList();toast(d.status==='partial'?'部分格式生成失败，已保存版本':'新简历已生成并保存为历史版本');});},450);}});
+      es.onerror=function(){es.close();setTimeout(function(){$("#run-modal").classList.remove("show");refresh();toast('任务仍在后台运行，可稍后查看历史版本');},600);};})
+    .catch(function(e){
+      $("#run-modal").classList.remove("show");
+      toast(e.payload&&e.payload.missing?('还需要：'+e.payload.missing.join('、')):e.message);});}
+
+/* ---------------- 上传：创建会话 → 直传 → 完成校验 ---------------- */
+function uploadFiles(files){
+  var list=Array.prototype.slice.call(files||[]);
+  return list.reduce(function(chain,file){
+    return chain.then(function(ids){
+      return api('/uploads',{method:'POST',body:{original_name:file.name,mime_type:file.type,size:file.size}})
+        .then(function(up){
+          return fetch(API+'/uploads/'+up.id+'/content',{method:'POST',body:file})
+            .then(function(r){if(!r.ok)throw new Error(file.name+' 上传失败');return up});})
+        .then(function(up){return api('/uploads/'+up.id+'/complete',{method:'POST'}).then(function(){return up})})
+        .then(function(up){ids.push(up.id);return ids;})});},Promise.resolve([]));
+}
+$("#profile-upload").onclick=function(){$("#profile-file").click()};
+$("#profile-file").onchange=function(){var f=this.files;if(!f.length)return;
+  uploadFiles(f).then(function(ids){
+    return api('/projects/'+PROJECT_ID+'/profile/import',{method:'POST',body:{upload_ids:ids}});})
+    .then(function(){openModal("#profile-modal");toast('资料已读取，请确认 AI 提取结果');return refresh()})
+    .catch(function(e){toast(e.message)});};
+function importJobFiles(files){
+  return uploadFiles(files).then(function(ids){
+    return api('/projects/'+PROJECT_ID+'/jobs',{method:'POST',body:{mode:'candidate'}})
+      .then(function(job){
+        return api('/jobs/'+job.id+'/sources',{method:'POST',body:{upload_ids:ids}}).then(function(){return job});});})
+    .then(function(job){
+      $("#job-candidate").classList.add('show');
+      $("#job-candidate").dataset.job=job.id;
+      $("#job-card-status").textContent='1 项待确认';
+      $("#job-card-status").className='info-status';
+      toast('已识别 '+files.length+' 个文件，请确认新岗位');
+      return pollJob(job.id);});}
+function pollJob(jobId,tries){
+  tries=tries||0;
+  return api('/jobs/'+jobId+'/events').then(function(s){
+    if((!s.ocr.pending&&s.analysis_ready)||tries>10)return s;
+    return new Promise(function(r){setTimeout(r,700)}).then(function(){return pollJob(jobId,tries+1)});});}
+$("#job-upload").onclick=function(){$("#job-file").click()};
+$("#job-folder").onclick=function(){$("#job-folder-file").click()};
+$("#job-file").onchange=function(){if(this.files.length)importJobFiles(this.files).then(refresh).catch(function(e){toast(e.message)})};
+$("#job-folder-file").onchange=function(){if(this.files.length)importJobFiles(this.files).then(refresh).catch(function(e){toast(e.message)})};
+$("#set-current-job").onclick=function(){
+  var jobId=$("#job-candidate").dataset.job;
+  if(!jobId){toast('请先上传岗位文件或粘贴岗位内容');return;}
+  api('/jobs/'+jobId+'/set-current',{method:'POST'})
+    .then(function(){$("#job-candidate").classList.remove('show');toast('已设为当前岗位，简历尚未自动修改');return refresh()})
+    .catch(function(e){toast(e.payload&&e.payload.detail?e.payload.detail:e.message)});};
+$("#discard-job").onclick=function(){
+  var jobId=$("#job-candidate").dataset.job;
+  $("#job-candidate").classList.remove('show');
+  $("#job-card-status").textContent='已确认';$("#job-card-status").className='info-status ready';
+  toast('已保留原岗位');
+  if(jobId)api('/jobs/'+jobId+'/discard',{method:'POST'}).catch(function(){});};
+$("#template-upload-button").onclick=function(){$("#template-file").click()};
+$("#template-file").onchange=function(){var f=this.files;if(!f.length)return;
+  uploadFiles(f).then(function(ids){
+    return api('/templates/custom',{method:'POST',body:{upload_id:ids[0]}});})
+    .then(function(t){
+      return api('/projects/'+PROJECT_ID+'/template',{method:'PUT',body:{template_version_id:t.template_version_id,mutation_id:uid()}});})
+    .then(function(){$("#template-modal").classList.remove('show');toast('已载入自定义模板');return refresh()})
+    .catch(function(e){toast(e.message)});};
+$(".attach").onclick=function(){$("#file-input").click()};
+$("#file-input").onchange=function(){var f=this.files;if(!f.length)return;
+  uploadFiles(f).then(function(ids){
+    return api('/projects/'+PROJECT_ID+'/profile/import',{method:'POST',body:{upload_ids:ids}});})
+    .then(function(){toast('已导入 '+f.length+' 个文件，AI 正在分类；识别结果会先让你确认');return refresh()})
+    .catch(function(e){toast(e.message)});};
+
+/* ---------------- 资料字段编辑（800ms 自动保存） ---------------- */
+function bindQuickEdit(b){
+  b.onclick=function(){
+    var line=b.closest('.fact-line'),value=$('.fact-value',line),input=$('.fact-input',line);
+    if(value){
+      input=document.createElement('input');input.className='fact-input';
+      input.value=(value.dataset&&value.dataset.raw)||value.textContent;
+      value.replaceWith(input);b.textContent='保存';input.focus();input.select();
+      var timer=null;
+      var save=function(){
+        var next=input.value.trim();
+        if(!next)return;
+        if(b.dataset.field==='current_title'&&next.indexOf(' · ')>-1)next=next.split(' · ')[0];
+        api('/projects/'+PROJECT_ID+'/profile/fields/'+b.dataset.field,{method:'PATCH',body:{value:next,expected_revision:WS.profile.revision}})
+          .then(function(){toast('个人信息已保存，中间简历尚未自动修改');return refresh()})
+          .catch(function(e){toast(e.message)});};
+      input.addEventListener('input',function(){clearTimeout(timer);timer=setTimeout(save,800);});
+      input.addEventListener('keydown',function(e){if(e.key==='Enter'){clearTimeout(timer);save();}});
+    }else if(input){
+      var ev=new Event('input');input.dispatchEvent(ev);
+      setTimeout(function(){save2(line,b)},60);}}};
+function save2(line,b){
+  var input=$('.fact-input',line);if(!input)return;
+  var next=input.value.trim();if(!next)return;
+  if(b.dataset.field==='current_title'&&next.indexOf(' · ')>-1)next=next.split(' · ')[0];
+  api('/projects/'+PROJECT_ID+'/profile/fields/'+b.dataset.field,{method:'PATCH',body:{value:next,expected_revision:WS.profile.revision}})
+    .then(function(){toast('个人信息已保存，中间简历尚未自动修改');return refresh()})
+    .catch(function(e){toast(e.message)});}
+
+/* ---------------- 待确认资料确认 / 忽略 ---------------- */
+function bindPendingItem(item){
+  var factId=item.dataset.fact;
+  var confirm=$('.confirm',item),reject=$('.reject',item);
+  if(confirm)confirm.onclick=function(){
+    api('/projects/'+PROJECT_ID+'/ai/facts/'+factId+'/confirm',{method:'POST',idemKey:'fc-'+factId,body:{expected_revision:WS.profile.revision}})
+      .then(function(){toast('资料已确认并保存');return refresh()}).catch(function(e){toast(e.message)});};
+  if(reject)reject.onclick=function(){
+    api('/projects/'+PROJECT_ID+'/ai/facts/'+factId+'/reject',{method:'POST',idemKey:'fr-'+factId,body:{reason:'用户忽略'}})
+      .then(function(){toast('已忽略，资料没有变化');return refresh()}).catch(function(e){toast(e.message)});};}
+
+/* ---------------- 浮层与全局事件 ---------------- */
+$("#profile-card").onclick=function(){openModal("#profile-modal")};
+$("#job-card").onclick=function(){openModal("#job-modal")};
+$("#profile-ai").onclick=function(){$("#profile-modal").classList.remove("show");setNamedScope('@资料 · 个人信息','profile');focusAssistant("这里修改的是个人资料，不会直接改写简历。新信息会先让你确认，再保存。");};
+$("#job-ai").onclick=function(){$("#job-modal").classList.remove("show");setNamedScope('@资料 · 岗位信息','job');focusAssistant("这里分析的是岗位资料，不会直接改写简历。更换岗位前，我会先让你确认。");};
+$(".guide-done").onclick=function(){$("#guide-modal").classList.remove("show");try{sessionStorage.setItem("resumeGuideSeen","1")}catch(e){}};
+$$(".close").forEach(function(b){b.onclick=function(){closeModal(b)}});
+$$(".overlay").forEach(function(o){o.onclick=function(e){if(e.target===o)o.classList.remove("show")}});
+document.addEventListener("keydown",function(e){
+  if(e.key==="Escape"){$$(".overlay.show").forEach(function(o){o.classList.remove("show")});$("#selection-tools").classList.remove("show");}});
+document.addEventListener("click",function(e){
+  if(!e.target.closest(".selection-tools")&&!e.target.closest(".editable")&&!e.target.closest(".resume"))$("#selection-tools").classList.remove("show");
+  if(!e.target.closest(".zoom-control"))$("#zoom-menu").classList.remove("show");});
+$(".rewrite-action").onclick=function(){beginEdit("")};
+$$(".selection-tools [data-intent]").forEach(function(b){b.onclick=function(){beginEdit(b.textContent);$("#selection-tools").classList.remove("show")}});
+window.addEventListener("resize",function(){$("#selection-tools").classList.remove("show")});
+
+/* ---------------- 缩放 ---------------- */
+$("#zoom-button").onclick=function(e){e.stopPropagation();$("#zoom-menu").classList.toggle("show")};
+$$("#zoom-menu button").forEach(function(b){b.onclick=function(e){
+  e.stopPropagation();
+  var resume=$("#resume-document"),value=b.dataset.zoom;
+  $$("#zoom-menu button").forEach(function(x){x.classList.toggle("active",x===b)});
+  if(value==="fit"){resume.style.zoom="1";requestAnimationFrame(function(){var ratio=Math.min(1,($(".canvas").clientWidth-68)/resume.offsetWidth);resume.style.zoom=String(Math.max(.6,ratio));});}
+  else resume.style.zoom=value;
+  $("#zoom-button").textContent="缩放："+b.textContent;$("#zoom-menu").classList.remove("show");}});
+
+/* ---------------- 语音（状态展示） ---------------- */
+var mic=$(".assistant-input .mic");
+mic.onclick=function(){mic.classList.toggle("on");mic.textContent=mic.classList.contains("on")?"■ 停止":"◉ 语音";
+  toast(mic.classList.contains("on")?"正在进行 AI 访谈，请开始讲述":"语音已转写，AI 正在提取事实");};
+
+/* ---------------- 拖拽导入 ---------------- */
+function bindDropZone(zone,handler){
+  ["dragenter","dragover"].forEach(function(n){zone.addEventListener(n,function(e){e.preventDefault();zone.classList.add("drag")})});
+  ["dragleave","drop"].forEach(function(n){zone.addEventListener(n,function(e){e.preventDefault();zone.classList.remove("drag");if(n==="drop"&&e.dataTransfer.files.length)handler(e.dataTransfer.files)})});}
+bindDropZone($("#profile-drop"),function(files){
+  uploadFiles(files).then(function(ids){return api('/projects/'+PROJECT_ID+'/profile/import',{method:'POST',body:{upload_ids:ids}});})
+    .then(function(){toast('资料已读取，请确认 AI 提取结果');return refresh()}).catch(function(e){toast(e.message)});});
+bindDropZone($("#job-drop"),function(files){importJobFiles(files).then(refresh).catch(function(e){toast(e.message)})});
+var composer=$("#composer");
+["dragenter","dragover"].forEach(function(n){composer.addEventListener(n,function(e){e.preventDefault();composer.classList.add("drag")})});
+["dragleave","drop"].forEach(function(n){composer.addEventListener(n,function(e){e.preventDefault();composer.classList.remove("drag");
+  if(n==="drop"&&e.dataTransfer.files.length){
+    uploadFiles(e.dataTransfer.files).then(function(ids){return api('/projects/'+PROJECT_ID+'/profile/import',{method:'POST',body:{upload_ids:ids}});})
+      .then(function(){toast('已导入文件，AI 正在分类；识别结果会先让你确认');return refresh()}).catch(function(e){toast(e.message)});}})});
+
+/* ---------------- 启动 ---------------- */
+function boot(){
+  return api('/projects').then(function(list){
+    if(!list.items||!list.items.length)throw new Error('没有可用的简历项目');
+    PROJECT_ID=list.items[0].id;return refresh();})
+    .then(function(){
+      setTimeout(function(){try{if(!sessionStorage.getItem("resumeGuideSeen"))openModal("#guide-modal")}catch(e){openModal("#guide-modal")}},350);})
+    .catch(function(e){
+      var bar=document.createElement('div');bar.className='undo-bar show';
+      var msg=document.createElement('span');msg.className='boot-error';
+      msg.textContent='暂时无法连接服务：'+(e&&e.message?e.message:'未知错误')+' ｜ '+bootHint(e);
+      var retry=document.createElement('button');retry.textContent='重试';retry.onclick=function(){location.reload()};
+      bar.append(msg,retry);
+      document.querySelector('.canvas-inner').insertBefore(bar,document.querySelector('.canvas-inner').firstChild);});}
+/** 连接失败时的自我诊断：给出最可能的原因与可执行建议。 */
+function bootHint(e){
+  if(location.protocol==='file:')
+    return '当前是用本地文件方式打开（file://），必须改用服务地址访问，例如 http://localhost:8787';
+  var network=!/\d{3}/.test(String(e&&e.message))&&(e instanceof TypeError||/fetch|network|Failed/i.test(String(e&&e.message)));
+  if(network)
+    return '页面地址是 '+location.origin+'，但接口请求失败：请确认服务已启动、端口可达；若从外网访问，请用 ssh -L 8787:127.0.0.1:8787 <host> 做端口转发后访问 http://localhost:8787';
+  return '页面地址 '+location.origin;}
+boot();
+</script>
+</body>
+</html>
