@@ -1,6 +1,6 @@
 # 简历星球 TECH
 
-- 版本：v1.3
+- 版本：v1.4
 - 日期：2026-09-01
 - 对应产品文档：[PRD.md](./PRD.md)
 - 对应交互原型：[index.prototype.backup.html](./index.prototype.backup.html)
@@ -214,8 +214,8 @@ API 服务
 | POST | /projects/:id/versions | 用户主动将当前草稿保存为版本 |
 | GET | /projects/:id/versions | 获取用户可见历史版本 |
 | GET | /versions/:id | 获取版本及当时资料、岗位、模板和简历结果 |
-| GET | /versions/:id/compare?target=:targetId | 比较两个版本 |
-| POST | /versions/:id/clone | 将版本内容复制为新的当前草稿，不覆盖原版本 |
+| GET | /versions/:id/compare?target=:targetId | 默认与实时草稿比较；传 target 时与指定版本比较 |
+| POST | /versions/:id/clone | 安全地从版本创建当前草稿，可选恢复当时岗位与模板 |
 | POST | /projects/:id/generations | 冻结本次输入并发起生成 |
 | GET | /generations/:id | 获取状态和结果 |
 | GET | /generations/:id/events | SSE 进度 |
@@ -321,7 +321,7 @@ audit_logs
 - artifacts(snapshot_id, type, sha256) 唯一；
 - artifacts 至少关联 snapshot_id 或 version_id；manual 版本产物可只关联 version_id；
 - resume_versions 和 generation_snapshots 的冻结 payload 禁止 UPDATE；状态变化使用受限服务或独立事件表；
-- 复制版本只深拷贝内容到当前草稿，不写版本父子字段；
+- 复制版本只深拷贝内容到当前草稿，不写版本父子字段；个人资料永不由该操作覆盖；
 - ai_action_requests 不包含 evidence、source、dependency_fact_ids 或资料到正文映射字段；
 - audit_logs 只记录操作主体、目标、时间和必要前后值，不承担内容归因；
 - 对象键包含 owner_id 的不可猜测前缀，但授权仍以数据库为准；
@@ -352,7 +352,33 @@ audit_logs
 
 在单个事务中锁定项目与草稿，校验 owner、draft、可选 profile、可选 job、template revision 和 change_ids，分配下一个项目版本号，深拷贝当时资料、岗位、模板及 Resume JSON，写入 `kind=manual` 的 resume_version，再把草稿的 last_versioned_revision 更新为当前 revision 并清除 has_unversioned_changes。重复 Idempotency-Key 不得新增版本。
 
-### 8.3 执行阶段
+版本时间只存 UTC `created_at`，所有“今天 / 月日”均由客户端根据当前时区动态计算。手动保存和生成版本使用同一套摘要字段：changes、list_summary、profile_data、job_data、template_data、compare_note。
+
+### 8.3 历史浏览、比较与继续修改
+
+版本详情返回冻结的 `resume_payload`、profile/template/job payload 和 artifacts。Web 使用与当前画布相同的 `ResumeDom.Renderer` 只读渲染完整正文树，因此新增“海外经历”等任意模块不需要历史页面增加专用字段。
+
+`ResumeDom.compareDocuments(before, after)` 按稳定节点 ID 展开两棵正文树，输出：
+
+- added / removed：只报告最外层新增或删除节点，避免整个模块重复计数；
+- text / structure：节点自身文字、类型或标签变化；
+- moved：父节点变化或共享兄弟节点相对顺序变化，插入新节点不得误报后续节点全部移动；
+- attributes / style：安全属性与样式变化；
+- before / after 两侧需要高亮的节点 ID。
+
+`GET /versions/:id/compare` 不传 target 时必须读取当前 `resume_draft.resume_json`，不得退化为比较 `base_version_id`；传 target 时校验目标版本属于同一项目和用户。接口同时比较当前岗位和模板的稳定业务字段。Web 双栏均渲染完整 Resume DOM，并按节点 ID 高亮。
+
+`POST /versions/:id/clone` 请求体包含：
+
+- `draft_revision`：并发校验；
+- `discard_unsaved`：仅在用户明确放弃当前未保存修改时为 true；
+- `restore_context`：是否同时恢复版本中冻结的岗位和模板。
+
+事务先检查未成版 change events；存在修改且 `discard_unsaved=false` 时返回 `409 UNSAVED_DRAFT_CHANGES`。明确放弃时将这些事件标记为 reverted，再替换草稿。`restore_context=true` 时只恢复仍属于当前用户和项目的岗位及可访问模板；已失效对象保留当前选择并在响应中列出。该操作永不修改 profile，不创建历史版本，原 resume_version 继续不可变。
+
+版本导出统一准备 HTML、PDF、DOCX artifact；主界面提供 PDF 和 Word 两种下载入口。
+
+### 8.4 执行阶段
 
 Worker 按以下 DAG 执行：
 
@@ -652,8 +678,9 @@ Schema 校验、完整度计算、revision 冲突、输入 hash、内容一致�
 - 撤销修改同步回滚草稿并标记 change event；
 - 生成中刷新页面恢复状态；
 - PDF 成功而 DOCX 失败；
-- 版本详情可还原当时资料、岗位、模板和简历结果，两个版本可比较；
-- 复制旧版本创建新草稿且不覆盖原版本；
+- 版本详情使用通用正文渲染器还原完整动态简历，历史版本默认与实时草稿全文比较；
+- 当前草稿有未保存修改时复制旧版本返回冲突；先保存或明确放弃后才能继续；
+- 复制旧版本可选恢复当时岗位与模板，但不覆盖个人信息或原版本；
 - 跨用户访问返回 404；
 - 删除账号后文件按策略清理。
 

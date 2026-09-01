@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const helpers = require('./helpers');
 const db = require('../server/lib/db');
 const { uuidv7, nowIso } = require('../server/lib/util');
+const ResumeDom = require('../resume-dom');
 
 let ctx;
 let projectId;
@@ -119,18 +120,87 @@ test('撤销修改：同步回滚草稿并移除待成版修改', async () => {
   assert.ok(reverted.reverted_at, '变更事件必须标记 reverted');
 });
 
-test('复制旧版本：创建新草稿且不覆盖原版本（发布验收 20）', async () => {
+test('历史比较默认覆盖动态简历全文与当前实时草稿', async () => {
+  const before = await workspace();
+  const baseVersionId = before.draft.base_version_id;
+  const proposed = await helpers.call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
+    body: {
+      content: '新增一个海外经历模块，内容：参与跨国团队协作',
+      scope_type: 'RESUME_DOCUMENT',
+      scope_id: null,
+    },
+  });
+  const action = proposed.body.actions.find((item) => item.action_type === 'RESUME_REWRITE_PROPOSAL');
+  assert.ok(action, JSON.stringify(proposed.body));
+  const applied = await helpers.call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
+    idemKey: `apply-history-diff-${action.id}`,
+    body: { expected_revision: before.draft.revision },
+  });
+  assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+
+  const compared = await helpers.call(ctx, 'GET', `/versions/${baseVersionId}/compare`);
+  assert.strictEqual(compared.status, 200, JSON.stringify(compared.body));
+  assert.strictEqual(compared.body.current.id, null, '默认比较目标必须是实时草稿，而非 base version');
+  assert.strictEqual(compared.body.current.has_unsnapshotted_changes, true);
+  assert.ok(compared.body.diff.changes.some(
+    (change) => change.type === 'added' && change.node_id === 'section-overseas',
+  ));
+  assert.ok(ResumeDom.findNode(
+    ResumeDom.ensureDocument(compared.body.current.resume),
+    'overseas-content-1',
+  ));
+
+  const detail = await helpers.call(ctx, 'GET', `/versions/${baseVersionId}`);
+  assert.strictEqual(detail.body.matches_current_draft, false);
+  assert.ok(detail.body.resume, '版本详情必须返回可完整渲染的历史简历');
+});
+
+test('从旧版本继续：先保护未保存修改，可选择恢复岗位和模板且不改个人信息', async () => {
   const before = await workspace();
   const oldVersion = before.versions[before.versions.length - 1]; // 最早的版本
+  const historical = await helpers.call(ctx, 'GET', `/versions/${oldVersion.id}`);
+  const blocked = await helpers.call(ctx, 'POST', `/versions/${oldVersion.id}/clone`, {
+    idemKey: `clone-blocked-${oldVersion.id}`,
+    body: { draft_revision: before.draft.revision, restore_context: true },
+  });
+  assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
+  assert.strictEqual(blocked.body.title, 'UNSAVED_DRAFT_CHANGES');
+
+  const cloneKey = `clone-${oldVersion.id}-${Date.now()}`;
+  const cloneBody = {
+    draft_revision: before.draft.revision,
+    discard_unsaved: true,
+    restore_context: true,
+  };
   const res = await helpers.call(ctx, 'POST', `/versions/${oldVersion.id}/clone`, {
-    idemKey: `clone-${oldVersion.id}`,
+    idemKey: cloneKey,
+    body: cloneBody,
   });
   assert.strictEqual(res.status, 200, JSON.stringify(res.body));
   assert.strictEqual(res.body.original_version_intact, true);
+  assert.strictEqual(res.body.profile_unchanged, true);
+  const replay = await helpers.call(ctx, 'POST', `/versions/${oldVersion.id}/clone`, {
+    idemKey: cloneKey,
+    body: cloneBody,
+  });
+  assert.strictEqual(replay.body.idempotent_replay, true, '重复恢复请求不得再次增加草稿 revision');
 
   const after = await workspace();
   assert.strictEqual(after.versions.length, before.versions.length, '版本数量不得变化');
   assert.strictEqual(after.draft.base_version_id, oldVersion.id);
+  assert.strictEqual(after.draft.revision, res.body.draft_revision);
+  assert.strictEqual(after.draft.has_unsnapshotted_changes, false);
+  assert.strictEqual(after.draft.pending_changes.length, 0, '明确放弃后旧待保存修改必须清理');
+  assert.deepStrictEqual(after.profile, before.profile, '恢复历史上下文不得覆盖个人信息');
+  if (historical.body.template_payload.template_version_id) {
+    assert.strictEqual(
+      after.template.template_version_id,
+      historical.body.template_payload.template_version_id,
+    );
+  }
+  if (historical.body.job_payload.id) {
+    assert.strictEqual(after.job.id, historical.body.job_payload.id);
+  }
   const stillThere = db.get('SELECT * FROM resume_versions WHERE id = ?', [oldVersion.id]);
   assert.strictEqual(stillThere.version_no, oldVersion.version_no, '原版本不得被覆盖');
 });

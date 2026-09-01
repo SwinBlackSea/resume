@@ -546,6 +546,182 @@
     return own + (node.children || []).map(exportNodeText).join('');
   }
 
+  function stableObject(value) {
+    if (Array.isArray(value)) return value.map(stableObject);
+    if (!value || typeof value !== 'object') return value;
+    return Object.keys(value).sort().reduce((result, key) => {
+      result[key] = stableObject(value[key]);
+      return result;
+    }, {});
+  }
+
+  function sameValue(left, right) {
+    return JSON.stringify(stableObject(left)) === JSON.stringify(stableObject(right));
+  }
+
+  function ownNodeText(node) {
+    if (!node || isEditorOnly(node)) return '';
+    if (node.type === 'text') return String(node.value || '');
+    return node.text === undefined ? '' : String(node.text || '');
+  }
+
+  function flattenDocument(documentValue) {
+    const document = normalizeDocument(documentValue);
+    const entries = new Map();
+
+    function visit(node, parent, index, ancestors) {
+      if (isEditorOnly(node)) return;
+      const siblings = parent
+        ? (parent.children || []).filter((child) => !isEditorOnly(child))
+        : [node];
+      const visibleIndex = parent ? siblings.findIndex((child) => child.id === node.id) : 0;
+      entries.set(node.id, {
+        node,
+        parent_id: parent ? parent.id : null,
+        index: visibleIndex >= 0 ? visibleIndex : index,
+        sibling_ids: siblings.map((child) => child.id),
+        ancestors,
+      });
+      (node.children || []).forEach((child, childIndex) =>
+        visit(child, node, childIndex, ancestors.concat(node)));
+    }
+
+    visit(document.root, null, 0, []);
+    return { document, entries };
+  }
+
+  function nodeLabel(entry) {
+    const node = entry.node;
+    if (node.label) return node.label;
+    if (node.type === 'element' && /^h[1-6]$/.test(node.tag)) {
+      return exportNodeText(node).trim() || node.id;
+    }
+    for (let index = entry.ancestors.length - 1; index >= 0; index -= 1) {
+      const ancestor = entry.ancestors[index];
+      if (ancestor.label) return ancestor.label;
+      if (ancestor.type === 'element' && ancestor.tag === 'section') {
+        const heading = (ancestor.children || []).find(
+          (child) => child.type === 'element' && /^h[1-6]$/.test(child.tag),
+        );
+        const headingText = heading ? exportNodeText(heading).trim() : '';
+        if (headingText) return headingText;
+      }
+    }
+    return node.id;
+  }
+
+  function previousSharedSibling(entry, sharedIds) {
+    const siblings = entry.sibling_ids || [];
+    const position = siblings.indexOf(entry.node.id);
+    for (let index = position - 1; index >= 0; index -= 1) {
+      if (sharedIds.has(siblings[index])) return siblings[index];
+    }
+    return null;
+  }
+
+  /**
+   * 比较两份任意 Resume DOM。差异只依赖稳定节点 ID，不依赖固定简历区块。
+   * 新增/删除只报告最外层节点，避免一个新增模块被重复计算为几十处变化。
+   */
+  function compareDocuments(beforeValue, afterValue) {
+    const before = flattenDocument(beforeValue);
+    const after = flattenDocument(afterValue);
+    const beforeIds = new Set(before.entries.keys());
+    const afterIds = new Set(after.entries.keys());
+    const sharedIds = new Set([...beforeIds].filter((id) => afterIds.has(id)));
+    const changes = [];
+
+    before.entries.forEach((entry, id) => {
+      if (afterIds.has(id)) return;
+      if (entry.parent_id && !afterIds.has(entry.parent_id)) return;
+      changes.push({
+        type: 'removed',
+        node_id: id,
+        label: nodeLabel(entry),
+        before_text: exportNodeText(entry.node).trim(),
+        after_text: '',
+        before_parent_id: entry.parent_id,
+        after_parent_id: null,
+      });
+    });
+
+    after.entries.forEach((entry, id) => {
+      if (beforeIds.has(id)) return;
+      if (entry.parent_id && !beforeIds.has(entry.parent_id)) return;
+      changes.push({
+        type: 'added',
+        node_id: id,
+        label: nodeLabel(entry),
+        before_text: '',
+        after_text: exportNodeText(entry.node).trim(),
+        before_parent_id: null,
+        after_parent_id: entry.parent_id,
+      });
+    });
+
+    sharedIds.forEach((id) => {
+      const left = before.entries.get(id);
+      const right = after.entries.get(id);
+      const base = {
+        node_id: id,
+        label: nodeLabel(right) || nodeLabel(left),
+        before_text: exportNodeText(left.node).trim(),
+        after_text: exportNodeText(right.node).trim(),
+        before_parent_id: left.parent_id,
+        after_parent_id: right.parent_id,
+      };
+      const leftType = left.node.type === 'element' ? `${left.node.type}:${left.node.tag}` : left.node.type;
+      const rightType = right.node.type === 'element' ? `${right.node.type}:${right.node.tag}` : right.node.type;
+      if (leftType !== rightType) {
+        changes.push({ ...base, type: 'structure' });
+        return;
+      }
+      if (ownNodeText(left.node) !== ownNodeText(right.node)) {
+        changes.push({ ...base, type: 'text' });
+      }
+      if (
+        left.parent_id !== right.parent_id
+        || previousSharedSibling(left, sharedIds) !== previousSharedSibling(right, sharedIds)
+      ) {
+        changes.push({ ...base, type: 'moved' });
+      }
+      if (left.node.type === 'element') {
+        if (!sameValue(left.node.attributes || {}, right.node.attributes || {})) {
+          changes.push({ ...base, type: 'attributes' });
+        }
+        if (!sameValue(left.node.style || {}, right.node.style || {})) {
+          changes.push({ ...base, type: 'style' });
+        }
+      }
+    });
+
+    const order = {
+      removed: 0,
+      added: 1,
+      structure: 2,
+      text: 3,
+      moved: 4,
+      attributes: 5,
+      style: 6,
+    };
+    changes.sort((left, right) =>
+      (order[left.type] - order[right.type]) || left.node_id.localeCompare(right.node_id));
+    const counts = changes.reduce((result, change) => {
+      result[change.type] = (result[change.type] || 0) + 1;
+      return result;
+    }, { added: 0, removed: 0, text: 0, moved: 0, structure: 0, attributes: 0, style: 0 });
+
+    return {
+      equal: changes.length === 0,
+      changes,
+      counts,
+      changed_node_ids: {
+        before: [...new Set(changes.filter((change) => change.type !== 'added').map((change) => change.node_id))],
+        after: [...new Set(changes.filter((change) => change.type !== 'removed').map((change) => change.node_id))],
+      },
+    };
+  }
+
   /**
    * 将任意 Resume DOM 展开成打印渲染器可消费的通用内容块。
    * HTML 保留完整 DOM；PDF/DOCX 使用这些语义块做跨格式降级。
@@ -754,6 +930,7 @@
     nodeText,
     syncLegacyBindings,
     applyOperations,
+    compareDocuments,
     plainText,
     exportNodeText,
     toRenderBlocks,

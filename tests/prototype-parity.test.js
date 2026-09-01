@@ -48,6 +48,15 @@ function texts(root, selector) {
   );
 }
 
+async function waitFor(predicate, timeout = 3000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('等待前端状态更新超时');
+}
+
 let ctx;
 let origin;
 let proto;
@@ -180,21 +189,56 @@ test('模板选择与历史版本入口一致', () => {
   );
 });
 
-test('历史版本列表：分组、标题与摘要一致', () => {
+test('历史版本列表：保留原型内容并补充明确版本状态', () => {
   assert.deepStrictEqual(
     texts(app, '#history-list .history-day'),
     texts(proto, '#history-list .history-day'),
     '日期分组必须一致',
   );
   assert.deepStrictEqual(
-    texts(app, '#history-list .version-row-copy'),
-    texts(proto, '#history-list .version-row-copy'),
-    '版本行内容必须一致',
+    texts(app, '#history-list .version-row-copy b'),
+    texts(proto, '#history-list .version-row-copy b'),
+    '版本标题必须一致',
   );
   assert.deepStrictEqual(
-    texts(app, '#history-list .current-version'),
-    texts(proto, '#history-list .current-version'),
+    texts(app, '#history-list .version-row-copy em'),
+    texts(proto, '#history-list .version-row-copy em'),
+    '版本摘要必须一致',
   );
+  assert.deepStrictEqual(
+    texts(app, '#history-list .version-kind'),
+    ['手动保存', '手动保存', 'AI 生成'],
+    '版本创建方式必须明确展示',
+  );
+  assert.strictEqual(texts(app, '#history-list .current-version').length, 1);
+  assert.match(texts(app, '#history-list .current-version')[0], /当前草稿|草稿基于此版/);
+});
+
+test('历史详情与比较复用完整 Resume DOM，并提供安全继续选项', async () => {
+  const rows = app.querySelectorAll('#history-list .version-row');
+  rows[rows.length - 1].click();
+  await waitFor(() =>
+    app.querySelector('#history-detail').classList.contains('active')
+    && app.querySelector('#snapshot-resume [data-node-id]'));
+  assert.ok(app.querySelector('#snapshot-resume [data-node-id="resume-name"]'));
+  assert.strictEqual(app.querySelector('#snapshot-name'), null, '不得继续依赖固定历史字段');
+
+  app.querySelector('#compare-version').click();
+  await waitFor(() =>
+    app.querySelector('#history-compare').classList.contains('active')
+    && app.querySelector('#compare-old-copy [data-node-id]')
+    && app.querySelector('#compare-current-copy [data-node-id]'));
+  assert.ok(app.querySelector('#compare-change-list').children.length >= 1);
+
+  app.querySelector('#history-back').click();
+  await waitFor(() => app.querySelector('#history-detail').classList.contains('active'));
+  app.querySelector('#copy-version').click();
+  assert.ok(app.querySelector('#restore-version-modal').classList.contains('show'));
+  assert.strictEqual(
+    app.querySelectorAll('#restore-version-modal input[name="restore-scope"]').length,
+    2,
+  );
+  app.querySelector('#cancel-restore-version').click();
 });
 
 test('生成进度浮层与引导浮层文案一致', () => {

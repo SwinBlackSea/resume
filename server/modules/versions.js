@@ -8,7 +8,7 @@
  * 重复 Idempotency-Key 不得新增版本。版本快照创建后不可修改（由数据库触发器保证）。
  */
 const db = require('../lib/db');
-const { uuidv7, nowIso, problem, deepClone } = require('../lib/util');
+const { uuidv7, nowIso, problem, hashJson } = require('../lib/util');
 const audit = require('../lib/audit');
 const { withIdempotency } = require('../lib/idempotency');
 const { putObject } = require('../lib/storage');
@@ -16,6 +16,7 @@ const { renderPdf } = require('../lib/render/pdf');
 const { renderDocx } = require('../lib/render/docx');
 const { renderHtml } = require('../lib/render/html');
 const { toVersionView } = require('./workspace');
+const ResumeDom = require('../../resume-dom');
 
 function loadProject(projectId, user) {
   const project = db.get('SELECT * FROM resume_projects WHERE id = ? AND owner_id = ?', [
@@ -26,13 +27,115 @@ function loadProject(projectId, user) {
   return project;
 }
 
-function resumeMainWork(resume) {
-  const experience = (resume.experience || [])[0];
-  if (experience && (experience.bullets || []).length) {
-    const bullet = experience.bullets.find((item) => item.id === 'target-bullet') || experience.bullets[0];
-    return bullet.text || '';
+function parseJson(value, fallback = {}) {
+  try {
+    return JSON.parse(value || JSON.stringify(fallback));
+  } catch (_) {
+    return fallback;
   }
-  return resume.summary || '';
+}
+
+function changeLabel(change) {
+  const after = parseJson(change.after_json);
+  if (after.label) return String(after.label).trim();
+  if (change.change_type === 'template') return '调整简历模板';
+  const beforeResume = parseJson(change.before_json).resume_json;
+  const afterResume = after.resume_json;
+  if (beforeResume && afterResume) {
+    const diff = ResumeDom.compareDocuments(
+      ResumeDom.ensureDocument(beforeResume),
+      ResumeDom.ensureDocument(afterResume),
+    );
+    const first = diff.changes.find((item) =>
+      ['added', 'removed', 'text', 'moved', 'structure'].includes(item.type));
+    if (first) {
+      const action = {
+        added: '新增',
+        removed: '删除',
+        text: '修改',
+        moved: '调整位置',
+        structure: '调整结构',
+      }[first.type];
+      return `${action}${first.label}`;
+    }
+  }
+  return '修改简历内容';
+}
+
+function contextLabel(payload, type) {
+  if (!payload || !Object.keys(payload).length) return type === 'job' ? '未设置岗位' : '未选择模板';
+  if (type === 'job') {
+    return [payload.title, payload.company].filter(Boolean).join(' · ') || '未设置岗位';
+  }
+  return [payload.name, payload.version ? `第 ${payload.version} 版` : ''].filter(Boolean).join(' · ')
+    || '未选择模板';
+}
+
+function currentTemplatePayload(project) {
+  if (!project.current_template_version_id) return {};
+  const version = db.get('SELECT * FROM template_versions WHERE id = ?', [
+    project.current_template_version_id,
+  ]);
+  if (!version) return {};
+  const definition = db.get('SELECT * FROM template_definitions WHERE id = ?', [version.template_id]);
+  return {
+    template_version_id: version.id,
+    name: definition ? definition.name : '',
+    version: version.version,
+    schema: parseJson(version.schema_json),
+  };
+}
+
+function currentJobPayload(project, user) {
+  if (!project.current_job_id) return {};
+  const job = db.get(
+    'SELECT * FROM target_jobs WHERE id = ? AND project_id = ? AND owner_id = ?',
+    [project.current_job_id, project.id, user.id],
+  );
+  if (!job) return {};
+  return {
+    id: job.id,
+    title: job.title,
+    company: job.company,
+    confirmed_text: job.confirmed_text,
+    analysis: parseJson(job.analysis_json),
+    revision: job.revision,
+    status: job.status,
+  };
+}
+
+function compareContexts(oldTemplate, oldJob, currentTemplate, currentJob) {
+  const templateSignature = (payload) => ({
+    template_version_id: payload && payload.template_version_id || null,
+    name: payload && payload.name || '',
+    version: payload && payload.version || null,
+    schema: payload && payload.schema || {},
+  });
+  const jobSignature = (payload) => ({
+    id: payload && payload.id || null,
+    title: payload && payload.title || '',
+    company: payload && payload.company || '',
+    confirmed_text: payload && payload.confirmed_text || '',
+    analysis: payload && payload.analysis || {},
+    revision: payload && payload.revision || null,
+    status: payload && payload.status || '',
+  });
+  return [
+    {
+      type: 'template',
+      label: '简历模板',
+      before: contextLabel(oldTemplate, 'template'),
+      after: contextLabel(currentTemplate, 'template'),
+      changed: hashJson(templateSignature(oldTemplate)) !== hashJson(templateSignature(currentTemplate)),
+    },
+    {
+      type: 'job',
+      label: '目标岗位',
+      before: contextLabel(oldJob, 'job'),
+      after: contextLabel(currentJob, 'job'),
+      changed: hashJson(jobSignature(oldJob)) !== hashJson(jobSignature(currentJob)),
+    },
+  ];
 }
 
 /** 生成导出产物（PDF / DOCX / HTML），并登记到 artifacts。 */
@@ -205,11 +308,11 @@ const routes = [
           const changeLabels = changeIds.length
             ? db
                 .all(
-                  `SELECT id, after_json FROM resume_change_events
+                  `SELECT id, change_type, before_json, after_json FROM resume_change_events
                    WHERE project_id = ? AND owner_id = ? AND id IN (${changeIds.map(() => '?').join(',')})`,
                   [project.id, user.id, ...changeIds],
                 )
-                .map((row) => (JSON.parse(row.after_json || '{}').label || '').trim())
+                .map(changeLabel)
                 .filter(Boolean)
             : [];
 
@@ -248,7 +351,6 @@ const routes = [
                   : '未设置岗位',
                 template_data: `${templatePayload.name || '系统模板'}｜当前排版`,
                 compare_note: '',
-                time_label: `今天 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2, '0')}`,
               }),
               now,
             ],
@@ -297,7 +399,7 @@ const routes = [
       ]);
       if (!version) throw problem.notFound('版本不存在');
       const summary = JSON.parse(version.change_summary_json || '{}');
-      const resume = JSON.parse(version.resume_payload || '{}');
+      const resume = ResumeDom.attachDocument(JSON.parse(version.resume_payload || '{}'));
       const jobPayload = JSON.parse(version.job_payload || '{}');
       const templatePayload = JSON.parse(version.template_payload || '{}');
       const profilePayload = JSON.parse(version.profile_payload || '{}');
@@ -305,9 +407,14 @@ const routes = [
         version.project_id,
         user.id,
       ]);
+      const draftResume = parseJson(draft && draft.resume_json);
+      const versionDocument = ResumeDom.ensureDocument(resume);
+      const draftDocument = ResumeDom.ensureDocument(draftResume);
       return {
         ...toVersionView(version, draft ? draft.base_version_id : null),
         resume,
+        matches_current_draft: hashJson(versionDocument) === hashJson(draftDocument),
+        draft_has_unsnapshotted_changes: Boolean(draft && draft.has_unsnapshotted_changes),
         profile_payload: profilePayload,
         template_payload: templatePayload,
         job_payload: jobPayload,
@@ -337,55 +444,155 @@ const routes = [
         version.project_id,
         user.id,
       ]);
-      const targetId = query.get('target') || (draft ? draft.base_version_id : null);
+      if (!draft) throw problem.notFound('草稿不存在');
+      const project = loadProject(version.project_id, user);
+      const targetId = query.get('target');
       const current = targetId
-        ? db.get('SELECT * FROM resume_versions WHERE id = ? AND owner_id = ?', [targetId, user.id])
+        ? db.get(
+            'SELECT * FROM resume_versions WHERE id = ? AND project_id = ? AND owner_id = ?',
+            [targetId, version.project_id, user.id],
+          )
         : null;
-      const summary = JSON.parse(version.change_summary_json || '{}');
-      const currentSummary = current ? JSON.parse(current.change_summary_json || '{}') : {};
-      const oldResume = JSON.parse(version.resume_payload || '{}');
+      if (targetId && !current) throw problem.notFound('要比较的版本不存在');
+      const oldResume = ResumeDom.attachDocument(parseJson(version.resume_payload));
       const currentResume = current
-        ? JSON.parse(current.resume_payload || '{}')
-        : JSON.parse((draft && draft.resume_json) || '{}');
+        ? ResumeDom.attachDocument(parseJson(current.resume_payload))
+        : ResumeDom.attachDocument(parseJson(draft.resume_json));
+      const oldTemplate = parseJson(version.template_payload);
+      const oldJob = parseJson(version.job_payload);
+      const currentTemplate = current
+        ? parseJson(current.template_payload)
+        : currentTemplatePayload(project);
+      const currentJob = current
+        ? parseJson(current.job_payload)
+        : currentJobPayload(project, user);
+      const diff = ResumeDom.compareDocuments(
+        ResumeDom.ensureDocument(oldResume),
+        ResumeDom.ensureDocument(currentResume),
+      );
+      const contextChanges = compareContexts(oldTemplate, oldJob, currentTemplate, currentJob);
       return {
         old: {
           id: version.id,
           title: version.name,
-          time_label: summary.time_label || '',
-          copy: resumeMainWork(oldResume),
+          created_at: version.created_at,
+          resume: oldResume,
         },
         current: {
           id: current ? current.id : null,
           title: current ? current.name : '当前草稿',
-          time_label: current ? currentSummary.time_label || '' : '当前草稿',
-          copy: resumeMainWork(currentResume),
+          created_at: current ? current.created_at : draft.updated_at,
+          resume: currentResume,
+          has_unsnapshotted_changes: current ? false : Boolean(draft.has_unsnapshotted_changes),
         },
-        note:
-          summary.compare_note ||
-          '两个版本之间的差异已按主要经历内容展示；未变化的部分已省略。',
+        diff,
+        context_changes: contextChanges,
+        note: diff.equal && !contextChanges.some((item) => item.changed)
+          ? '这两份简历当前没有差异。'
+          : `已比较完整简历，共发现 ${diff.changes.length} 处内容或结构变化。`,
       };
     },
   },
   {
     method: 'POST',
     pattern: '/versions/:id/clone',
-    handler: ({ params, user, requestId, ipHash }) =>
-      db.tx(() => {
+    handler: ({ params, body, user, req, requestId, ipHash }) =>
+      withIdempotency(user, req.headers['idempotency-key'], 'resume_version_clone', () =>
+        db.tx(() => {
         const version = db.get('SELECT * FROM resume_versions WHERE id = ? AND owner_id = ?', [
           params.id,
           user.id,
         ]);
         if (!version) throw problem.notFound('版本不存在');
+        const project = loadProject(version.project_id, user);
         const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [
           version.project_id,
           user.id,
         ]);
         if (!draft) throw problem.notFound('草稿不存在');
+        if (body.draft_revision !== undefined && body.draft_revision !== draft.revision) {
+          throw problem.conflict('REVISION_CONFLICT', '简历已变化，请刷新后重试', {
+            expected: body.draft_revision,
+            current: draft.revision,
+          });
+        }
+        const pending = db.get(
+          `SELECT COUNT(*) AS total FROM resume_change_events
+           WHERE project_id = ? AND owner_id = ? AND reverted_at IS NULL AND snapshot_version_id IS NULL`,
+          [project.id, user.id],
+        ).total;
+        if ((draft.has_unsnapshotted_changes || pending) && !body.discard_unsaved) {
+          throw problem.conflict(
+            'UNSAVED_DRAFT_CHANGES',
+            '当前草稿还有未保存的修改，请先保存或确认放弃后再继续',
+            { pending_changes: pending },
+          );
+        }
+        const now = nowIso();
+        if (body.discard_unsaved && pending) {
+          db.run(
+            `UPDATE resume_change_events SET reverted_at = ?
+             WHERE project_id = ? AND owner_id = ? AND reverted_at IS NULL AND snapshot_version_id IS NULL`,
+            [now, project.id, user.id],
+          );
+        }
+
+        const restored = { template: false, job: false, unavailable: [] };
+        if (body.restore_context) {
+          const templatePayload = parseJson(version.template_payload);
+          const historicalTemplateId = templatePayload.template_version_id || null;
+          let templateId = null;
+          if (historicalTemplateId) {
+            const template = db.get(
+              `SELECT tv.id FROM template_versions tv
+               LEFT JOIN template_definitions td ON td.id = tv.template_id
+               WHERE tv.id = ? AND (tv.owner_id IS NULL OR tv.owner_id = ? OR td.owner_id = ?)`,
+              [historicalTemplateId, user.id, user.id],
+            );
+            if (template) {
+              templateId = template.id;
+              restored.template = true;
+            } else {
+              restored.unavailable.push('简历模板');
+            }
+          } else {
+            restored.template = true;
+          }
+
+          const jobPayload = parseJson(version.job_payload);
+          const historicalJobId = jobPayload.id || null;
+          let jobId = null;
+          if (historicalJobId) {
+            const job = db.get(
+              'SELECT id FROM target_jobs WHERE id = ? AND project_id = ? AND owner_id = ?',
+              [historicalJobId, project.id, user.id],
+            );
+            if (job) {
+              jobId = job.id;
+              restored.job = true;
+            } else {
+              restored.unavailable.push('目标岗位');
+            }
+          } else {
+            restored.job = true;
+          }
+          db.run(
+            `UPDATE resume_projects
+             SET current_template_version_id = ?, current_job_id = ?, revision = revision + 1, updated_at = ?
+             WHERE id = ?`,
+            [
+              restored.template ? templateId : project.current_template_version_id,
+              restored.job ? jobId : project.current_job_id,
+              now,
+              project.id,
+            ],
+          );
+        }
         // 复制旧版本创建新草稿，不覆盖原版本（PRD 发布验收 20）
         const revision = draft.revision + 1;
         db.run(
           'UPDATE resume_drafts SET resume_json = ?, base_version_id = ?, revision = ?, has_unsnapshotted_changes = 0, updated_at = ? WHERE id = ?',
-          [version.resume_payload, version.id, revision, nowIso(), draft.id],
+          [version.resume_payload, version.id, revision, now, draft.id],
         );
         audit.log({
           ownerId: user.id,
@@ -394,7 +601,12 @@ const routes = [
           resourceId: version.id,
           requestId,
           ipHash,
-          metadata: { draft_revision: revision },
+          metadata: {
+            draft_revision: revision,
+            discarded_changes: body.discard_unsaved ? pending : 0,
+            restored_context: Boolean(body.restore_context),
+            profile_unchanged: true,
+          },
         });
         return {
           version_id: version.id,
@@ -402,8 +614,11 @@ const routes = [
           resume_json: JSON.parse(version.resume_payload || '{}'),
           base_version_id: version.id,
           original_version_intact: true,
+          profile_unchanged: true,
+          restored_context: restored,
         };
-      }),
+        }),
+      ),
   },
   {
     method: 'POST',
@@ -439,4 +654,4 @@ const routes = [
   },
 ];
 
-module.exports = { routes, renderVersionArtifacts, resumeMainWork };
+module.exports = { routes, renderVersionArtifacts };

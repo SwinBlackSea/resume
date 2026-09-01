@@ -269,6 +269,17 @@ async function runGeneration(snapshotId) {
           JSON.stringify(resume),
           JSON.stringify({
             changes: (resume.generation_notes || []).map((note) => note.text),
+            list_summary: (resume.generation_notes || []).length
+              ? (resume.generation_notes || []).slice(0, 2).map((note) => note.text).join('、')
+              : 'AI 已按当前要求生成完整简历',
+            profile_data: `${(profilePayload.basics && profilePayload.basics.name) || ''}｜${
+              (profilePayload.basics && profilePayload.basics.city) || ''
+            }；${(profilePayload.experiences || []).filter((item) => item.type === 'work').length} 段工作经历、${
+              (profilePayload.experiences || []).filter((item) => item.type === 'project').length
+            } 个项目`,
+            job_data: [jobView.title, jobView.company].filter(Boolean).join('｜') || '未设置岗位',
+            template_data: `${templatePayload.name || '系统模板'}｜生成时排版`,
+            compare_note: '',
             validation_issues: resume.validation_issues || [],
             match,
           }),
@@ -301,12 +312,11 @@ async function runGeneration(snapshotId) {
           [
             JSON.stringify(resume),
             id,
-            db.nextSequence('resume_drafts', projectId, 'revision') || draft.revision + 1,
+            draft.revision + 1,
             nowIso(),
             draft.id,
           ],
         );
-        db.run('UPDATE resume_drafts SET revision = revision + 1 WHERE id = ?', [draft.id]);
       }
       db.run('UPDATE resume_projects SET current_job_id = COALESCE(?, current_job_id), updated_at = ? WHERE id = ?', [
         jobPayload.id || null,

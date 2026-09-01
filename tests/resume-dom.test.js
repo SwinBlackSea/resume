@@ -123,6 +123,31 @@ test('DOM 操作使用稳定节点 ID，同步修改旧字段且拒绝危险结�
   assert.deepStrictEqual(safe.root.children[0].attributes, {});
 });
 
+test('通用差异引擎识别动态模块、文本和样式变化，不把固定区块写死', () => {
+  const before = ResumeDom.ensureDocument(legacyResume);
+  const afterAdded = ResumeDom.applyOperations(before, [overseasOperation()]);
+  const after = ResumeDom.applyOperations(afterAdded, [
+    { op: 'replace_text', node_id: 'target-bullet', text: '负责产品规划、验证与上线闭环。' },
+    { op: 'set_style', node_id: 'section-summary-title', style: { color: '#0066cc' } },
+  ]);
+  const diff = ResumeDom.compareDocuments(before, after);
+
+  assert.strictEqual(diff.equal, false);
+  assert.ok(diff.changes.some(
+    (change) => change.type === 'added' && change.node_id === 'section-overseas',
+  ));
+  assert.ok(!diff.changes.some(
+    (change) => change.type === 'added' && change.node_id === 'overseas-content-1',
+  ), '新增模块只应报告最外层节点');
+  assert.ok(diff.changes.some(
+    (change) => change.type === 'text' && change.node_id === 'target-bullet',
+  ));
+  assert.ok(diff.changes.some(
+    (change) => change.type === 'style' && change.node_id === 'section-summary-title',
+  ));
+  assert.strictEqual(diff.counts.moved, 0, '插入新模块不应把后续原有模块误判为移动');
+});
+
 test('整份简历可由 AI 新增动态模块，新增内容可继续选中改写并撤销', async (t) => {
   const ctx = await helpers.boot();
   t.after(() => helpers.close(ctx));

@@ -95,6 +95,8 @@ function toVersionView(row, currentVersionId) {
     job: jobPayload.job || `${jobPayload.title || ''}${jobPayload.company ? ` · ${jobPayload.company}` : ''}`,
     changes: summary.changes || [],
     list_summary: summary.list_summary || '',
+    is_base_version: row.id === currentVersionId,
+    // 兼容旧客户端；新界面使用 is_base_version，避免把有新修改的草稿误称为“当前版本”。
     is_current: row.id === currentVersionId,
   };
 }
