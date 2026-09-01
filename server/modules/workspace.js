@@ -120,8 +120,8 @@ function toMessageView(row) {
     created_at: row.created_at,
     // 展示当前回答来自哪个引擎/模型，便于确认配置是否生效
     model: {
-      provider: modelMetadata.provider || 'local-rule-engine',
-      model: modelMetadata.model || 'resume-rule-v1',
+      provider: modelMetadata.provider || process.env.RESUME_LLM_PROVIDER || 'unconfigured',
+      model: modelMetadata.model || process.env.RESUME_LLM_MODEL || '',
       prompt_version: modelMetadata.prompt_version || '',
       policy_version: modelMetadata.policy_version || '',
     },

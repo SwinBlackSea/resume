@@ -14,7 +14,8 @@ const { createHash } = require('node:crypto');
 const { uuidv7, nowIso, problem, deepClone } = require('../lib/util');
 const audit = require('../lib/audit');
 const policy = require('../lib/policy');
-const adapter = require('../lib/ai-adapter');
+const resumeHarness = require('../lib/resume-harness');
+const { getObject } = require('../lib/storage');
 const { suggestPolish, diffWords } = require('../lib/polish');
 const { splitBullets } = require('../lib/compose');
 const { keyTokens } = require('../lib/resume-schema');
@@ -176,43 +177,6 @@ function textHash(value) {
   return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
-const FACT_UNIT_PATTERN = '家|人|位|个|万|亿|%|％|倍|次|轮|条|款|台|套|场|篇|年|月';
-
-/**
- * 数值是高风险事实信号：已在 F/A 中出现的数字可以继续改写，新数字先确认；
- * “30+从方案论证”这类缺少计量对象的片段不猜，先追问具体含义。
- */
-function analyzeNumericInstruction(content, knownFactTexts = []) {
-  const text = String(content || '');
-  if (
-    adapter.isStructuralRewriteInstruction(text) ||
-    /(?:控制|压缩|精简|缩短|限制|不超过|少于|多于|扩写).{0,8}\d[\d,.]*\s*(?:[+＋]\s*)?(?:字|字符)/.test(text) ||
-    /(?:分成?|拆成?)\s*\d+\s*(?:点|段|条)|第\s*\d+\s*(?:句|段|条)/.test(text)
-  ) {
-    return { kind: 'none' };
-  }
-  const known = new Set();
-  (knownFactTexts || []).forEach((value) => keyTokens(value).forEach((token) => known.add(token)));
-  const matcher = new RegExp(`\\d[\\d,.]*\\s*(?:[+＋]\\s*)?(?:${FACT_UNIT_PATTERN})?`, 'g');
-  for (const match of text.matchAll(matcher)) {
-    const raw = String(match[0] || '').trim();
-    if (!raw) continue;
-    const normalized = raw.replace(/\s+/g, '').replace(/＋/g, '+');
-    const hasPlus = /[+＋]/.test(raw);
-    const hasUnit = new RegExp(`(?:${FACT_UNIT_PATTERN})$`).test(normalized);
-    if (hasUnit && known.has(normalized)) continue;
-    if (hasPlus && !hasUnit) {
-      return {
-        kind: 'clarify',
-        token: normalized,
-        question: `“${normalized}”具体指什么数量？请补充单位或对象，例如“30+次方案论证”。`,
-      };
-    }
-    if (hasUnit) return { kind: 'fact', token: normalized };
-  }
-  return { kind: 'none' };
-}
-
 function taskState(task) {
   return parseJson(task && task.state_json, {});
 }
@@ -344,8 +308,8 @@ function actionAllowedInScope(actionType, scopeType) {
 function adoptModelSuggestion(base, modelProposal, knownFactTexts = []) {
   const model = modelProposal || {};
   const candidate = String(model.suggestion || '').trim();
-  if (!candidate || candidate === base.original) {
-    // 模型未给出改写（或认为无需改写）：用后端确定性方案兜底并标注来源
+  if (!candidate) {
+    // 仅离线测试模型允许省略建议正文；生产模型缺失 suggestion 会在调用方被拒绝。
     return { ...base, source: 'rule-fallback' };
   }
   const confirmedTokens = new Set();
@@ -715,61 +679,6 @@ function markProposalStale(action, user) {
   }
 }
 
-/**
- * 兜底：模型在建议文本里写了「xxx（待确认）」却没建 FACT_CANDIDATE 动作时，
- * 后端确定性解析出该内容并创建待确认项（不依赖模型自觉）。
- */
-function ensurePendingFactFromProposal({ ctx, suggestion, content, assistantMessageId, userMessageId, scopeType, scopeId, task }) {
-  const match = String(suggestion || '').match(/([^（(，,。；\n]{2,40}?)\s*（待确认）/);
-  if (!match) return null;
-  const value = match[1].trim();
-  const meta = adapter.inferFactMeta(String(content || '') + ' ' + value);
-  const label = meta.label;
-  const fieldPath = meta.field_path;
-  // 去重：同项目已有同样值的待确认项则复用，避免重复建项
-  const dup = db.get(
-    `SELECT id FROM fact_candidates
-     WHERE project_id = ? AND owner_id = ? AND status = 'pending'
-       AND json_extract(proposed_value_json, '$.value') = ?`,
-    [ctx.project.id, ctx.user_id || ctx.project.owner_id, value],
-  );
-  if (dup) return dup.id;
-  const factId = uuidv7();
-  const factPayload = { task_id: task.id, label, value, fact_id: factId };
-  db.run(
-    `INSERT INTO fact_candidates (id, project_id, owner_id, target_type, target_id, field_path, proposed_value_json, source_type, source_id, status, created_at, updated_at)
-     VALUES (?, ?, ?, 'profile_experience', ?, ?, ?, 'message', ?, 'pending', ?, ?)`,
-    [
-      factId,
-      ctx.project.id,
-      ctx.user_id || ctx.project.owner_id,
-      scopeType === 'DATA_PROFILE' ? scopeId : null,
-      fieldPath,
-      JSON.stringify({ ...factPayload, evidence: [userMessageId] }),
-      userMessageId,
-      nowIso(),
-      nowIso(),
-    ],
-  );
-  const actionId = uuidv7();
-  db.run(
-    `INSERT INTO ai_action_requests (id, conversation_id, message_id, owner_id, action_type, target_type, target_id, payload_json, evidence_json, confidence, requires_confirmation, status, expected_revision, policy_version, created_at)
-     VALUES (?, ?, ?, ?, 'FACT_CANDIDATE', 'profile_experience', ?, ?, ?, NULL, 1, 'awaiting_confirmation', NULL, ?, ?)`,
-    [
-      actionId,
-      ctx.conversation.id,
-      assistantMessageId,
-      ctx.user_id || ctx.project.owner_id,
-      factId,
-      JSON.stringify(factPayload),
-      JSON.stringify([userMessageId]),
-      POLICY_VERSION,
-      nowIso(),
-    ],
-  );
-  return factId;
-}
-
 function confirmFactCandidate({ user, project, ctx, fact, actionId, expectedRevision, requestId, ipHash }) {
   if (expectedRevision !== undefined && expectedRevision !== ctx.profile.revision) {
     throw problem.conflict('REVISION_CONFLICT', '个人资料已变化，请重新确认', {
@@ -1125,19 +1034,43 @@ function tryHandleConfirmation({ conversation, params, body, user, requestId, ip
   });
 }
 
-/** ② 拼装任务上下文：currentText=A、editingBase=B、sourceFacts=F，scope 只约束动作目标。 */
-function assembleInput({ conversation, userMessageId, content, scopeType, scopeId, scopeRevision, job, profile, draft, project, user, task, parentProposalId }) {
-  const history = db
+function loadVisionAttachments(attachmentIds, user) {
+  const ids = [...new Set(Array.isArray(attachmentIds) ? attachmentIds.filter(Boolean) : [])];
+  if (ids.length > 4) throw problem.badRequest('每条消息最多附带 4 张图片');
+  let totalBytes = 0;
+  return ids.map((id) => {
+    const upload = db.get(
+      "SELECT * FROM uploads WHERE id = ? AND owner_id = ? AND status = 'ready'",
+      [id, user.id],
+    );
+    if (!upload) throw problem.badRequest('附件不存在或尚未处理完成');
+    if (!String(upload.mime_type || '').startsWith('image/')) {
+      throw problem.badRequest('AI 对话附件目前只支持图片');
+    }
+    const buffer = getObject(upload.object_key);
+    if (!buffer) throw problem.unprocessable('FILE_MISSING', '未读取到附件内容');
+    totalBytes += buffer.length;
+    if (totalBytes > 20 * 1024 * 1024) {
+      throw problem.unprocessable('ATTACHMENTS_TOO_LARGE', '本条消息的图片总大小不能超过 20 MB');
+    }
+    return {
+      id: upload.id,
+      name: upload.original_name,
+      mime_type: upload.mime_type,
+      content_base64: buffer.toString('base64'),
+    };
+  });
+}
+
+/** ② 拼装完整工作区、当前会话与锁定焦点；会话输入由 harness 按预算裁剪。 */
+function assembleInput({ conversation, userMessageId, content, scopeType, scopeId, scopeRevision, job, profile, draft, project, user, task, parentProposalId, attachments = [] }) {
+  const conversationMessages = db
     .all(
-      `SELECT role, content FROM ai_messages
+      `SELECT role, content, scope_type, scope_id FROM ai_messages
        WHERE conversation_id = ? AND id != ?
-         AND json_extract(model_metadata_json, '$.task_id') = ?
-       ORDER BY created_at DESC LIMIT 10`,
-      [conversation.id, userMessageId, task.id],
-    )
-    .reverse()
-    .map((m) => `${m.role === 'user' ? '用户' : '助手'}：${String(m.content || '').slice(0, 200)}`)
-    .join('\n');
+       ORDER BY created_at ASC LIMIT 100`,
+      [conversation.id, userMessageId],
+    );
 
   const profileBasics = JSON.parse(profile.basics_json || '{}');
   const resumeNow = JSON.parse(draft.resume_json || '{}');
@@ -1174,9 +1107,7 @@ function assembleInput({ conversation, userMessageId, content, scopeType, scopeI
       (foundTarget.bullet.source_item_ids && foundTarget.bullet.source_item_ids[0]) ||
       null;
   }
-  const sourceExp = sourceKey
-    ? sourceExperiences.find((exp) => exp.id === sourceKey)
-    : null;
+  const sourceExp = sourceKey ? sourceExperiences.find((exp) => exp.id === sourceKey) : null;
   // 事实基准只能来自资料库或真实正文 A，绝不从上一版 AI 建议 B 回退。
   const sourceFacts = sourceExp
     ? splitBullets(sourceExp.description).slice(0, 20)
@@ -1184,177 +1115,117 @@ function assembleInput({ conversation, userMessageId, content, scopeType, scopeI
       ? [currentText]
       : [];
 
-  const resumeText = [...(resumeNow.experience || []), ...(resumeNow.projects || [])]
-    .flatMap((item) => (item.bullets || []).map((bullet) => bullet.text || ''))
-    .join('\n')
-    .slice(0, 2400);
-
-  // 当前「待确认」事实（未写入资料库）：告诉模型它们尚未生效，不应作为既定事实
+  // 待确认内容属于事实边界，但不作为已确认事实输入。
   const pendingRows = db.all(
-    `SELECT proposed_value_json FROM fact_candidates
+    `SELECT id, target_type, target_id, field_path, proposed_value_json FROM fact_candidates
      WHERE project_id = ? AND owner_id = ? AND status = 'pending'
-       AND json_extract(proposed_value_json, '$.task_id') = ?`,
-    [project.id, user.id, task.id],
+     ORDER BY created_at ASC`,
+    [project.id, user.id],
   );
   const pendingFacts = pendingRows
     .map((row) => {
       try {
         const v = JSON.parse(row.proposed_value_json || '{}');
-        return v.label ? `${v.label}：${v.value || ''}` : '';  // eslint-disable-line no-undef
+        return {
+          id: row.id,
+          target_type: row.target_type,
+          target_id: row.target_id,
+          field_path: row.field_path,
+          label: v.label || '',
+          value: v.value || '',
+          raw_text: v.raw_text || '',
+        };
       } catch (_) {
-        return '';
+        return null;
       }
     })
-    .filter(Boolean)
-    .join('；');
+    .filter(Boolean);
   const state = taskState(task);
-  const answerSummary = (state.answers || [])
-    .map((item) => `${item.question}：${item.answer}`)
-    .join('；');
-
-  const llmInput = {
-    text: content,
-    history,
-    currentText,
-    editingBase,
-    targetText: editingBase, // 兼容现有模型契约；新契约使用 currentText / editingBase
-    sourceFacts, // ← 该段溯源的资料库已确认事实（事实基准）
-    pendingFacts, // ← 当前待确认事实（尚未生效，不得作为既定事实）
-    resumeText, // ← 整份简历正文（检查类任务用）
-    scope: { type: scopeType, id: scopeId, revision: scopeRevision },
-    messageId: userMessageId,
-    taskSummary: `目标：${task.goal || content}；本轮要求：${content}${answerSummary ? `；已确认信息：${answerSummary}` : ''}`,
-    jobText: job ? String(job.confirmed_text || '').slice(0, 1200) : '',
-    profileBasics: {
-      name: profileBasics.name || '',
-      city: profileBasics.city || '',
-      current_title: profileBasics.current_title || '',
-    },
-    profileRevision: profile.revision,
+  const itemBullets = foundTarget ? foundTarget.item.bullets || [] : [];
+  const bulletIndex = foundTarget ? itemBullets.findIndex((entry) => entry.id === scopeId) : -1;
+  const focus = {
+    current_text: currentText,
+    editing_base: editingBase,
+    location: foundTarget
+      ? {
+          section: foundTarget.section,
+          item_id: foundTarget.item.id || null,
+          organization: foundTarget.item.organization || foundTarget.item.name || '',
+          title: foundTarget.item.title || '',
+          bullet_id: foundTarget.bullet.id,
+          bullet_index: bulletIndex,
+        }
+      : { section: 'summary', item_id: null, bullet_id: null },
+    neighboring_content: foundTarget
+      ? itemBullets
+          .map((bullet, index) => ({ id: bullet.id || null, index, text: String(bullet.text || '') }))
+          .filter((entry) => Math.abs(entry.index - bulletIndex) <= 2 && entry.index !== bulletIndex)
+      : [],
   };
+  const confirmedFacts = sourceExperiences.map((experience) => ({
+    id: experience.id,
+    type: experience.type,
+    organization: experience.organization || '',
+    description: experience.description || '',
+  }));
+  const llmInput = resumeHarness.buildHarnessInput({
+    text: content,
+    messageId: userMessageId,
+    scope: { type: scopeType, id: scopeId, revision: scopeRevision },
+    task: {
+      id: task.id,
+      goal: task.goal || content,
+      status: task.status,
+      answers: state.answers || [],
+    },
+    profile: { id: profile.id, revision: profile.revision, basics: profileBasics },
+    confirmedFacts,
+    resume: { id: draft.id, revision: draft.revision, content: resumeNow },
+    job: job
+      ? {
+          id: job.id,
+          revision: job.revision,
+          title: job.title || '',
+          company: job.company || '',
+          confirmed_text: job.confirmed_text || '',
+          analysis: parseJson(job.analysis_json, {}),
+        }
+      : null,
+    focus,
+    pendingFacts,
+    conversationMessages,
+    conversationSummary: parseJson(conversation.summary_json, null),
+    attachments,
+  });
   return {
-    history,
     currentText,
     editingBase,
     parentProposalId: parentBelongsToTask ? parentAction.id : null,
     sourceFacts,
-    resumeText,
     llmInput,
   };
 }
 
-/** ③ 单次 LLM 调用（失败即抛错）；必需动作缺失时补齐一次。 */
-async function runModel({ llmInput, userMessageId, content, targetText, scopeType, draft, job }) {
-  const numericInstruction = analyzeNumericInstruction(content, [
-    ...(llmInput.sourceFacts || []),
-    llmInput.currentText || '',
-  ]);
-  if (numericInstruction.kind === 'clarify') {
-    const response = {
-      reply: numericInstruction.question,
-      scope: llmInput.scope,
-      actions: [{ type: 'NO_OP', requires_confirmation: false, reason: '新数值缺少单位或对象' }],
-      evidence: userMessageId ? [{ id: userMessageId, type: 'message' }] : [],
-      uncertainty: [numericInstruction.question],
-    };
-    return {
-      response,
-      provider: 'policy',
-      model: 'numeric-clarifier',
-      prompt_version: adapter.PROMPT_VERSION,
-      validation: policy.validateModelResponse(response, { injectEvidence: userMessageId }),
-    };
-  }
-  if (numericInstruction.kind === 'fact') {
-    const response = adapter.generateResponse(llmInput);
-    return {
-      response,
-      provider: 'policy',
-      model: 'numeric-fact-classifier',
-      prompt_version: adapter.PROMPT_VERSION,
-      validation: policy.validateModelResponse(response, { injectEvidence: userMessageId }),
-    };
-  }
+/** ③ 单次模型调用。语义由模型理解；后端只做结构校验与权限/事实安全检查。 */
+async function runModel({ llmInput, userMessageId, draft, job }) {
   let modelResult;
   try {
-    modelResult = await adapter.complete(llmInput);
+    modelResult = await resumeHarness.complete(llmInput);
   } catch (err) {
     console.error('[ai] 模型调用失败：', err && err.message);
     const timeout = /超时|abort|interrupt|长时间|idle|fetch failed/i.test(String((err && err.message) || ''));
     throw problem.unprocessable('MODEL_UNAVAILABLE', timeout ? '模型响应超时或中断，请稍后重试。' : '模型服务暂时不可用，请稍后重试。');
   }
-  let { response } = modelResult;
-  const { provider, model, prompt_version } = modelResult;
-  let validation = policy.validateModelResponse(response, { injectEvidence: userMessageId });
-  const structuralRewrite =
-    scopeType === 'RESUME_BLOCK' && adapter.isStructuralRewriteInstruction(content);
-  if (structuralRewrite) {
-    validation.actions = validation.actions.filter((action) => action.type !== 'FACT_CANDIDATE');
-    if (!validation.actions.some((action) => action.type === 'RESUME_REWRITE_PROPOSAL')) {
-      response = adapter.generateResponse(llmInput);
-      validation = policy.validateModelResponse(response, { injectEvidence: userMessageId });
-    }
-  }
-  const needsDataClarification =
-    scopeType === 'RESUME_BLOCK' && /没有数据|数据不足|没数据|缺少数据|数据支撑/.test(content) && !/\d/.test(content);
-  if (needsDataClarification) {
-    validation.actions = validation.actions.filter((action) => action.type !== 'RESUME_REWRITE_PROPOSAL');
-    response.reply = '这版表达可以继续保留。请告诉我可验证的规模或结果数据；我会先让你确认，再沿用这一版补充。';
-  }
-
-  // 完整性校验（仅远程模型）：用户给了新事实/针对选中段落的修改意见，但模型没输出动作时补一次
-  const looksFactual = !structuralRewrite &&
-    /(\d[\d,.]*\s*(?:家|人|位|个|万|亿|%|％|倍|次|轮|条|款|台|套|场|篇))|(覆盖|负责|参与|提升|增长|新增|宣讲|服务|触达)/.test(
-      content,
-    );
-  const hasFactAction = validation.actions.some((a) => a.type === 'FACT_CANDIDATE');
-  const evaluatedTarget =
-    /没有数据|数据不足|没数据|太啰嗦|啰嗦|不够好|不具体|太虚|空泛|不直接|再具体|再精炼|改改|改进|优化|换一种|重新写|突出问题|更直接/.test(content) ||
-    content.length >= 4;
-  const blockNeedsRewrite =
-    scopeType === 'RESUME_BLOCK' &&
-    Boolean(targetText) &&
-    !needsDataClarification &&
-    evaluatedTarget &&
-    !validation.actions.some((a) => a.type === 'RESUME_REWRITE_PROPOSAL');
-  // 建议文本里写了「（待确认）」却没建对应的待确认项：用户无处确认，必须补齐
-  const proposalPending = validation.actions.some(
-    (a) =>
-      a.type === 'RESUME_REWRITE_PROPOSAL' &&
-      /待确认/.test(((((a.payload || {}).proposal || {}).suggestion) || '')),
-  );
-  const resolvePending = proposalPending && !hasFactAction;
-
-  if (
-    provider === 'http' &&
-    !validation.rejected.length &&
-    ((looksFactual && !hasFactAction) || blockNeedsRewrite || resolvePending)
-  ) {
-    const hint =
-      (looksFactual && !hasFactAction) || resolvePending
-        ? '本轮出现了可能影响改写的新事实。请重新输出：只包含 FACT_CANDIDATE（requires_confirmation=true，payload 携带 label 与 value），不要同时生成改写建议；确认后系统会继续生成。'
-        : '用户针对已选中的段落表达了修改意见，但你的上一条回复没有输出改写动作。请重新输出：actions 必须包含 RESUME_REWRITE_PROPOSAL（payload.proposal={original: targetText 原文, suggestion: 改后的完整句子}），suggestion 不得新增数字或实体，reply 简短说明改写思路。';
-    try {
-      const repair = await adapter.complete({ ...llmInput, text: content, repairHint: hint });
-      const repairValidation = policy.validateModelResponse(repair.response, { injectEvidence: userMessageId });
-      const neededAction = looksFactual && !hasFactAction ? 'FACT_CANDIDATE' : 'RESUME_REWRITE_PROPOSAL';
-      if (repairValidation.actions.some((a) => a.type === neededAction)) {
-        response = repair.response;
-        validation = repairValidation;
-      }
-    } catch (repairErr) {
-      console.warn('[ai] 完整性补齐调用失败：', repairErr && repairErr.message);
-    }
-  }
-
+  const { response, provider, model, prompt_version, schema_version } = modelResult;
+  const validation = policy.validateModelResponse(response, { injectEvidence: userMessageId });
   if (response.needs_review_reply) {
     response.reply = buildReviewReply({ resume: JSON.parse(draft.resume_json || '{}'), job });
   }
-  return { response, provider, model, prompt_version, validation };
+  return { response, provider, model, prompt_version, schema_version, validation };
 }
 
 /** ④ 保存助手消息，逐动作过策略矩阵并落库（仅回复 / 待确认 / 白名单执行）。 */
-function applyActions({ ctx, user, response, validation, provider, model, prompt_version, content, scopeType, scopeId, scopeRevision, userMessageId, currentText, editingBase, parentProposalId, sourceFacts, task, requestId, ipHash }) {
+function applyActions({ ctx, user, response, validation, provider, model, prompt_version, schema_version, content, scopeType, scopeId, scopeRevision, userMessageId, currentText, editingBase, parentProposalId, sourceFacts, task, requestId, ipHash }) {
   // 供兜底解析使用
   ctx.user_id = user.id;
   const { project, profile, draft, job, conversation } = ctx;
@@ -1377,7 +1248,7 @@ function applyActions({ ctx, user, response, validation, provider, model, prompt
       scopeType,
       scopeId,
       scopeRevision,
-      JSON.stringify({ provider, model, prompt_version, policy_version: POLICY_VERSION, schema_version: adapter.SCHEMA_VERSION, task_id: task.id }),
+      JSON.stringify({ provider, model, prompt_version, policy_version: POLICY_VERSION, schema_version: schema_version || resumeHarness.SCHEMA_VERSION, task_id: task.id }),
       nowIso(),
     ],
   );
@@ -1428,11 +1299,16 @@ function applyActions({ ctx, user, response, validation, provider, model, prompt
     if (decision.outcome === 'await_confirm') {
       let payload = action.payload || {};
       if (type === 'RESUME_REWRITE_PROPOSAL') {
+        const modelProposal = action.payload && action.payload.proposal;
+        if (provider !== 'test' && !String(modelProposal && modelProposal.suggestion || '').trim()) {
+          rejected.push({ action_type: type, reason: 'INVALID_REWRITE_PROPOSAL' });
+          continue;
+        }
         const baseProposal = buildRewriteProposal({ draft, scopeId: scopeType === 'RESUME_BLOCK' ? scopeId : null, intent: content, keywords, overrideText: editingBase });
         baseProposal.original = currentText;
         const proposal = adoptModelSuggestion(
           baseProposal,
-          action.payload && action.payload.proposal,
+          modelProposal,
           [...(sourceFacts || []), currentText],
         );
         Object.assign(proposal, {
@@ -1457,23 +1333,6 @@ function applyActions({ ctx, user, response, validation, provider, model, prompt
           continue;
         }
         payload = { ...payload, task_id: task.id, proposal };
-        // 兜底：建议里出现「（待确认）」但本轮没有对应待确认项时，确定性创建之
-        const sugg = (((payload.proposal || {}).suggestion) || '');
-        const hasFactThisRound = validation.actions.some((a) => a.type === 'FACT_CANDIDATE');
-        if (/待确认/.test(sugg) && !hasFactThisRound) {
-          const factId = ensurePendingFactFromProposal({
-            ctx, suggestion: sugg, content, assistantMessageId, userMessageId, scopeType, scopeId, task,
-          });
-          if (factId) {
-            const state = taskState(task);
-            saveTask(task.id, {
-              status: 'waiting_fact',
-              state: { fact_ids: [...new Set([...(state.fact_ids || []), factId])] },
-            });
-            rejected.push({ action_type: type, reason: 'FACT_CONFIRMATION_REQUIRED' });
-            continue;
-          }
-        }
       }
       if (type === 'JOB_CANDIDATE') {
         const jobId = uuidv7();
@@ -1511,12 +1370,10 @@ function applyActions({ ctx, user, response, validation, provider, model, prompt
         ],
       );
       if (type === 'FACT_CANDIDATE') {
-        const factMeta = adapter.inferFactMeta(content);
         const rawText = (action.payload && (action.payload.raw_text || action.payload.value)) || content;
-        const rawValue = String((action.payload && action.payload.value) || '').trim();
-        const value = rawValue || adapter.extractFact(String(rawText)) || String(rawText).slice(0, 30);
-        const label = String((action.payload && action.payload.label) || '').trim() || factMeta.label;
-        const fieldPath = String(action.field_path || '').trim() || factMeta.field_path;
+        const value = String((action.payload && (action.payload.value || action.payload.proposed_value)) || rawText).trim();
+        const label = String((action.payload && action.payload.label) || '待确认内容').trim();
+        const fieldPath = String(action.field_path || 'fact').trim();
         const factId = uuidv7();
         const factPayload = { ...(action.payload || {}), task_id: task.id, label, value, fact_id: factId };
         let factTargetId = scopeType === 'DATA_PROFILE' ? scopeId : null;
@@ -1666,12 +1523,15 @@ const routes = [
       const confirmed = tryHandleConfirmation({ conversation, params, body, user, requestId, ipHash, task });
       if (confirmed) return confirmed;
 
+      const attachmentIds = Array.isArray(body.attachment_ids) ? body.attachment_ids : [];
+      const attachments = loadVisionAttachments(attachmentIds, user);
+
       // 用户消息入库（冻结范围）
       const userMessageId = uuidv7();
       db.run(
         `INSERT INTO ai_messages (id, conversation_id, owner_id, role, content, scope_type, scope_id, scope_revision, model_metadata_json, created_at)
          VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?, ?)`,
-        [userMessageId, conversation.id, user.id, content, scopeType, scopeId, scopeRevision, JSON.stringify({ task_id: task.id }), nowIso()],
+        [userMessageId, conversation.id, user.id, content, scopeType, scopeId, scopeRevision, JSON.stringify({ task_id: task.id, attachment_ids: attachmentIds }), nowIso()],
       );
       db.run('UPDATE ai_conversations SET active_scope_type = ?, active_scope_id = ?, updated_at = ? WHERE id = ?', [
         scopeType,
@@ -1680,7 +1540,7 @@ const routes = [
         conversation.id,
       ]);
 
-      // ② 拼装模型上下文：会话记忆（10 轮）+ 当前段落 + 岗位 + 基础字段
+      // ② 拼装模型上下文：完整工作区 + 当前会话记忆 + 锁定焦点 + 图片附件
       const { llmInput, currentText, editingBase, parentProposalId, sourceFacts } = assembleInput({
         conversation,
         userMessageId,
@@ -1695,15 +1555,13 @@ const routes = [
         user,
         task,
         parentProposalId: body.parent_proposal_id || null,
+        attachments,
       });
 
-      // ③ 单次 LLM 调用（失败即失败）；必需动作缺失时补齐一次
-      const { response, provider, model, prompt_version, validation } = await runModel({
+      // ③ 单次模型调用（失败即失败）
+      const { response, provider, model, prompt_version, schema_version, validation } = await runModel({
         llmInput,
         userMessageId,
-        content,
-        targetText: editingBase,
-        scopeType,
         draft: ctx.draft,
         job: ctx.job,
       });
@@ -1727,6 +1585,7 @@ const routes = [
         provider,
         model,
         prompt_version,
+        schema_version,
         content,
         scopeType,
         scopeId,

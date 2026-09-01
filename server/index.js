@@ -166,7 +166,7 @@ function bootstrap({ port = 8787 } = {}) {
     const project = db.get('SELECT * FROM resume_projects ORDER BY created_at ASC LIMIT 1');
     console.log(`简历星球服务已启动： http://localhost:${port}`);
     if (envLoaded.loaded) console.log(`已加载配置文件： ${envLoaded.file}（${envLoaded.count} 项）`);
-    console.log(`AI 引擎： ${process.env.RESUME_LLM_PROVIDER === 'http' ? `远程模型 ${process.env.RESUME_LLM_MODEL || ''}` : '本地规则引擎'}`);
+    console.log(`AI 引擎： Resume Harness / ${process.env.RESUME_LLM_PROVIDER || '未配置'} / ${process.env.RESUME_LLM_MODEL || '未配置模型'}`);
     console.log(`工作区接口：       http://localhost:${port}/api/v1/projects/${project ? project.id : ':id'}`);
     if (seeded && seeded.seeded) console.log('已初始化演示数据（陈知行 · 高级产品经理岗位）');
   });

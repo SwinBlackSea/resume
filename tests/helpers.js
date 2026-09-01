@@ -10,9 +10,13 @@ process.env.RESUME_DB_PATH = path.join(
   `resume-test-${process.pid}-${Date.now().toString(36)}.db`,
 );
 process.env.RESUME_DOWNLOAD_SECRET = 'test-secret';
+process.env.NODE_ENV = 'test';
 // AI 行为契约测试验证的是「动作 → 策略矩阵 → 执行/待确认」链路，
-// 与真实模型的分类波动无关；因此固定使用本地规则引擎作为确定性基线。
-process.env.RESUME_LLM_PROVIDER = 'local-rule-engine';
+// 与真实模型的分类波动无关；因此通过 Harness 注入测试模型。
+process.env.RESUME_LLM_PROVIDER = 'test';
+
+const resumeHarness = require('../server/lib/resume-harness');
+resumeHarness.setModelClientForTests(require('./fakes/resume-model-client'));
 
 const db = require('../server/lib/db');
 const { ensureSystemTemplates } = require('../server/lib/templates');

@@ -8,7 +8,7 @@ const assert = require('node:assert');
 
 const helpers = require('./helpers');
 const db = require('../server/lib/db');
-const adapter = require('../server/lib/ai-adapter');
+const resumeHarness = require('../server/lib/resume-harness');
 
 let ctx;
 let projectId;
@@ -540,12 +540,13 @@ test('P0-30 确认事实后的新版成为基底；下一条新事实单独确�
 /* ------------------------------------------------------------------ P0-31 */
 test('P0-31 模型建议擅自加入未确认数字：不得生成可应用方案', async () => {
   const before = await workspace();
-  const originalComplete = adapter.complete;
-  adapter.complete = async (input) => ({
-    provider: 'http',
+  const restoreModel = resumeHarness.setModelClientForTests({
+    provider: 'test-unsafe',
     model: 'test-model',
-    prompt_version: adapter.PROMPT_VERSION,
-    response: {
+    generate: async ({ input }) => ({
+      provider: 'test-unsafe',
+      model: 'test-model',
+      output: {
       reply: '已按要求强化成果。',
       scope: input.scope,
       actions: [{
@@ -562,7 +563,8 @@ test('P0-31 模型建议擅自加入未确认数字：不得生成可应用方�
       }],
       evidence: [],
       uncertainty: [],
-    },
+      },
+    }),
   });
   try {
     const response = await send('写得更有冲击力', { type: 'RESUME_BLOCK', id: 'scale-bullet' });
@@ -572,7 +574,7 @@ test('P0-31 模型建议擅自加入未确认数字：不得生成可应用方�
     assert.match(response.body.reply_text, /尚未确认的数据/);
     assert.strictEqual((await workspace()).draft.revision, before.draft.revision);
   } finally {
-    adapter.complete = originalComplete;
+    restoreModel();
   }
 });
 
