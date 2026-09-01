@@ -187,7 +187,7 @@ const routes = [
                 analysis: JSON.parse(job.analysis_json || '{}'),
                 revision: job.revision,
                 status: job.status,
-                sources_count: db.get('SELECT COUNT(*) AS total FROM job_sources WHERE job_id = ?', [job.id])
+                files_count: db.get('SELECT COUNT(*) AS total FROM job_files WHERE job_id = ?', [job.id])
                   .total,
               }
             : null;

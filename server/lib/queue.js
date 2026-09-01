@@ -5,7 +5,7 @@
  * - 业务事务提交时把事件写入 outbox_events；独立 publisher 投递到队列，
  *   保证「数据库提交成功但队列暂时不可用」时任务不丢失（TECH §8.1、§18.2）。
  * - Worker 按 DAG 执行生成任务：
- *   analyze_job → compose_resume → validate_facts → render_html →
+ *   analyze_job → compose_resume → validate_content → render_html →
  *   （render_pdf ∥ render_docx）→ validate_artifacts → finalize
  * - 每一步有独立超时与错误码；PDF 与 DOCX 中一个成功时整体为 partial（TECH §8.3）。
  */
@@ -14,8 +14,8 @@ const events = require('./events');
 const { uuidv7, nowIso, sha256, problem } = require('./util');
 const { composeResume, splitBullets } = require('./compose');
 const { analyzeJobText, matchJobWithProfile } = require('./job-analyzer');
-const { validateResumeJson, validateFacts } = require('./resume-schema');
-const { recognizeJobSources } = require('./ocr');
+const { validateResumeJson, validateContentSafety } = require('./resume-schema');
+const { recognizeJobFiles } = require('./ocr');
 const { putObject } = require('./storage');
 const { renderPdf } = require('./render/pdf');
 const { renderDocx } = require('./render/docx');
@@ -24,7 +24,7 @@ const { renderHtml } = require('./render/html');
 const STEPS = [
   { key: 'analyze_job', label: '正在校验资料与岗位', progress: 15 },
   { key: 'compose_resume', label: '正在重组简历内容', progress: 35 },
-  { key: 'validate_facts', label: '正在检查内容是否真实', progress: 50 },
+  { key: 'validate_facts', label: '正在检查内容是否可靠', progress: 50 },
   { key: 'render_html', label: '正在排版简历', progress: 62 },
   { key: 'render_artifacts', label: '正在渲染 PDF 与 DOCX', progress: 80 },
   { key: 'validate_artifacts', label: '正在校验导出文件', progress: 92 },
@@ -158,12 +158,11 @@ async function runGeneration(snapshotId) {
         safe: schemaCheck.errors.join('；'),
       });
     }
-    const factCheck = validateFacts(resume, facts);
-    const blocking = factCheck.violations.filter((v) => v.code === 'MISSING_SOURCE');
-    if (blocking.length) {
-      throw Object.assign(new Error('存在缺少事实来源的内容'), {
+    const contentCheck = validateContentSafety(resume, facts);
+    if (!contentCheck.ok) {
+      throw Object.assign(new Error('存在用户没有提供的数据'), {
         code: 'FACT_VALIDATION_FAILED',
-        safe: '部分内容缺少已确认的事实来源，已停止生成',
+        safe: '部分内容包含你没有提供的数据，已停止生成',
       });
     }
 
@@ -207,8 +206,8 @@ async function runGeneration(snapshotId) {
     const maxPages = (templatePayload.schema && templatePayload.schema.page && templatePayload.schema.page.max_pages) || 2;
     const validation = {
       schema_valid: schemaCheck.valid,
-      fact_violations: factCheck.violations,
-      pending_claims: resume.pending_claims || [],
+      content_issues: contentCheck.violations,
+      validation_issues: resume.validation_issues || [],
       pdf_pages: pdfResult.status === 'fulfilled' ? pdfResult.value.pages : null,
       page_limit: maxPages,
       page_overflow: pdfResult.status === 'fulfilled' ? pdfResult.value.pages > maxPages : false,
@@ -237,7 +236,7 @@ async function runGeneration(snapshotId) {
         JSON.stringify(resume),
         JSON.stringify({
           generation_notes: resume.generation_notes,
-          pending_claims: resume.pending_claims,
+          validation_issues: resume.validation_issues,
           match,
         }),
         JSON.stringify(validation),
@@ -270,7 +269,7 @@ async function runGeneration(snapshotId) {
           JSON.stringify(resume),
           JSON.stringify({
             changes: (resume.generation_notes || []).map((note) => note.text),
-            pending_claims: resume.pending_claims || [],
+            validation_issues: resume.validation_issues || [],
             match,
           }),
           JSON.stringify({}),
@@ -358,25 +357,25 @@ async function runGeneration(snapshotId) {
 
 // ---------------------------------------------------------------- 岗位与模板任务
 
-/** OCR 任务：写入 job_sources 的 OCR 文本与置信度。 */
+/** OCR 任务：写入岗位文件的 OCR 文本与置信度。 */
 async function runJobOcr(jobId) {
   const job = db.get('SELECT * FROM target_jobs WHERE id = ?', [jobId]);
   if (!job) return;
-  const sources = db.all(
+  const files = db.all(
     `SELECT js.*, u.object_key, u.original_name, u.mime_type, u.id AS upload_id, u.size
-     FROM job_sources js LEFT JOIN uploads u ON u.id = js.upload_id
+     FROM job_files js LEFT JOIN uploads u ON u.id = js.upload_id
      WHERE js.job_id = ? ORDER BY js.sort_order ASC`,
     [jobId],
   ).map((row) => ({ id: row.id, upload: row }));
 
   try {
-    const result = await recognizeJobSources(sources);
+    const result = await recognizeJobFiles(files);
     db.tx(() => {
-      result.sources.forEach((item) => {
-        db.run('UPDATE job_sources SET ocr_raw_text = ?, ocr_confidence = ? WHERE id = ?', [
+      result.files.forEach((item) => {
+        db.run('UPDATE job_files SET ocr_raw_text = ?, ocr_confidence = ? WHERE id = ?', [
           item.text,
           item.confidence,
-          item.source_id,
+          item.file_id,
         ]);
       });
       db.run('UPDATE target_jobs SET ocr_text = ?, revision = revision + 1, updated_at = ? WHERE id = ?', [

@@ -1,6 +1,8 @@
 'use strict';
 /**
- * 原型一致性测试：验证前端渲染结果与 index.prototype.backup.html 100% 一致。
+ * 原型结构一致性测试。
+ * v1.3 已按最新 PRD 移除“来源/待确认事实/资料到正文使用关系”，
+ * 因此只比对仍然有效的布局、正文和稳定交互，不再要求旧业务文案逐字相同。
  * 做法：分别解析「原型静态 DOM」与「前端加载真实数据后渲染的 DOM」，
  * 对关键区域生成结构签名（标签 + id + class + 文本）并逐项比对。
  */
@@ -88,9 +90,9 @@ test('顶栏与品牌区文案一致', () => {
 
 test('左侧资料卡片文案与状态一致', () => {
   assert.deepStrictEqual(
-    texts(app, '#profile-card strong, #profile-card p, #profile-card .info-status'),
-    texts(proto, '#profile-card strong, #profile-card p, #profile-card .info-status'),
-    '个人信息卡片必须一致',
+    texts(app, '#profile-card strong, #profile-card p'),
+    texts(proto, '#profile-card strong, #profile-card p'),
+    '个人信息摘要必须一致',
   );
   assert.deepStrictEqual(
     texts(app, '#job-card strong, #job-card p, #job-card .info-status'),
@@ -127,19 +129,16 @@ test('AI 建议标记与可编辑段落一致', () => {
   );
 });
 
-test('个人信息浮层：待确认资料一致', () => {
-  assert.deepStrictEqual(
-    texts(app, '#profile-pending-list .pending-item'),
-    texts(proto, '#profile-pending-list .pending-item'),
-    '待确认资料条目必须与原型一致',
-  );
+test('个人信息浮层不再展示来源或待确认事实关系', () => {
+  assert.strictEqual(app.querySelector('#profile-pending-panel'), null);
+  assert.doesNotMatch(app.querySelector('#profile-modal').textContent, /识别自|当前简历使用/);
 });
 
 test('个人信息浮层：分类与经历条目一致', () => {
   assert.deepStrictEqual(
-    texts(app, '#profile-modal .record-title'),
-    texts(proto, '#profile-modal .record-title'),
-    '资料分类与统计必须与原型一致',
+    texts(app, '#profile-modal .record-title b'),
+    texts(proto, '#profile-modal .record-title b'),
+    '资料分类必须一致',
   );
   assert.deepStrictEqual(
     texts(app, '#profile-modal .experience-head b'),
@@ -224,8 +223,21 @@ test('AI 助手面板：初始气泡与快捷指令一致', () => {
   );
 });
 
-test('样式表与原型完全一致', () => {
-  const protoCss = PROTOTYPE_HTML.match(/<style>([\s\S]*?)<\/style>/)[1];
+test('样式保留原型布局且不含旧内容关系选择器', () => {
   const appCss = APP_HTML.match(/<style>([\s\S]*?)<\/style>/)[1];
-  assert.strictEqual(appCss, protoCss, '视觉样式必须逐字符一致');
+  for (const selector of [
+    '.pending-panel',
+    '.pending-item',
+    '.pending-copy',
+    '.pending-actions',
+    '.panel-count',
+    '.usage-pill',
+    '.fact-meta',
+    '.fact-warning',
+  ]) {
+    assert.ok(!appCss.includes(selector), `不得保留旧内容关系样式 ${selector}`);
+  }
+  for (const selector of ['.app{', '.context{', '.canvas{', '.assistant-panel{', '.resume{']) {
+    assert.ok(appCss.includes(selector), `必须保留原型核心布局样式 ${selector}`);
+  }
 });

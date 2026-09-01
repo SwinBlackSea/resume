@@ -89,13 +89,13 @@ const routes = [
   },
   {
     method: 'POST',
-    pattern: '/jobs/:id/sources',
+    pattern: '/jobs/:id/files',
     handler: ({ params, body, user, requestId, ipHash }) =>
       db.tx(() => {
         const job = loadJob(params, user);
         const uploadIds = Array.isArray(body.upload_ids) ? body.upload_ids : [];
         if (!uploadIds.length) throw problem.badRequest('缺少上传文件');
-        const currentCount = db.get('SELECT COUNT(*) AS total FROM job_sources WHERE job_id = ?', [
+        const currentCount = db.get('SELECT COUNT(*) AS total FROM job_files WHERE job_id = ?', [
           job.id,
         ]).total;
         uploadIds.forEach((uploadId, index) => {
@@ -105,7 +105,7 @@ const routes = [
           ]);
           if (!upload) throw problem.notFound('上传文件不存在');
           db.run(
-            `INSERT INTO job_sources (id, job_id, owner_id, upload_id, sort_order, ocr_raw_text, ocr_confidence, created_at)
+            `INSERT INTO job_files (id, job_id, owner_id, upload_id, sort_order, ocr_raw_text, ocr_confidence, created_at)
              VALUES (?, ?, ?, ?, ?, '', NULL, ?)`,
             [uuidv7(), job.id, user.id, upload.id, currentCount + index, nowIso()],
           );
@@ -117,7 +117,7 @@ const routes = [
         });
         audit.log({
           ownerId: user.id,
-          action: 'job_sources_added',
+          action: 'job_files_added',
           resourceType: 'target_job',
           resourceId: job.id,
           requestId,
@@ -216,8 +216,8 @@ const routes = [
     pattern: '/jobs/:id/events',
     handler: ({ params, user }) => {
       const job = loadJob(params, user);
-      const sources = db.all(
-        'SELECT * FROM job_sources WHERE job_id = ? ORDER BY sort_order ASC',
+      const files = db.all(
+        'SELECT * FROM job_files WHERE job_id = ? ORDER BY sort_order ASC',
         [job.id],
       );
       const pending = db.get(
@@ -232,13 +232,13 @@ const routes = [
         revision: job.revision,
         ocr: {
           pending: pending > 0,
-          low_confidence: sources.some((source) => (source.ocr_confidence || 0) < 0.6),
+          low_confidence: files.some((file) => (file.ocr_confidence || 0) < 0.6),
           needs_manual: !job.confirmed_text,
-          sources: sources.map((source) => ({
-            id: source.id,
-            sort_order: source.sort_order,
-            ocr_confidence: source.ocr_confidence,
-            has_text: Boolean(source.ocr_raw_text),
+          files: files.map((file) => ({
+            id: file.id,
+            sort_order: file.sort_order,
+            ocr_confidence: file.ocr_confidence,
+            has_text: Boolean(file.ocr_raw_text),
           })),
         },
         analysis_ready: Object.keys(analysis).length > 0,

@@ -39,7 +39,7 @@ async function applyOneChange(label) {
   });
   const action = res.body.actions.find((a) => a.action_type === 'RESUME_REWRITE_PROPOSAL');
   assert.ok(action, '应生成改写方案');
-  const applied = await helpers.call(ctx, 'POST', `/ai/actions/${action.id}/confirm`, {
+  const applied = await helpers.call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
     idemKey: `apply-${action.id}`,
     body: {},
   });

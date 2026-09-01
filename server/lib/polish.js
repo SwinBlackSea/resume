@@ -219,13 +219,13 @@ function suggestPolish({ text, intent = '更专业', keywords = [] }) {
     }
   }
 
-  // 事实守卫：建议中不得出现原文没有的数字或实体
+  // 内容安全检查：建议中不得出现用户没有提供的数字
   const originalTokens = keyTokens(text);
   const suggestionTokens = keyTokens(output.text);
   const added = Array.from(suggestionTokens).filter((token) => !originalTokens.has(token));
-  const pending = added.map((token) => ({
+  const validationIssues = added.map((token) => ({
     token,
-    reason: `建议中出现的「${token}」无法在原文中找到来源，需确认后才能使用`,
+    reason: `建议中出现了原文没有的数据「${token}」，请核对后再应用`,
   }));
 
   return {
@@ -233,8 +233,8 @@ function suggestPolish({ text, intent = '更专业', keywords = [] }) {
     suggestion: output.text,
     diff: diffWords(text, output.text),
     note: output.note,
-    pending_claims: pending,
-    requires_confirmation: true,
+    validation_issues: validationIssues,
+    requires_user_action: true,
   };
 }
 

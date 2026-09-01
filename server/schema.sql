@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS template_definitions (
   name             TEXT NOT NULL,
   kind             TEXT NOT NULL,               -- system | custom
   status           TEXT NOT NULL DEFAULT 'ready',
-  source_upload_id TEXT REFERENCES uploads(id),
+  template_upload_id TEXT REFERENCES uploads(id),
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL
 );
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS target_jobs (
   updated_at     TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS job_sources (
+CREATE TABLE IF NOT EXISTS job_files (
   id             TEXT PRIMARY KEY,
   job_id         TEXT NOT NULL REFERENCES target_jobs(id),
   owner_id       TEXT NOT NULL REFERENCES users(id),
@@ -175,33 +175,14 @@ CREATE TABLE IF NOT EXISTS ai_action_requests (
   target_type          TEXT,
   target_id            TEXT,
   payload_json         TEXT NOT NULL DEFAULT '{}',
-  evidence_json        TEXT NOT NULL DEFAULT '[]',
-  confidence           REAL,
-  requires_confirmation INTEGER NOT NULL DEFAULT 1,
-  status               TEXT NOT NULL DEFAULT 'proposed', -- proposed|awaiting_confirmation|applied|rejected|failed|reverted
+  requires_user_action INTEGER NOT NULL DEFAULT 1,
+  status               TEXT NOT NULL DEFAULT 'proposed', -- proposed|awaiting_confirmation|superseded|stale|applied|rejected|failed|reverted
   expected_revision    INTEGER,
   policy_version       TEXT NOT NULL DEFAULT 'policy-v1',
   applied_at           TEXT,
+  rejected_at          TEXT,
   reverted_at          TEXT,
   created_at           TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS fact_candidates (
-  id                 TEXT PRIMARY KEY,
-  project_id         TEXT NOT NULL REFERENCES resume_projects(id),
-  owner_id           TEXT NOT NULL REFERENCES users(id),
-  target_type        TEXT NOT NULL,
-  target_id          TEXT,
-  field_path         TEXT NOT NULL DEFAULT '',
-  proposed_value_json TEXT NOT NULL DEFAULT '{}',
-  source_type        TEXT NOT NULL DEFAULT '',   -- message | upload | voice | inference
-  source_id          TEXT,
-  status             TEXT NOT NULL DEFAULT 'pending', -- pending|confirmed|rejected
-  confirmed_by       TEXT,
-  confirmed_at       TEXT,
-  rejected_at        TEXT,
-  created_at         TEXT NOT NULL,
-  updated_at         TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS change_receipts (
@@ -403,11 +384,10 @@ CREATE INDEX IF NOT EXISTS ix_projects_owner ON resume_projects(owner_id);
 CREATE INDEX IF NOT EXISTS ix_profiles_project ON profiles(project_id);
 CREATE INDEX IF NOT EXISTS ix_experiences_profile ON experiences(profile_id, deleted_at);
 CREATE INDEX IF NOT EXISTS ix_jobs_project ON target_jobs(project_id);
-CREATE INDEX IF NOT EXISTS ix_job_sources_job ON job_sources(job_id);
+CREATE INDEX IF NOT EXISTS ix_job_files_job ON job_files(job_id);
 CREATE INDEX IF NOT EXISTS ai_messages_conv ON ai_messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_ai_tasks_scope ON ai_tasks(conversation_id, scope_type, scope_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS ix_actions_owner_status ON ai_action_requests(owner_id, status);
-CREATE INDEX IF NOT EXISTS ix_facts_project_status ON fact_candidates(project_id, status);
 CREATE INDEX IF NOT EXISTS ix_change_events_project ON resume_change_events(project_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_versions_project ON resume_versions(project_id, version_no);
 CREATE INDEX IF NOT EXISTS ix_snapshots_project ON generation_snapshots(project_id, generation_no);

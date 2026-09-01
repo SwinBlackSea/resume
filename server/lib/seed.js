@@ -141,9 +141,9 @@ function seedIfEmpty() {
 
     // 3 张岗位截图：OCR 文本按段分配，模拟跨图拼接
     const jobParagraphs = fixtures.JOB_TEXT.split('\n\n');
-    fixtures.JOB_SOURCE_FILES.forEach((file, index) => {
+    fixtures.JOB_INPUT_FILES.forEach((file, index) => {
       const uploadId = uuidv7();
-      const key = objectKey(userId, 'job-source', file.name);
+      const key = objectKey(userId, 'job-file', file.name);
       putObject(key, Buffer.from(`占位内容：${file.name}`, 'utf8'));
       db.run(
         `INSERT INTO uploads (id, owner_id, object_key, original_name, mime_type, size, sha256, status, created_at, updated_at)
@@ -162,16 +162,16 @@ function seedIfEmpty() {
       );
       const chunk = jobParagraphs.slice(index, index + 2).join('\n\n');
       db.run(
-        `INSERT INTO job_sources (id, job_id, owner_id, upload_id, sort_order, ocr_raw_text, ocr_confidence, created_at)
+        `INSERT INTO job_files (id, job_id, owner_id, upload_id, sort_order, ocr_raw_text, ocr_confidence, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [uuidv7(), jobId, userId, uploadId, index, chunk, 0.91, nowIso()],
       );
     });
 
-    // 旧简历（用于「识别自：旧简历.pdf」的来源）
+    // 演示用旧简历上传文件
     fixtures.PROFILE_UPLOAD_FILES.forEach((file) => {
       const uploadId = uuidv7();
-      const key = objectKey(userId, 'profile-source', file.name);
+      const key = objectKey(userId, 'profile-file', file.name);
       putObject(key, Buffer.from(`占位内容：${file.name}`, 'utf8'));
       db.run(
         `INSERT INTO uploads (id, owner_id, object_key, original_name, mime_type, size, sha256, status, created_at, updated_at)
@@ -190,48 +190,8 @@ function seedIfEmpty() {
       );
     });
 
-    // ---- 待确认资料与已拒绝候选 ----
-    const factIds = {};
-    [...fixtures.PENDING_FACTS, fixtures.REJECTED_FACT].forEach((fact) => {
-      const id = uuidv7();
-      factIds[fact.key] = id;
-      const rejected = fact.status === 'rejected';
-      db.run(
-        `INSERT INTO fact_candidates (id, project_id, owner_id, target_type, target_id, field_path, proposed_value_json, source_type, source_id, status, confirmed_at, rejected_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-        [
-          id,
-          projectId,
-          userId,
-          fact.target_type,
-          fact.target_type === 'project_experience' ? experienceIds['project-leads'] : null,
-          fact.field_path,
-          JSON.stringify({
-            label: fact.label,
-            value: fact.proposed_value,
-            source_label: fact.source_label,
-          }),
-          fact.source_type,
-          null,
-          rejected ? 'rejected' : 'pending',
-          rejected ? nowIso() : null,
-          nowIso(),
-          nowIso(),
-        ],
-      );
-    });
-
     // ---- 当前简历草稿 ----
-    // source_key 指向资料库中的经历，用于统计「当前简历使用 N 项」
     const draftResume = deepClone(fixtures.RESUME_DRAFT);
-    ['experience', 'projects'].forEach((section) => {
-      (draftResume[section] || []).forEach((item) => {
-        if (item.source_key) {
-          item.source_exp = experienceIds[item.source_key] || null;
-          delete item.source_key;
-        }
-      });
-    });
     const draftId = uuidv7();
     db.run(
       `INSERT INTO resume_drafts (id, project_id, owner_id, resume_json, base_version_id, revision, has_unsnapshotted_changes, created_at, updated_at)
@@ -255,7 +215,7 @@ function seedIfEmpty() {
           })()
         : atTime(fixture.day_offset, fixture.time);
       const template = deepClone(templates[fixture.template_key]);
-      // 版本保存完整简历（含内容 id 与来源引用），仅覆盖版本详情展示的主要经历文本
+      // 版本保存完整简历内容，仅覆盖版本详情展示的主要经历文本
       const resumePayload = deepClone(draftResume);
       resumePayload.summary = fixture.advantage;
       const mainWork = ((resumePayload.experience || [])[0] || {}).bullets || [];
@@ -341,7 +301,7 @@ function seedIfEmpty() {
       [uuidv7(), conversationId, userId, fixtures.WELCOME_MESSAGE, nowIso()],
     );
 
-    return { seeded: true, projectId, userId, versionIds, experienceIds, factIds, jobId, conversationId };
+    return { seeded: true, projectId, userId, versionIds, experienceIds, jobId, conversationId };
   });
 }
 

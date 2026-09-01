@@ -30,9 +30,9 @@ function toExperienceView(row) {
 function toJobView(job) {
   if (!job) return null;
   const analysis = JSON.parse(job.analysis_json || '{}');
-  const sources = db.all(
+  const files = db.all(
     `SELECT js.id, js.sort_order, js.ocr_confidence, u.original_name AS file_name
-     FROM job_sources js LEFT JOIN uploads u ON u.id = js.upload_id
+     FROM job_files js LEFT JOIN uploads u ON u.id = js.upload_id
      WHERE js.job_id = ? ORDER BY js.sort_order ASC`,
     [job.id],
   );
@@ -44,7 +44,7 @@ function toJobView(job) {
     revision: job.revision,
     confirmed_text: job.confirmed_text,
     ocr_text: job.ocr_text,
-    sources,
+    files,
     analysis: {
       title: analysis.title || job.title,
       company: analysis.company || job.company,
@@ -142,33 +142,17 @@ function toActionView(row) {
   );
   const taskId = payload.task_id || null;
   const task = taskId ? db.get('SELECT active_proposal_id, status FROM ai_tasks WHERE id = ?', [taskId]) : null;
-  // 待确认事实动作：附带其关联事实的当前状态，前端据此刻画是否仍显示待确认卡片
-  let factStatus = null;
-  if (row.action_type === 'FACT_CANDIDATE' && row.payload_json) {
-    try {
-      const fp = JSON.parse(row.payload_json || '{}');
-      if (fp.fact_id) {
-        const f = db.get('SELECT status FROM fact_candidates WHERE id = ?', [fp.fact_id]);
-        factStatus = f ? f.status : null;
-      }
-    } catch (_) {
-      factStatus = null;
-    }
-  }
   return {
     id: row.id,
     task_id: taskId,
     is_active_proposal: Boolean(task && task.active_proposal_id === row.id),
     task_status: task ? task.status : null,
     action_type: row.action_type,
-    fact_status: factStatus,
     target_type: row.target_type,
     target_id: row.target_id,
     status: row.status,
-    requires_confirmation: Boolean(row.requires_confirmation),
+    requires_user_action: Boolean(row.requires_user_action),
     payload,
-    evidence: JSON.parse(row.evidence_json || '[]'),
-    confidence: row.confidence,
     expected_revision: row.expected_revision,
     policy_version: row.policy_version,
     created_at: row.created_at,
@@ -180,31 +164,6 @@ function toActionView(row) {
           reverted_at: receipt.reverted_at,
         }
       : null,
-  };
-}
-
-function toFactView(row) {
-  const value = JSON.parse(row.proposed_value_json || '{}');
-  let sourceLabel = value.source_label || '';
-  if (!sourceLabel) {
-    if (row.source_type === 'message') sourceLabel = '本次 AI 对话';
-    else if (row.source_type === 'voice') sourceLabel = '语音转写';
-    else if (row.source_type === 'upload') {
-      const upload = db.get('SELECT original_name FROM uploads WHERE id = ?', [row.source_id]);
-      sourceLabel = upload ? upload.original_name : '上传资料';
-    } else sourceLabel = 'AI 推断';
-  }
-  return {
-    id: row.id,
-    target_type: row.target_type,
-    target_id: row.target_id,
-    field_path: row.field_path,
-    label: value.label || row.field_path,
-    value: value.value || '',
-    source_type: row.source_type,
-    source_label: sourceLabel,
-    status: row.status,
-    created_at: row.created_at,
   };
 }
 
@@ -304,17 +263,10 @@ function buildWorkspace(projectId, user) {
         }))
     : [];
 
-  const pendingFacts = db
-    .all(
-      "SELECT * FROM fact_candidates WHERE project_id = ? AND owner_id = ? AND status = 'pending' ORDER BY created_at ASC",
-      [projectId, user.id],
-    )
-    .map(toFactView);
-
   const pendingActionsCount = conversation
     ? db.get(
         `SELECT COUNT(*) AS total FROM ai_action_requests
-         WHERE conversation_id = ? AND owner_id = ? AND status IN ('awaiting_confirmation','proposed') AND requires_confirmation = 1`,
+         WHERE conversation_id = ? AND owner_id = ? AND status IN ('awaiting_confirmation','proposed') AND requires_user_action = 1`,
         [conversation.id, user.id],
       ).total
     : 0;
@@ -355,7 +307,6 @@ function buildWorkspace(projectId, user) {
     },
     versions,
     conversation: conversation ? { id: conversation.id, messages, tasks } : null,
-    pending_facts: pendingFacts,
     pending_actions_count: pendingActionsCount,
     readiness,
   };
@@ -448,5 +399,4 @@ module.exports = {
   toVersionView,
   toMessageView,
   toActionView,
-  toFactView,
 };

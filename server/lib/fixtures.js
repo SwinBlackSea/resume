@@ -6,7 +6,7 @@
  *  - 已确认城市「上海」；已确认成果「客户激活率提升 26%，付费转化率提升 18%」；
  *  - 不包含项目覆盖规模与团队人数（这两项以「待确认」形式存在）；
  *  - 当前岗位为「高级产品经理 · 企业服务」；
- *  - 工作经历 A / B / C 与对应 revision；一条已拒绝候选；3 个历史版本；2 项待确认资料。
+ *  - 工作经历 A / B / C 与对应 revision；3 个历史版本。
  *
  * 说明：原型正文与资料库存在两处原样保留的差异（简历正文写「华东理工大学」，
  * 资料库为「上海大学」；正文联系行格式化为「138 0000 6688」，资料库脱敏为「138 **** 8899」），
@@ -200,7 +200,6 @@ const RESUME_DRAFT = {
   experience: [
     {
       id: 'exp-yunshan',
-      source_key: 'work-yunshan',
       organization: '云杉科技（上海）有限公司',
       title: '高级产品经理',
       start: '2022.06',
@@ -225,7 +224,6 @@ const RESUME_DRAFT = {
     },
     {
       id: 'exp-xinghai',
-      source_key: 'work-qinghe',
       organization: '星海互联科技有限公司',
       title: '产品经理',
       start: '2020.07',
@@ -242,7 +240,6 @@ const RESUME_DRAFT = {
   projects: [
     {
       id: 'proj-leads',
-      source_key: 'project-leads',
       name: '企业线索智能分配项目',
       role: '产品负责人',
       start: '2023.03',
@@ -269,44 +266,9 @@ const RESUME_DRAFT = {
     },
   ],
   skills: SKILLS,
-  evidence_map: [],
-  pending_claims: [],
   generation_notes: [],
+  validation_issues: [],
   layout_hints: { layout: 'classic', max_pages: 2 },
-};
-
-/** 待确认资料（左侧持续显示具体数量）。 */
-const PENDING_FACTS = [
-  {
-    key: 'fact-scale',
-    target_type: 'project_experience',
-    field_path: 'scale',
-    label: '项目覆盖规模',
-    proposed_value: '120 家付费客户',
-    source_type: 'message',
-    source_label: '本次 AI 对话',
-  },
-  {
-    key: 'fact-competence',
-    target_type: 'profile_summary',
-    field_path: 'core_competence',
-    label: '核心能力',
-    proposed_value: '企业服务商业化',
-    source_type: 'upload',
-    source_label: '旧简历.pdf',
-  },
-];
-
-/** 一条已拒绝的候选事实（测试夹具要求）。 */
-const REJECTED_FACT = {
-  key: 'fact-team-size',
-  status: 'rejected',
-  target_type: 'work_experience',
-  field_path: 'team_size',
-  label: '团队人数',
-  proposed_value: '管理 20 人团队',
-  source_type: 'voice',
-  source_label: '语音转写',
 };
 
 /** 历史版本（v1 为生成版本，v2 / v3 为主动保存）。 */
@@ -380,7 +342,7 @@ const VERSION_FIXTURES = [
 ];
 
 /** 岗位截图（3 张）与旧简历文件。 */
-const JOB_SOURCE_FILES = [
+const JOB_INPUT_FILES = [
   { name: '岗位截图-1.png', mime: 'image/png', size: 486_231 },
   { name: '岗位截图-2.png', mime: 'image/png', size: 512_004 },
   { name: '岗位截图-3.png', mime: 'image/png', size: 397_882 },
@@ -399,10 +361,8 @@ module.exports = {
   SKILLS,
   CERTIFICATES,
   RESUME_DRAFT,
-  PENDING_FACTS,
-  REJECTED_FACT,
   VERSION_FIXTURES,
-  JOB_SOURCE_FILES,
+  JOB_INPUT_FILES,
   PROFILE_UPLOAD_FILES,
   WELCOME_MESSAGE,
 };

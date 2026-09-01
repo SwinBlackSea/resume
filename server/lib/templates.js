@@ -168,7 +168,7 @@ function buildCustomTemplate({ user, originalName, size }) {
     constraints: { max_bullets_per_item: 6, keep_with_next: true },
     assets: isImage
       ? { background: { type: 'image', name: originalName, safe_area: 'preset' } }
-      : { source: { type: extension, name: originalName } },
+      : { file: { type: extension, name: originalName } },
     layout: 'custom',
     custom: true,
   };
@@ -181,7 +181,7 @@ function createCustomTemplate({ user, originalName, size, uploadId }) {
   return db.tx(() => {
     const definitionId = uuidv7();
     db.run(
-      `INSERT INTO template_definitions (id, owner_id, name, kind, status, source_upload_id, created_at, updated_at)
+      `INSERT INTO template_definitions (id, owner_id, name, kind, status, template_upload_id, created_at, updated_at)
        VALUES (?, ?, ?, 'custom', 'ready', ?, ?, ?)`,
       [definitionId, user.id, originalName || '自定义模板', uploadId || null, nowIso(), nowIso()],
     );

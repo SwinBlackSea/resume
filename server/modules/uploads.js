@@ -113,8 +113,8 @@ const routes = [
       ]);
       if (!upload) throw problem.notFound('上传不存在');
       const referenced =
-        db.get('SELECT * FROM job_sources WHERE upload_id = ?', [upload.id]) ||
-        db.get('SELECT * FROM template_definitions WHERE source_upload_id = ?', [upload.id]);
+        db.get('SELECT * FROM job_files WHERE upload_id = ?', [upload.id]) ||
+        db.get('SELECT * FROM template_definitions WHERE template_upload_id = ?', [upload.id]);
       if (referenced) throw problem.conflict('UPLOAD_REFERENCED', '文件已被引用，不能删除');
       db.run('DELETE FROM uploads WHERE id = ?', [upload.id]);
       return { id: upload.id, deleted: true };

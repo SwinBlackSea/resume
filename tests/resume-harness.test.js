@@ -18,7 +18,6 @@ function input(overrides = {}) {
     scope: { type: 'RESUME_BLOCK', id: 'bullet-1', revision: 7 },
     task: { id: 'task-1', goal: '优化工作经历' },
     profile: { revision: 3, basics: { name: '陈知行', city: '上海' } },
-    confirmedFacts: [{ id: 'exp-1', description: '负责增长实验，激活率提升 26%' }],
     resume: {
       revision: 7,
       content: {
@@ -33,7 +32,6 @@ function input(overrides = {}) {
       location: { section: 'experience', item_id: 'work-1', bullet_id: 'bullet-1' },
       neighboring_content: [{ id: 'bullet-2', text: '负责商业化策略' }],
     },
-    pendingFacts: [{ id: 'fact-1', value: '120 家客户' }],
     conversationMessages: [
       { role: 'user', content: '先写得更专业' },
       { role: 'assistant', content: '这是上一版建议' },
@@ -47,6 +45,8 @@ test('Harness 每轮携带完整工作区、会话和锁定焦点', () => {
   const built = input();
   assert.strictEqual(built.workspace.resume.content.experience[0].bullets[0].text, '完整正文尾部标记');
   assert.strictEqual(built.workspace.target_job.confirmed_text, '高级产品经理岗位完整描述');
+  assert.strictEqual(Object.hasOwn(built.workspace, 'confirmed_facts'), false);
+  assert.strictEqual(Object.hasOwn(built, 'pending_facts'), false);
   assert.strictEqual(built.focus.editing_base, '主导增长实验，推动激活率提升 26%');
   assert.deepStrictEqual(built.conversation.recent_messages.map((item) => item.content), [
     '先写得更专业',
@@ -96,6 +96,35 @@ test('Harness 不接受模型改写 scope', async () => {
       id: 'bullet-1',
       revision: 7,
     });
+  } finally {
+    restore();
+  }
+});
+
+test('Harness 拒绝模型返回来源、证据或依赖关系字段', async () => {
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'forbidden-relations',
+    generate: async () => ({
+      output: {
+        reply: '建议如下。',
+        scope: { type: 'RESUME_BLOCK', id: 'bullet-1' },
+        actions: [{
+          type: 'RESUME_REWRITE_PROPOSAL',
+          payload: {
+            proposal: {
+              original: 'A',
+              suggestion: 'B',
+              source_item_ids: ['exp-1'],
+            },
+          },
+        }],
+        uncertainty: [],
+      },
+    }),
+  });
+  try {
+    await assert.rejects(() => complete(input()), /不允许的内容关系字段/);
   } finally {
     restore();
   }

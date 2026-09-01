@@ -89,7 +89,6 @@ test('AI 沟通区可确认后开始新对话，并说明保留与失效内容',
   document.querySelector('#new-chat-button').click();
   assert.strictEqual(document.querySelector('#new-chat-modal').classList.contains('show'), true);
   assert.match(document.querySelector('#new-chat-summary').textContent, /个人信息、岗位、简历和历史版本不会改变/);
-  assert.match(document.querySelector('#new-chat-summary').textContent, /待确认资料会保留在左侧/);
   assert.match(document.querySelector('#new-chat-summary').textContent, /未应用建议将不再可用/);
 
   document.querySelector('#confirm-new-chat').click();
@@ -99,7 +98,7 @@ test('AI 沟通区可确认后开始新对话，并说明保留与失效内容',
   assert.strictEqual(document.querySelectorAll('#chat-messages .bubble').length, 1);
   assert.match(document.querySelector('#chat-messages').textContent, /你可以直接询问整份简历/);
   assert.strictEqual(document.querySelector('#selection-label').textContent, '@整份简历');
-  assert.ok(dom.window.WS.pending_facts.length > 0);
+  assert.strictEqual(Object.hasOwn(dom.window.WS, 'pending_facts'), false);
   dom.window.close();
 });
 

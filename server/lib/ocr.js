@@ -70,18 +70,18 @@ async function recognizeOne({ upload, buffer }) {
 
 /**
  * 多图 OCR：按文件名自然排序，拼接并去重（TECH §10.1 步骤 3—5）。
- * @returns {{text:string, confidence:number, sources:Array, lowConfidence:boolean}}
+ * @returns {{text:string, confidence:number, files:Array, lowConfidence:boolean}}
  */
-async function recognizeJobSources(sources) {
-  const ordered = [...sources].sort((a, b) =>
+async function recognizeJobFiles(files) {
+  const ordered = [...files].sort((a, b) =>
     String(a.original_name).localeCompare(String(b.original_name), 'zh-CN', { numeric: true }),
   );
   const results = [];
   let totalConfidence = 0;
   let recognized = 0;
 
-  for (const source of ordered) {
-    const upload = source.upload;
+  for (const file of ordered) {
+    const upload = file.upload;
     let buffer = null;
     try {
       buffer = getObject(upload.object_key);
@@ -95,7 +95,7 @@ async function recognizeJobSources(sources) {
     totalConfidence += outcome.confidence;
     if (outcome.text) recognized += 1;
     results.push({
-      source_id: source.id,
+      file_id: file.id,
       upload_id: upload.id,
       file_name: upload.original_name,
       text: outcome.text,
@@ -124,9 +124,9 @@ async function recognizeJobSources(sources) {
   return {
     text: merged.join('\n'),
     confidence,
-    sources: results,
+    files: results,
     lowConfidence: confidence < 0.6 || recognized < ordered.length,
   };
 }
 
-module.exports = { recognizeJobSources, recognizeOne };
+module.exports = { recognizeJobFiles, recognizeOne };
