@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS ai_action_requests (
   requires_user_action INTEGER NOT NULL DEFAULT 1,
   status               TEXT NOT NULL DEFAULT 'proposed', -- proposed|awaiting_confirmation|superseded|stale|applied|rejected|failed|reverted
   expected_revision    INTEGER,
-  policy_version       TEXT NOT NULL DEFAULT 'policy-v1',
+  policy_version       TEXT NOT NULL DEFAULT 'policy-v2',
   applied_at           TEXT,
   rejected_at          TEXT,
   reverted_at          TEXT,
@@ -278,7 +278,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   progress           INTEGER NOT NULL DEFAULT 0,
   model_provider     TEXT NOT NULL DEFAULT 'local-rule-engine',
   model_name         TEXT NOT NULL DEFAULT 'resume-rule-v1',
-  prompt_version     TEXT NOT NULL DEFAULT 'prompt-contract-v2',
+  prompt_version     TEXT NOT NULL DEFAULT 'resume-harness-v4-dom',
   attempt_count      INTEGER NOT NULL DEFAULT 0,
   started_at         TEXT,
   finished_at        TEXT,

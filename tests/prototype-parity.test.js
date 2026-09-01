@@ -66,6 +66,7 @@ function loadApp(base) {
   return new Promise((resolve, reject) => {
     const dom = new JSDOM(APP_HTML, {
       runScripts: 'dangerously',
+      resources: 'usable',
       url: base + '/',
       pretendToBeVisual: true,
       beforeParse(window) {

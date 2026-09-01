@@ -8,6 +8,7 @@
 const db = require('../lib/db');
 const { uuidv7, nowIso, problem } = require('../lib/util');
 const audit = require('../lib/audit');
+const ResumeDom = require('../../resume-dom');
 
 /** 定位并更新某条 bullet 的文本。 */
 function applyBulletText(resume, bulletId, text) {
@@ -52,6 +53,9 @@ function applyChangePatch(resume, event, direction) {
     case 'full_document':
       if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
       break;
+    case 'dom_operations':
+      if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
+      break;
     default:
       break;
   }
@@ -75,7 +79,7 @@ const routes = [
       const draft = loadDraft(params.id, user);
       return {
         id: draft.id,
-        resume_json: JSON.parse(draft.resume_json || '{}'),
+        resume_json: ResumeDom.attachDocument(JSON.parse(draft.resume_json || '{}')),
         revision: draft.revision,
         base_version_id: draft.base_version_id,
         has_unsnapshotted_changes: Boolean(draft.has_unsnapshotted_changes),
@@ -94,7 +98,9 @@ const routes = [
             current: draft.revision,
           });
         }
-        const resume = body.resume_json ? body.resume_json : JSON.parse(draft.resume_json || '{}');
+        const resume = ResumeDom.attachDocument(
+          body.resume_json ? body.resume_json : JSON.parse(draft.resume_json || '{}'),
+        );
         const revision = draft.revision + 1;
         db.run(
           `UPDATE resume_drafts SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ? WHERE id = ?`,

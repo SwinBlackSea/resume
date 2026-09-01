@@ -18,6 +18,7 @@ const { withIdempotency } = require('../lib/idempotency');
 const queue = require('../lib/queue');
 const { SCOPE_LABEL } = require('../lib/policy');
 const { toActionView, toMessageView } = require('./workspace');
+const ResumeDom = require('../../resume-dom');
 
 const POLICY_VERSION = policy.POLICY_VERSION;
 
@@ -126,23 +127,35 @@ function startNewConversation({ projectId, user, requestId, ipHash }) {
   });
 }
 
-function findBulletInDraft(resume, bulletId) {
-  for (const section of ['experience', 'projects']) {
-    for (const item of resume[section] || []) {
-      const bullet = (item.bullets || []).find((entry) => entry.id === bulletId);
-      if (bullet) return { section, item, bullet };
-    }
-  }
-  return null;
+function findResumeNodeInDraft(resume, nodeId) {
+  const document = ResumeDom.ensureDocument(resume);
+  const found = ResumeDom.findNode(document, nodeId);
+  if (!found) return null;
+  const siblings = found.parent ? found.parent.children || [] : [];
+  return {
+    ...found,
+    document,
+    text: ResumeDom.nodeText(found.node),
+    neighboringNodes: siblings
+      .filter((node) => node.id !== found.node.id)
+      .map((node) => ({ id: node.id, text: ResumeDom.nodeText(node) }))
+      .filter((node) => node.text),
+  };
 }
 
 function validateLockedScope(ctx, scopeType, scopeId) {
   if (!policy.SCOPE_TYPES.has(scopeType)) throw problem.badRequest('未知的作用范围类型');
   if (scopeType === 'RESUME_BLOCK') {
     if (!scopeId) throw problem.badRequest('请选择具体的简历内容');
-    const found = findBulletInDraft(parseJson(ctx.draft && ctx.draft.resume_json, {}), scopeId);
+    const found = findResumeNodeInDraft(
+      parseJson(ctx.draft && ctx.draft.resume_json, {}),
+      scopeId,
+    );
     if (!found) throw problem.badRequest('所选简历内容不存在，请重新选择');
-    return { scopeId, currentText: String(found.bullet.text || ''), found };
+    if (found.node.type !== 'text' && !found.node.editable) {
+      throw problem.badRequest('所选简历节点不可直接修改');
+    }
+    return { scopeId, currentText: found.text, found };
   }
   if (scopeType === 'DATA_PROFILE' && scopeId) {
     const owned = db.get(
@@ -238,11 +251,64 @@ function unsupportedTokens(text, userProvidedTexts) {
   return Array.from(keyTokens(text)).filter((token) => !known.has(token));
 }
 
+function summarizeOperations(operations) {
+  const labels = {
+    replace_text: '修改内容',
+    insert_node: '新增模块或内容',
+    remove_node: '删除内容',
+    move_node: '调整内容位置',
+    set_attributes: '调整节点属性',
+    set_style: '调整节点样式',
+  };
+  return operations.map((operation) => labels[operation.op] || '调整简历结构').join('、');
+}
+
 function normalizeRewriteProposal({ action, currentText, editingBase, scopeType, scopeId, draft, task, userTexts }) {
   const raw = (action.payload && action.payload.proposal) || action.payload || {};
-  const suggestion = String(raw.suggestion || '').trim();
-  if (!suggestion) throw problem.unprocessable('INVALID_MODEL_ACTION', '模型没有返回可应用的修改内容');
-  const added = unsupportedTokens(suggestion, userTexts);
+  const currentResume = ResumeDom.attachDocument(parseJson(draft.resume_json, {}));
+  let operations = Array.isArray(raw.operations) ? deepClone(raw.operations) : [];
+  let replacementResume = null;
+  let suggestion = String(raw.suggestion || '').trim();
+
+  if (scopeType === 'RESUME_BLOCK') {
+    if (!suggestion) throw problem.unprocessable('INVALID_MODEL_ACTION', '模型没有返回可应用的修改内容');
+    operations = [{ op: 'replace_text', node_id: scopeId, text: suggestion }];
+    try {
+      ResumeDom.applyOperations(currentResume.dom_document, operations, {
+        lockedNodeId: scopeId,
+        allowStructure: false,
+      });
+    } catch (error) {
+      throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
+    }
+  } else if (operations.length) {
+    try {
+      ResumeDom.applyOperations(currentResume.dom_document, operations, { allowStructure: true });
+    } catch (error) {
+      throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
+    }
+    if (!suggestion) suggestion = summarizeOperations(operations);
+  } else if (raw.resume_dom && typeof raw.resume_dom === 'object') {
+    try {
+      replacementResume = ResumeDom.syncLegacyBindings(
+        currentResume,
+        ResumeDom.normalizeDocument(raw.resume_dom),
+      );
+    } catch (error) {
+      throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
+    }
+    if (!suggestion) suggestion = '更新整份简历的内容与结构';
+  } else if (raw.resume_json && typeof raw.resume_json === 'object') {
+    replacementResume = ResumeDom.attachDocument(raw.resume_json);
+    if (!suggestion) suggestion = '更新整份简历的内容与结构';
+  } else {
+    throw problem.unprocessable('INVALID_MODEL_ACTION', '模型没有返回 DOM 操作或结构化简历');
+  }
+
+  const added = unsupportedTokens(
+    [suggestion, JSON.stringify(operations), JSON.stringify(replacementResume || {})].join('\n'),
+    userTexts,
+  );
   if (added.length) {
     throw problem.unprocessable(
       'UNSUPPORTED_ASSERTION',
@@ -258,6 +324,8 @@ function normalizeRewriteProposal({ action, currentText, editingBase, scopeType,
     current_text: currentText,
     editing_base: editingBase || currentText,
     suggestion,
+    operations,
+    resume_json: replacementResume,
     diff: Array.isArray(raw.diff) ? raw.diff : diffWords(currentText, suggestion),
     note: String(raw.note || ''),
     base_target_hash: textHash(currentText),
@@ -292,7 +360,7 @@ function assembleInput({
   parentProposalId,
   attachments,
 }) {
-  const resume = parseJson(ctx.draft && ctx.draft.resume_json, {});
+  const resume = ResumeDom.attachDocument(parseJson(ctx.draft && ctx.draft.resume_json, {}));
   const experiences = db.all(
     'SELECT * FROM experiences WHERE profile_id = ? AND owner_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC',
     [ctx.profile.id, ctx.profile.owner_id],
@@ -363,15 +431,13 @@ function assembleInput({
       editing_base: editingBase,
       location: locked.found
         ? {
-            section: locked.found.section,
-            item_id: locked.found.item.id || null,
-            bullet_id: locked.found.bullet.id,
+            node_id: locked.found.node.id,
+            node_tag: locked.found.node.tag || locked.found.node.type,
+            ancestor_ids: locked.found.ancestors.map((node) => node.id),
           }
         : null,
       neighboring_content: locked.found
-        ? (locked.found.item.bullets || [])
-            .filter((item) => item.id !== locked.found.bullet.id)
-            .map((item) => ({ id: item.id, text: item.text }))
+        ? locked.found.neighboringNodes
         : [],
     },
     conversationMessages: history,
@@ -571,31 +637,38 @@ function applyRewriteProposal({ user, project, draft, action, requestId, ipHash 
   return db.tx(() => {
     const stored = parseJson(action.payload_json, {});
     const payload = stored.proposal || stored;
-    const resume = parseJson(draft.resume_json, {});
-    let before;
-    let after;
-    let changeType;
+    const resume = ResumeDom.attachDocument(parseJson(draft.resume_json, {}));
+    const before = { resume_json: deepClone(resume) };
+    let nextResume;
     if (payload.scope_type === 'RESUME_BLOCK') {
-      const found = findBulletInDraft(resume, payload.scope_id);
-      if (!found) throw problem.conflict('TARGET_MISSING', '原段落已不存在，请重新生成建议');
-      if (textHash(found.bullet.text) !== payload.base_target_hash) {
+      const found = findResumeNodeInDraft(resume, payload.scope_id);
+      if (!found) throw problem.conflict('TARGET_MISSING', '原内容已不存在，请重新生成建议');
+      if (textHash(found.text) !== payload.base_target_hash) {
         throw problem.conflict('REVISION_CONFLICT', '这段内容已经变化，请重新生成建议');
       }
-      before = { text: found.bullet.text };
-      found.bullet.text = payload.suggestion;
-      after = { text: found.bullet.text };
-      changeType = 'bullet_text';
+      const document = ResumeDom.applyOperations(
+        resume.dom_document,
+        payload.operations && payload.operations.length
+          ? payload.operations
+          : [{ op: 'replace_text', node_id: payload.scope_id, text: payload.suggestion }],
+        { lockedNodeId: payload.scope_id, allowStructure: false },
+      );
+      nextResume = ResumeDom.syncLegacyBindings(resume, document);
     } else {
-      const replacement = payload.resume_json;
-      if (!replacement || typeof replacement !== 'object') {
-        throw problem.unprocessable('INVALID_PROPOSAL', '整份简历建议缺少结构化正文');
+      if (payload.operations && payload.operations.length) {
+        const document = ResumeDom.applyOperations(resume.dom_document, payload.operations, {
+          allowStructure: true,
+        });
+        nextResume = ResumeDom.syncLegacyBindings(resume, document);
+      } else if (payload.resume_json && typeof payload.resume_json === 'object') {
+        nextResume = ResumeDom.attachDocument(payload.resume_json);
+      } else {
+        throw problem.unprocessable('INVALID_PROPOSAL', '整份简历建议缺少 DOM 操作');
       }
-      before = { resume_json: deepClone(resume) };
-      after = { resume_json: deepClone(replacement) };
-      changeType = 'full_document';
     }
+    const after = { resume_json: deepClone(nextResume) };
+    const changeType = 'dom_operations';
     const revision = draft.revision + 1;
-    const nextResume = changeType === 'full_document' ? after.resume_json : resume;
     db.run(
       `UPDATE resume_drafts
        SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ?
@@ -988,7 +1061,7 @@ routes.push({
 
 module.exports = {
   routes,
-  findBulletInDraft,
+  findResumeNodeInDraft,
   normalizeRewriteProposal,
   startNewConversation,
 };

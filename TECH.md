@@ -386,7 +386,7 @@ Worker 按以下 DAG 执行：
 
 阶段二：简历生成
 
-输入冻结的可选 Profile、当前 Resume、用户本次生成要求、可选 JobAnalysis 和模板约束；输出严格匹配 Resume Schema 的 JSON。Profile 只是可选参考，当前正文和用户在本次沟通中明确提供的信息同样可以进入结果。
+输入冻结的可选 Profile、当前 Resume、用户本次生成要求、可选 JobAnalysis 和模板约束；输出严格匹配 Resume Schema 的 JSON。正文以 `dom_document` 动态树为渲染基准，Profile 只是可选参考，当前正文和用户在本次沟通中明确提供的信息同样可以进入结果。
 
 模型不直接生成 HTML、PDF 或 DOCX，避免结构漂移和提示注入影响渲染。
 
@@ -403,20 +403,23 @@ Worker 按以下 DAG 执行：
 
 ### 9.3 结构化输出
 
-Resume Schema 主要字段：
+Resume Schema 的规范正文：
 
-- basics
-- headline
-- summary
-- experience[]
-- projects[]
-- education[]
-- skills[]
+- dom_document.version
+- dom_document.root
+- DOM node：id、type、tag、attributes、style、text、children、editable、label
+
+`dom_document` 使用安全标签和属性白名单，节点 ID 在当前文档内唯一且稳定。正文结构不预设固定模块，可包含姓名、联系方式、工作经历、海外经历或模板定义的其他任意模块。
+
+以下字段作为旧数据、资料生成器和现有模板的兼容投影保留，不再决定正文可以出现哪些模块：
+
+- basics、headline、summary
+- experience[]、projects[]、education[]、skills[]
 - generation_notes[]
 - validation_issues[]
 - layout_hints
 
-使用 JSON Schema 严格模式。解析或校验失败时任务立即终止并返回安全错误，不用第二次语义调用改判结果。
+新草稿可以只提供合法 `dom_document`；旧草稿没有该字段时由通用组件确定性转换。绑定到兼容字段的旧节点修改后同步回写相应字段，自定义节点只存在于动态正文树中。解析或校验失败时任务立即终止并返回安全错误，不用第二次语义调用改判结果。
 
 ### 9.4 提示词与模型版本
 
@@ -485,6 +488,14 @@ AI Gateway 与业务写服务之间设置确定性的写入策略层：
 
 RESUME_REWRITE_PROPOSAL 被用户应用后，只更新 resume_draft 并追加 resume_change_event，不创建历史版本。用户主动保存时创建 manual 版本；生成任务成功时创建 generated 版本。
 
+正文操作使用受控 Resume DOM 协议：
+
+- RESUME_BLOCK 只允许对锁定节点执行 `replace_text`；
+- RESUME_DOCUMENT 可执行 `replace_text`、`insert_node`、`remove_node`、`move_node`、`set_attributes`、`set_style`；
+- 插入节点必须通过标签、属性、样式、深度、节点数和唯一 ID 校验；
+- 禁止脚本标签、事件属性、危险 URL 和可执行 CSS；
+- 应用前在副本上完整校验，成功后以整份 before/after 文档记录一次可撤销变更。
+
 ### 9.7 状态与独立性
 
 - ai_action_request 状态：proposed / applied / rejected / failed / reverted / stale / superseded；
@@ -517,12 +528,15 @@ RESUME_REWRITE_PROPOSAL 被用户应用后，只更新 resume_draft 并追加 re
 
 统一内部 Template Schema：
 
+- document：动态正文引擎、根节点和安全能力；
 - page：尺寸、页边距、最大页数；
 - regions：区域、栏数、流向；
 - typography：字体、字号、行高、颜色；
-- section_rules：可见模块、顺序、标题；
+- section_rules：系统初始草稿的默认顺序、默认标题和标题样式，不限制用户后续新增模块；
 - constraints：每区最大行数、分页规则；
 - assets：背景图、图标、装饰元素。
+
+模板负责布局和表现，Resume DOM 负责实际内容结构。渲染器遍历真实节点树，不根据 `experience/projects/education/skills` 等固定字段判断模块是否存在。
 
 图片模板：作为背景层，使用预定义安全区或用户标注文本区。
 
@@ -536,7 +550,7 @@ DOC/DOCX：在隔离容器中转为 PDF 预览，同时解析段落、表格、�
 
 ### 11.1 PDF
 
-- Resume JSON + Template Schema → HTML/CSS；
+- Resume DOM + Template Schema → HTML/CSS；
 - 使用固定版本 Chromium 打印 PDF；
 - 字体打包并显式声明中文字体回退；
 - 禁止渲染器访问公网；
@@ -545,7 +559,7 @@ DOC/DOCX：在隔离容器中转为 PDF 预览，同时解析段落、表格、�
 
 ### 11.2 DOCX
 
-- 使用结构化内容映射 OOXML 模板；
+- 使用 Resume DOM 的标题、段落、经历行、列表等语义块映射 OOXML 模板；
 - 不通过 PDF 反转 DOCX；
 - 固定标题、段落、列表、页边距和字体样式；
 - 清理作者、路径、修订记录等隐私元数据；
@@ -553,7 +567,7 @@ DOC/DOCX：在隔离容器中转为 PDF 预览，同时解析段落、表格、�
 
 ### 11.3 验证
 
-- Resume JSON 通过 schema；
+- Resume DOM 通过安全结构校验；
 - 具体数字、组织、职位、项目和技能均通过本次输入一致性校验；
 - PDF 页数符合模板约束；
 - 文本抽取结果与 Resume JSON 做语义和关键数字比对；

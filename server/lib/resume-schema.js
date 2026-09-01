@@ -3,7 +3,9 @@
  * Resume Schema 校验、内容安全校验与完整度计算。
  * 不保存内容来源、证据映射或资料到正文的派生关系。
  */
-const RESUME_SCHEMA_VERSION = 'resume-schema-v2';
+const ResumeDom = require('../../resume-dom');
+
+const RESUME_SCHEMA_VERSION = 'resume-schema-v3';
 
 const RESUME_FIELDS = [
   'basics',
@@ -21,11 +23,19 @@ const RESUME_FIELDS = [
 function validateResumeJson(resume) {
   const errors = [];
   if (!resume || typeof resume !== 'object') return { valid: false, errors: ['简历不是对象'] };
-  for (const field of RESUME_FIELDS) {
-    if (!(field in resume)) errors.push(`缺少字段 ${field}`);
+  const hasDynamicDocument = Boolean(resume.dom_document && resume.dom_document.root);
+  if (!hasDynamicDocument) {
+    for (const field of RESUME_FIELDS) {
+      if (!(field in resume)) errors.push(`缺少字段 ${field}`);
+    }
   }
   for (const field of ['experience', 'projects', 'education', 'skills', 'generation_notes', 'validation_issues']) {
     if (resume[field] !== undefined && !Array.isArray(resume[field])) errors.push(`${field} 必须是数组`);
+  }
+  try {
+    ResumeDom.ensureDocument(resume);
+  } catch (error) {
+    errors.push(`DOM 文档无效：${error.message}`);
   }
   return { valid: errors.length === 0, errors };
 }
@@ -51,28 +61,23 @@ function collectUserTokens(texts) {
 function validateContentSafety(resumeJson, userProvidedTexts = []) {
   const known = collectUserTokens(userProvidedTexts);
   const violations = [];
-  const check = (items, section) => {
-    (items || []).forEach((item, index) => {
-      (item.bullets || []).forEach((bullet, bulletIndex) => {
-        const text = typeof bullet === 'string' ? bullet : bullet.text;
-        keyTokens(text).forEach((token) => {
-          if (!known.has(token)) {
-            violations.push({
-              section,
-              index,
-              bulletIndex,
-              token,
-              text,
-              code: 'UNSUPPORTED_ASSERTION',
-              message: `出现用户没有提供的数据：${token}`,
-            });
-          }
-        });
+  let text = '';
+  try {
+    text = ResumeDom.plainText(ResumeDom.ensureDocument(resumeJson));
+  } catch (_) {
+    text = JSON.stringify(resumeJson || {});
+  }
+  keyTokens(text).forEach((token) => {
+    if (!known.has(token)) {
+      violations.push({
+        section: 'document',
+        token,
+        text,
+        code: 'UNSUPPORTED_ASSERTION',
+        message: `出现用户没有提供的数据：${token}`,
       });
-    });
-  };
-  check(resumeJson.experience, 'experience');
-  check(resumeJson.projects, 'projects');
+    }
+  });
   return { violations, ok: violations.length === 0 };
 }
 

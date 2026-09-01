@@ -71,6 +71,56 @@ function buildOutput(input) {
     if (suggestion && suggestion !== base) actions.push(proposal(input, suggestion, note));
   }
 
+  if (input.scope.type === 'RESUME_DOCUMENT' && /新增|添加|增加/.test(text) && /海外经历/.test(text)) {
+    const contentMatch = text.match(/内容[：:]\s*([\s\S]+)/);
+    const content = contentMatch ? contentMatch[1].trim() : '请在这里填写海外经历';
+    actions.push({
+      type: 'RESUME_REWRITE_PROPOSAL',
+      target_type: input.scope.type,
+      target_id: null,
+      requires_user_action: true,
+      payload: {
+        proposal: {
+          original: '',
+          suggestion: '新增“海外经历”模块',
+          note: '模块和内容均作为动态简历节点写入。',
+          operations: [
+            {
+              op: 'insert_node',
+              parent_id: 'resume-root',
+              after_node_id: 'section-education',
+              node: {
+                id: 'section-overseas',
+                type: 'element',
+                tag: 'section',
+                attributes: { class: 'resume-section' },
+                label: '海外经历',
+                children: [
+                  {
+                    id: 'section-overseas-title',
+                    type: 'element',
+                    tag: 'h2',
+                    text: '海外经历',
+                    editable: true,
+                    label: '模块标题',
+                  },
+                  {
+                    id: 'overseas-content-1',
+                    type: 'element',
+                    tag: 'p',
+                    text: content,
+                    editable: true,
+                    label: '海外经历内容',
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+  }
+
   const profile = detectProfileSave(text);
   if (profile && /保存|资料|更新/.test(text)) {
     actions.push({

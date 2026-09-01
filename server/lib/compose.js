@@ -6,6 +6,7 @@
  * 不建立资料到正文的绑定、来源引用或派生关系。
  */
 const { validateContentSafety } = require('./resume-schema');
+const ResumeDom = require('../../resume-dom');
 
 function splitBullets(description) {
   if (Array.isArray(description)) return description.filter(Boolean);
@@ -34,7 +35,7 @@ function composeResume({ profileBasics, profileSummary, experiences = [], job, t
         .sort((a, b) => b.score - a.score)
         .slice(0, maxBullets)
         .map((bullet, index) => ({
-          id: `b-${String(item.id).slice(0, 8)}-${index}`,
+          id: `b-${String(item.id)}-${index}`,
           text: bullet.text,
           score: bullet.score,
         }));
@@ -42,21 +43,21 @@ function composeResume({ profileBasics, profileSummary, experiences = [], job, t
     });
 
   const experience = buildSection(pick('work'), (item) => ({
-    id: `w-${String(item.id).slice(0, 8)}`,
+    id: `w-${String(item.id)}`,
     organization: item.organization,
     title: item.title,
     start: item.start_date,
     end: item.is_current ? '' : item.end_date,
   }));
   const projects = buildSection(pick('project'), (item) => ({
-    id: `p-${String(item.id).slice(0, 8)}`,
+    id: `p-${String(item.id)}`,
     name: item.organization,
     role: item.title,
     start: item.start_date,
     end: item.is_current ? '' : item.end_date,
   }));
   const education = pick('education').map((item) => ({
-    id: `e-${String(item.id).slice(0, 8)}`,
+    id: `e-${String(item.id)}`,
     school: item.organization,
     major: item.title,
     degree: item.description,
@@ -64,7 +65,7 @@ function composeResume({ profileBasics, profileSummary, experiences = [], job, t
     end: item.is_current ? '' : item.end_date,
   }));
   const skills = pick('skill').map((item) => ({
-    id: `s-${String(item.id).slice(0, 8)}`,
+    id: `s-${String(item.id)}`,
     name: item.title,
   }));
 
@@ -95,7 +96,7 @@ function composeResume({ profileBasics, profileSummary, experiences = [], job, t
     .concat([profileSummary || '', JSON.stringify(profileBasics || {})]);
   resume.validation_issues = validateContentSafety(resume, userProvidedText).violations;
   resume.generation_notes = buildGenerationNotes({ keywords, experience, projects });
-  return resume;
+  return ResumeDom.attachDocument(resume);
 }
 
 function buildGenerationNotes({ keywords, experience, projects }) {

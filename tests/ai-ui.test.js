@@ -40,6 +40,7 @@ test('AI 沟通区展示 A、B、C，并且只有当前建议可操作', async (
   const origin = ctx.base.replace('/api/v1', '');
   const dom = new JSDOM(html, {
     runScripts: 'dangerously',
+    resources: 'usable',
     url: `${origin}/`,
     pretendToBeVisual: true,
     beforeParse(window) {
@@ -72,6 +73,7 @@ test('AI 沟通区可确认后开始新对话，并说明保留与失效内容',
   const origin = ctx.base.replace('/api/v1', '');
   const dom = new JSDOM(html, {
     runScripts: 'dangerously',
+    resources: 'usable',
     url: `${origin}/`,
     pretendToBeVisual: true,
     beforeParse(window) {
@@ -112,6 +114,7 @@ test('段落改写时持续标记正文位置，并在思考期间锁定发送�
   });
   const dom = new JSDOM(html, {
     runScripts: 'dangerously',
+    resources: 'usable',
     url: `${origin}/`,
     pretendToBeVisual: true,
     beforeParse(window) {

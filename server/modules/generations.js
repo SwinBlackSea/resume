@@ -12,7 +12,9 @@ const audit = require('../lib/audit');
 const { withIdempotency } = require('../lib/idempotency');
 const queue = require('../lib/queue');
 const events = require('../lib/events');
-const { computeReadiness } = require('../lib/resume-schema');
+const { computeReadiness, RESUME_SCHEMA_VERSION } = require('../lib/resume-schema');
+const { PROMPT_VERSION } = require('../lib/resume-harness');
+const { POLICY_VERSION } = require('../lib/policy');
 const { sseOpen, sseWrite } = require('../lib/util');
 
 function loadProject(projectId, user) {
@@ -166,9 +168,9 @@ const routes = [
               JSON.stringify(inputs.jobPayload),
               JSON.stringify({
                 client_request_id: body.client_request_id || null,
-                policy_version: 'policy-v1',
-                schema_version: 'resume-schema-v1',
-                prompt_version: 'prompt-contract-v2',
+                policy_version: POLICY_VERSION,
+                schema_version: RESUME_SCHEMA_VERSION,
+                prompt_version: PROMPT_VERSION,
               }),
               inputHash,
               nowIso(),

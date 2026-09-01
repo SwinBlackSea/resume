@@ -168,6 +168,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 <div class="overlay" id="run-modal"><div class="modal" style="width:min(540px,100%)"><div class="agent-run"><div class="ai-orb"></div><h2>AI 正在生成新简历</h2><p id="generation-status">你可以关闭窗口，任务会继续运行</p><div class="run-log" id="run-log"><div class="run-step active"><i>1</i>正在校验资料与岗位</div><div class="run-step"><i>2</i>正在冻结本次输入</div><div class="run-step"><i>3</i>正在重组简历内容</div><div class="run-step"><i>4</i>正在渲染 PDF 与 DOCX</div><div class="run-step"><i>5</i>正在检查内容是否真实</div></div></div></div></div>
 <div class="toast" id="toast">已完成</div>
 
+<script src="resume-dom.js"></script>
 <script>
 /* =========================================================================
    简历星球 · 前端工作台
@@ -249,7 +250,7 @@ function showUndo(el,oldText,message,meta){
   $("#undo-message").textContent=message;$("#undo-bar").classList.add("show");
   clearTimeout(window.undoTimer);window.undoTimer=setTimeout(function(){$("#undo-bar").classList.remove("show")},6000)}
 
-/* ---------------- 渲染：全部数据来自后端，DOM 结构与原型一致 ---------------- */
+/* ---------------- 渲染：通用 Resume DOM 组件嵌入现有画布 ---------------- */
 function periodOf(item){
   var s=item.start||item.start_date||'',e=item.end||item.end_date||'';
   if(!s&&!e)return '';return s+' — '+(e||'至今');}
@@ -282,33 +283,13 @@ function renderContextCards(){
   }
 }
 
+var resumeDomRenderer=null;
 function renderResume(){
-  var r=WS.draft.resume_json||{},doc=$("#resume-document"),b=r.basics||{};
-  var name=String(b.name||'').split('').join(' ');
-  var contact=[r.headline,b.city,b.phone,b.email].filter(Boolean).join('　|　');
-  var html='<div class="resume-top"><h1>'+esc(name)+'</h1><p>'+esc(contact)+'</p></div>';
-  if(r.summary)html+='<section class="resume-section"><h2>个人优势</h2><p class="editable" data-bullet-id="summary">'+esc(r.summary)+'</p></section>';
-  if((r.experience||[]).length){
-    html+='<section class="resume-section"><h2>工作经历</h2>';
-    (r.experience||[]).forEach(function(item){
-      html+='<div class="resume-row">'+esc(item.organization)+' <span class="role">'+esc(item.title||'')+'</span><time>'+esc(periodOf(item))+'</time></div>';
-      html+='<ul>'+bulletsHtml(item.bullets)+'</ul>';});
-    html+='</section>';}
-  if((r.projects||[]).length){
-    html+='<section class="resume-section"><h2>项目经历</h2>';
-    (r.projects||[]).forEach(function(item){
-      html+='<div class="resume-row">'+esc(item.name||item.organization||'')+' <span class="role">'+esc(item.role||item.title||'')+'</span><time>'+esc(periodOf(item))+'</time></div>';
-      html+='<ul>'+bulletsHtml(item.bullets)+'</ul>';});
-    html+='</section>';}
-  if((r.education||[]).length){
-    html+='<section class="resume-section"><h2>教育经历</h2>';
-    (r.education||[]).forEach(function(item){
-      html+='<div class="resume-row">'+esc(item.school||item.organization||'')+' <span class="role">'+esc(item.major||'')+'</span><time>'+esc(periodOf(item))+'</time></div>';});
-    html+='</section>';}
-  if((r.skills||[]).length){
-    html+='<section class="resume-section"><h2>专业技能</h2><p>'+esc((r.skills||[]).map(function(s){return typeof s==='string'?s:s.name}).join('　'))+'</p></section>';}
-  doc.innerHTML=html;
+  var r=WS.draft.resume_json||{},doc=$("#resume-document");
+  var domDocument=ResumeDom.ensureDocument(r);
   doc.className='resume template-'+layoutKey();
+  if(!resumeDomRenderer)resumeDomRenderer=new ResumeDom.Renderer(doc);
+  resumeDomRenderer.render(domDocument);
   bindEditables();bindAiMarkers();
   syncResumeTargetMarkers();
 }
@@ -329,14 +310,6 @@ function bindAiMarkers(){
         beginEdit("更突出付费转化成果");
         addBubble("ai","我会保留原有数字，只调整表达，让付费转化成果更突出。");
         $("#prompt").focus();}};});}
-function bulletsHtml(bullets){
-  return (bullets||[]).map(function(bl){
-    var cls='editable'+(bl.ai_note?' has-ai-note':'');
-    var id=bl.id?' id="'+esc(bl.id)+'"':'';
-    var marker=bl.ai_note?'<button class="ai-marker" data-suggestion="'+esc(bl.ai_note.suggestion)+'">✦ '+esc(bl.ai_note.label)+'</button>':'';
-    return '<li class="'+cls+'"'+id+' data-bullet-id="'+esc(bl.id||'')+'">'+esc(bl.text)+marker+'</li>';}).join('');
-}
-
 /* ---------------- 个人信息浮层 ---------------- */
 function factLine(label,value,field,raw){
   var rawAttr=raw?' data-raw="'+esc(raw)+'"':'';
@@ -424,29 +397,25 @@ function addBubble(type,text,scopeLabel){
   else box.textContent=text;
   $("#chat-messages").appendChild(box);scrollChat();return box;}
 function scrollChat(){var c=$("#chat-messages");c.scrollTop=c.scrollHeight}
-/** 按 id 找到简历中的具体内容，用于把作用范围显示成具体名称。 */
-function findBulletById(id){
-  var r=(WS&&WS.draft&&WS.draft.resume_json)||{},sections=['experience','projects'];
-  for(var i=0;i<sections.length;i++){
-    var list=r[sections[i]]||[];
-    for(var j=0;j<list.length;j++){
-      var bullets=list[j].bullets||[];
-      for(var k=0;k<bullets.length;k++){
-        if(bullets[k].id===id){
-          return {bullet:bullets[k],item:list[j],
-            sectionKey:sections[i],
-            sectionTitle:sections[i]==='experience'?'工作经历':'项目经历'};}}}}
-  return null;}
+function findResumeNodeById(id){
+  var r=(WS&&WS.draft&&WS.draft.resume_json)||{},doc=ResumeDom.ensureDocument(r);
+  var found=ResumeDom.findNode(doc,id);
+  if(!found)return null;
+  var title='';
+  for(var i=found.ancestors.length-1;i>=0;i--){
+    var ancestor=found.ancestors[i];
+    if(ancestor.tag==='section'){
+      var heading=(ancestor.children||[]).find(function(node){return /^h[1-6]$/.test(node.tag||'')});
+      title=heading?ResumeDom.nodeText(heading):'';break;}}
+  return {node:found.node,text:ResumeDom.exportNodeText(found.node),sectionTitle:title||'正文内容'};}
 /** 用户消息的作用范围显示：与选中时的 getScopeName 保持一致（含段落标题，如「工作经历」）。 */
 function scopeLabelOf(m){
   if(m.scope_type==='RESUME_SUMMARY')return '@简历 · 个人优势';
   if(m.scope_type==='RESUME_BLOCK'&&m.scope_id){
-    var hit=findBulletById(m.scope_id);
-    if(hit&&hit.bullet){
-      if(hit.bullet.scope_name)return hit.bullet.scope_name;
-      var t=String(hit.bullet.text||'');
-      var short=t.slice(0,10)+(t.length>10?'…':'');
-      return '@简历 · '+hit.sectionTitle+' · '+short;}}
+    var nodeHit=findResumeNodeById(m.scope_id);
+    if(nodeHit){
+      var nodeShort=nodeHit.text.slice(0,10)+(nodeHit.text.length>10?'…':'');
+      return '@简历 · '+nodeHit.sectionTitle+' · '+nodeShort;}}
   return m.scope_label||SCOPE_LABEL[m.scope_type]||'@整份简历';}
 function renderChat(){
   var box=$("#chat-messages");box.innerHTML='';
@@ -556,7 +525,7 @@ function renderProposal(a){
   if(!active)return;
   card.querySelector('.replace').onclick=function(){applyProposal(a,p,card)};
   card.querySelector('.continue').onclick=function(){
-    var target=p.scope_id&&document.querySelector('[data-bullet-id="'+p.scope_id+'"]');
+    var target=p.scope_id&&findResumeTarget(p.scope_id);
     proposalResumeScopeId=null;
     if(target)setScope(target);
     activeTaskId=a.task_id||p.task_id||null;
@@ -599,11 +568,12 @@ var promptBusy=false,promptRequestSeq=0,activePromptRequest=0;
 var pendingResumeScopeId=null,proposalResumeScopeId=null;
 function findResumeTarget(scopeId){
   if(!scopeId)return null;
-  return $$("#resume-document [data-bullet-id]").find(function(el){return el.dataset.bulletId===String(scopeId)})||null;
+  return $$("#resume-document [data-node-id]").find(function(el){return el.dataset.nodeId===String(scopeId)})||null;
 }
 function markResumeTarget(scopeId,state,label,priority){
   var target=findResumeTarget(scopeId);
   if(!target||Number(target.dataset.aiTargetPriority||0)>priority)return;
+  target.classList.add("editable");
   target.classList.remove("ai-target-thinking","ai-target-ready");
   target.classList.add("ai-target");
   if(state==="thinking")target.classList.add("ai-target-thinking");
@@ -636,27 +606,26 @@ function abandonPromptUi(){
   setPromptPending(false);
 }
 function bindEditables(){
-  $$(".editable").forEach(function(el){
+  $$("#resume-document [data-resume-editable=true]").forEach(function(el){
     el.onclick=function(e){
-      $$(".editable").forEach(function(x){x.classList.remove("selected")});
-      el.classList.add("selected");selectedText=el;
+      $$("#resume-document [data-resume-editable=true]").forEach(function(x){x.classList.remove("selected")});
+      el.classList.add("editable","selected");selectedText=el;
       var activeId=activeContext&&activeContext.scopeType==="RESUME_BLOCK"?activeContext.scopeId:null;
-      if(activeContext&&(activeContext.scopeType!=="RESUME_BLOCK"||activeId!==el.dataset.bulletId)){setScope(el);toast("已切换到 "+getScopeName(el))}
+      if(activeContext&&(activeContext.scopeType!=="RESUME_BLOCK"||activeId!==el.dataset.nodeId)){setScope(el);toast("已切换到 "+getScopeName(el))}
       var r=el.getBoundingClientRect();
       tools.style.left=Math.min(r.left,window.innerWidth-tools.offsetWidth-18)+"px";
       tools.style.top=(r.bottom+7)+"px";tools.classList.add("show");e.stopPropagation();};});}
 function getScopeName(target){
   if(target&&target.scopeName)return target.scopeName;
-  var id=target&&target.dataset?target.dataset.bulletId:'';
-  if(id==='target-bullet')return '@简历 · 付费转化成果';
-  if(id==='scale-bullet')return '@简历 · 项目覆盖规模';
   var section=target.closest(".resume-section"),title=section?$("h2",section).textContent:"正文内容";
-  var raw=(target.childNodes[0]&&target.childNodes[0].nodeValue||'').trim();
+  var nodeId=target&&target.dataset?target.dataset.nodeId:'';
+  var nodeHit=nodeId?findResumeNodeById(nodeId):null;
+  var raw=String(nodeHit?nodeHit.text:target.textContent||'').trim();
   var short=raw.slice(0,10)+(raw.length>10?'…':'');
   return '@简历 · '+title+' · '+short;}
 function setScope(target){
-  var nextId=target&&target.dataset?target.dataset.bulletId:null;
-  var prevId=activeContext&&(activeContext.scopeId||(activeContext.dataset&&activeContext.dataset.bulletId));
+  var nextId=target&&target.dataset?target.dataset.nodeId:null;
+  var prevId=activeContext&&(activeContext.scopeId||(activeContext.dataset&&activeContext.dataset.nodeId));
   if(!activeContext||activeContext.scopeType!=='RESUME_BLOCK'||prevId!==nextId){activeTaskId=null;continuationContext=null;}
   var scopeName=getScopeName(target);
   activeContext={scopeName:scopeName,scopeType:'RESUME_BLOCK',scopeLayer:'document',scopeId:nextId};
@@ -671,7 +640,7 @@ function setNamedScope(name,type,id){
   if(!activeContext||activeContext.scopeType!==scopeType||String(activeContext.scopeId||'')!==String(id||'')){activeTaskId=null;continuationContext=null;}
   selectedText=null;activeContext={scopeName:name,scopeType:scopeType,scopeLayer:'data',scopeId:id||null};
   proposalResumeScopeId=null;
-  $$(".editable").forEach(function(x){x.classList.remove("selected")});
+  $$("#resume-document [data-resume-editable=true]").forEach(function(x){x.classList.remove("selected")});
   $("#selection-tools").classList.remove("show");
   $("#selection-label").textContent=name;
   $("#selection-context").classList.remove("global");
@@ -691,7 +660,7 @@ $("#clear-selection").onclick=function(){
   $("#selection-label").textContent='@整份简历';
   $("#selection-context").classList.add("global");
   $("#selection-context").classList.remove("data-scope");
-  $$(".editable").forEach(function(x){x.classList.remove("selected")});
+  $$("#resume-document [data-resume-editable=true]").forEach(function(x){x.classList.remove("selected")});
   syncResumeTargetMarkers();
   $("#prompt").placeholder="告诉我你想怎么修改整份简历…";$("#prompt").focus();};
 
@@ -716,7 +685,7 @@ function sendPrompt(){
   var input=$("#prompt"),value=input.value.trim(),requestContext=activeContext;
   if(!value||promptBusy)return;
   var scope=requestContext?(requestContext.scopeType||'RESUME_DOCUMENT'):'RESUME_DOCUMENT';
-  var scopeId=requestContext?(requestContext.scopeId||(requestContext.dataset?requestContext.dataset.bulletId:null)):null;
+  var scopeId=requestContext?(requestContext.scopeId||(requestContext.dataset?requestContext.dataset.nodeId:null)):null;
   var scopeName=requestContext?getScopeName(requestContext):'@整份简历';
   var requestTaskId=activeTaskId;
   var requestEpoch=chatEpoch;
@@ -1038,7 +1007,7 @@ $$(".overlay").forEach(function(o){o.onclick=function(e){if(e.target===o)o.class
 document.addEventListener("keydown",function(e){
   if(e.key==="Escape"){$$(".overlay.show").forEach(function(o){o.classList.remove("show")});$("#selection-tools").classList.remove("show");}});
 document.addEventListener("click",function(e){
-  if(!e.target.closest(".selection-tools")&&!e.target.closest(".editable")&&!e.target.closest(".resume"))$("#selection-tools").classList.remove("show");
+  if(!e.target.closest(".selection-tools")&&!e.target.closest("[data-resume-editable=true]")&&!e.target.closest(".resume"))$("#selection-tools").classList.remove("show");
   if(!e.target.closest(".zoom-control"))$("#zoom-menu").classList.remove("show");});
 $(".rewrite-action").onclick=function(){beginEdit("")};
 $$(".selection-tools [data-intent]").forEach(function(b){b.onclick=function(){beginEdit(b.textContent);$("#selection-tools").classList.remove("show")}});

@@ -6,6 +6,7 @@
  * - 清理作者、路径、修订记录等隐私元数据。
  */
 const { createZip } = require('./zip');
+const ResumeDom = require('../../../resume-dom');
 
 const escape = (text) =>
   String(text)
@@ -40,13 +41,14 @@ function paragraph(runs, { spacing = 120, align = 'left', indent = 0 } = {}) {
 }
 
 /** 带底边框的标题（模拟简历模块标题）。 */
-function heading(text, accent = '1D1D1F') {
+function heading(text, accent = '1D1D1F', level = 2) {
+  const size = level <= 2 ? 24 : 22;
   return (
     `<w:p><w:pPr>` +
     `<w:spacing w:before="240" w:after="120"/>` +
     `<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="2" w:color="D1D1D6"/></w:pBdr>` +
     `</w:pPr>` +
-    run(text, { bold: true, size: 24, color: accent }) +
+    run(text, { bold: true, size, color: accent }) +
     `</w:p>`
   );
 }
@@ -63,100 +65,50 @@ function bulletParagraph(text) {
   );
 }
 
-function periodText(item) {
-  const start = item.start || item.start_date || '';
-  const end = item.end || item.end_date || '';
-  if (!start && !end) return '';
-  return `${start} — ${end || '至今'}`;
-}
-
 /** 构建 document.xml 主体。 */
 function buildDocumentXml(resume, template) {
   const schema = template.schema || template;
-  const titles = (schema.section_rules && schema.section_rules.titles) || {};
-  const order = (schema.section_rules && schema.section_rules.order) || [
-    'summary',
-    'experience',
-    'projects',
-    'education',
-    'skills',
-  ];
   const accent = ((schema.typography && schema.typography.accent) || '#1d1d1f').replace('#', '');
-
+  const attached = ResumeDom.attachDocument(resume);
+  const rendered = ResumeDom.toRenderBlocks(attached.dom_document);
   const body = [];
 
   // 页眉
-  body.push(paragraph(run(resume.basics.name || '', { bold: true, size: 44, color: '1D1D1F' }), { spacing: 60 }));
-  const contactParts = [resume.headline, resume.basics.city, resume.basics.phone, resume.basics.email].filter(
-    Boolean,
-  );
-  if (contactParts.length) {
-    body.push(paragraph(run(contactParts.join('　|　'), { size: 18, color: '5F6265' }), { spacing: 180 }));
+  const title = (rendered.header && rendered.header.title)
+    || (attached.basics && attached.basics.name)
+    || '';
+  if (title) {
+    body.push(paragraph(run(title, { bold: true, size: 44, color: '1D1D1F' }), { spacing: 60 }));
+  }
+  if (rendered.header && rendered.header.subtitle) {
+    body.push(paragraph(run(rendered.header.subtitle, { size: 18, color: '5F6265' }), { spacing: 180 }));
   }
 
-  order.forEach((key) => {
-    if (key === 'summary' && resume.summary) {
-      body.push(heading(titles.summary || '个人优势', accent));
-      body.push(paragraph(run(resume.summary, { size: 21 })));
-    }
-    if (key === 'experience' && (resume.experience || []).length) {
-      body.push(heading(titles.experience || '工作经历', accent));
-      resume.experience.forEach((item) => {
-        body.push(
-          paragraph(
-            [
-              run(item.organization || '', { bold: true, size: 22, color: '1D1D1F' }),
-              run(`　${item.title || ''}`, { size: 21, color: '4D5155' }),
-              run(`　${periodText(item)}`, { size: 18, color: '73767A' }),
-            ],
-            { spacing: 80 },
-          ),
-        );
-        (item.bullets || []).forEach((bullet) => {
-          body.push(bulletParagraph(typeof bullet === 'string' ? bullet : bullet.text));
-        });
-      });
-    }
-    if (key === 'projects' && (resume.projects || []).length) {
-      body.push(heading(titles.projects || '项目经历', accent));
-      resume.projects.forEach((item) => {
-        body.push(
-          paragraph(
-            [
-              run(item.name || item.organization || '', { bold: true, size: 22, color: '1D1D1F' }),
-              run(`　${item.role || item.title || ''}`, { size: 21, color: '4D5155' }),
-              run(`　${periodText(item)}`, { size: 18, color: '73767A' }),
-            ],
-            { spacing: 80 },
-          ),
-        );
-        (item.bullets || []).forEach((bullet) => {
-          body.push(bulletParagraph(typeof bullet === 'string' ? bullet : bullet.text));
-        });
-      });
-    }
-    if (key === 'education' && (resume.education || []).length) {
-      body.push(heading(titles.education || '教育经历', accent));
-      resume.education.forEach((item) => {
-        const detail = [item.major, item.degree].filter(Boolean).join(' · ');
-        body.push(
-          paragraph(
-            [
-              run(item.school || item.organization || '', { bold: true, size: 22, color: '1D1D1F' }),
-              run(`　${detail}`, { size: 21, color: '4D5155' }),
-              run(`　${periodText(item)}`, { size: 18, color: '73767A' }),
-            ],
-            { spacing: 80 },
-          ),
-        );
-      });
-    }
-    if (key === 'skills') {
-      const skills = (resume.skills || []).map((skill) => (typeof skill === 'string' ? skill : skill.name));
-      if (skills.length) {
-        body.push(heading(titles.skills || '专业技能', accent));
-        body.push(paragraph(run(skills.join('　'), { size: 21 })));
-      }
+  let numberedIndex = 0;
+  rendered.blocks.forEach((block) => {
+    if (block.type !== 'numbered') numberedIndex = 0;
+    if (block.type === 'heading') {
+      body.push(heading(block.text, accent, block.level));
+    } else if (block.type === 'row') {
+      body.push(
+        paragraph(
+          [
+            run(block.main || block.text || '', { bold: true, size: 22, color: '1D1D1F' }),
+            block.secondary ? run(`　${block.secondary}`, { size: 21, color: '4D5155' }) : '',
+            block.trailing ? run(`　${block.trailing}`, { size: 18, color: '73767A' }) : '',
+          ],
+          { spacing: 80 },
+        ),
+      );
+    } else if (block.type === 'bullet') {
+      body.push(bulletParagraph(block.text));
+    } else if (block.type === 'numbered') {
+      numberedIndex += 1;
+      body.push(
+        paragraph(run(`${numberedIndex}. ${block.text}`, { size: 21 }), { indent: 142 }),
+      );
+    } else if (block.type === 'paragraph') {
+      body.push(paragraph(run(block.text, { size: 21 })));
     }
   });
 

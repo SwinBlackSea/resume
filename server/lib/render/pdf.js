@@ -1,10 +1,10 @@
 'use strict';
 /**
- * PDF 渲染：Resume JSON + Template Schema → PDF（TECH §11.1）。
+ * PDF 渲染：Resume DOM + Template Schema → PDF（TECH §11.1）。
  *
  * 说明：TECH 推荐固定版本 Chromium 打印 PDF。当前环境无浏览器，
  * 这里使用内置 PDF writer 完成同样的语义输出：
- *   - Resume JSON 驱动布局，模板决定字体、页边距与模块顺序；
+ *   - Resume DOM 驱动内容与顺序，模板决定字体、页边距与视觉规则；
  *   - 嵌入 Noto Sans SC（CIDFontType2 + Identity-H），中文字体不缺失；
  *   - 只输出实际用到的 glyph 宽度表（W）与 ToUnicode，保证文本可复制/可搜索；
  *   - 生产接入 Chromium 时只需替换 renderPdf 实现，调用方不变。
@@ -12,6 +12,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadFont, measureText } = require('./ttf');
+const ResumeDom = require('../../../resume-dom');
 
 const FONT_PATH =
   process.env.RESUME_FONT_PATH || '/home/ubuntu/.fonts/NotoSansSC.ttf';
@@ -114,13 +115,13 @@ function layoutResume(doc, font, resume, template) {
   const schema = template.schema || template;
   const typo = schema.typography || {};
   const margin = (schema.page && schema.page.margin) || { top: 58, right: 64, bottom: 64, left: 64 };
-  const maxPages = (schema.page && schema.page.max_pages) || 2;
   const baseSize = typo.base_size || 9.5;
   const lineHeight = typo.line_height || 1.75;
   const color = typo.color || '#414448';
   const accent = typo.accent || '#1d1d1f';
   const titleStyle = (schema.section_rules && schema.section_rules.title_style) || {};
-  const titles = (schema.section_rules && schema.section_rules.titles) || {};
+  const attached = ResumeDom.attachDocument(resume);
+  const rendered = ResumeDom.toRenderBlocks(attached.dom_document);
 
   const left = margin.left;
   const contentWidth = PAGE_WIDTH - margin.left - margin.right;
@@ -133,18 +134,21 @@ function layoutResume(doc, font, resume, template) {
   };
 
   // ---- 页眉 ----
-  doc.text(left, top, resume.basics.name || '', { size: 22, color: accent, bold: true, letterSpacing: 2 });
-  top += 30;
-  const contactParts = [
-    resume.headline,
-    resume.basics.city,
-    resume.basics.phone,
-    resume.basics.email,
-  ].filter(Boolean);
-  doc.text(left, top, contactParts.join('　|　'), { size: 9, color: '#5f6265' });
-  top += 16;
-  doc.line(left, top, PAGE_WIDTH - margin.right, accent, 1.6);
-  top += 22;
+  const headerTitle = (rendered.header && rendered.header.title)
+    || (attached.basics && attached.basics.name)
+    || '';
+  if (headerTitle) {
+    doc.text(left, top, headerTitle, { size: 22, color: accent, bold: true, letterSpacing: 2 });
+    top += 30;
+  }
+  if (rendered.header && rendered.header.subtitle) {
+    doc.text(left, top, rendered.header.subtitle, { size: 9, color: '#5f6265' });
+    top += 16;
+  }
+  if (headerTitle || (rendered.header && rendered.header.subtitle)) {
+    doc.line(left, top, PAGE_WIDTH - margin.right, accent, 1.6);
+    top += 22;
+  }
 
   const drawSectionTitle = (label) => {
     ensureSpace(40);
@@ -206,63 +210,30 @@ function layoutResume(doc, font, resume, template) {
     top += 17;
   };
 
-  // ---- 模块顺序由模板决定 ----
-  const order = (schema.section_rules && schema.section_rules.order) || [
-    'summary',
-    'experience',
-    'projects',
-    'education',
-    'skills',
-  ];
-
-  order.forEach((sectionKey) => {
-    if (sectionKey === 'summary') {
-      if (!resume.summary) return;
-      drawSectionTitle(titles.summary || '个人优势');
-      drawParagraph(resume.summary);
+  // ---- 模块和顺序由 Resume DOM 决定 ----
+  let numberedIndex = 0;
+  rendered.blocks.forEach((block) => {
+    if (block.type !== 'numbered') numberedIndex = 0;
+    if (block.type === 'heading') {
+      drawSectionTitle(block.text);
+    } else if (block.type === 'row') {
+      drawEntryRow(block.main || block.text || '', block.secondary || '', block.trailing || '');
+    } else if (block.type === 'bullet') {
+      drawBullets([block.text]);
+    } else if (block.type === 'numbered') {
+      numberedIndex += 1;
+      drawParagraph(`${numberedIndex}. ${block.text}`);
+    } else if (block.type === 'rule') {
+      ensureSpace(12);
+      doc.line(left, top, PAGE_WIDTH - margin.right, '#d1d1d6', 0.7);
       top += 10;
-    }
-    if (sectionKey === 'experience' && (resume.experience || []).length) {
-      drawSectionTitle(titles.experience || '工作经历');
-      resume.experience.forEach((item) => {
-        drawEntryRow(item.organization, item.title, periodText(item));
-        drawBullets(item.bullets);
-        top += 6;
-      });
-    }
-    if (sectionKey === 'projects' && (resume.projects || []).length) {
-      drawSectionTitle(titles.projects || '项目经历');
-      resume.projects.forEach((item) => {
-        drawEntryRow(item.name || item.organization, item.role || item.title, periodText(item));
-        drawBullets(item.bullets);
-        top += 6;
-      });
-    }
-    if (sectionKey === 'education' && (resume.education || []).length) {
-      drawSectionTitle(titles.education || '教育经历');
-      resume.education.forEach((item) => {
-        const detail = [item.major, item.degree].filter(Boolean).join(' · ');
-        drawEntryRow(item.school || item.organization, detail, periodText(item));
-      });
-    }
-    if (sectionKey === 'skills') {
-      const skills = (resume.skills || []).map((skill) =>
-        typeof skill === 'string' ? skill : skill.name,
-      );
-      if (!skills.length) return;
-      drawSectionTitle(titles.skills || '专业技能');
-      drawParagraph(skills.join('　'));
+    } else if (block.type === 'paragraph') {
+      drawParagraph(block.text);
+      top += 6;
     }
   });
 
-  return doc.pages.length > maxPages ? maxPages : doc.pages.length;
-}
-
-function periodText(item) {
-  const start = item.start || item.start_date || '';
-  const end = item.end || item.end_date || '';
-  if (!start && !end) return '';
-  return `${start} — ${end || '至今'}`;
+  return doc.pages.length;
 }
 
 /** 生成连续 gid 的宽度表 W（只覆盖实际用到的字形）。 */

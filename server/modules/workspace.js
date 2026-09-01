@@ -9,6 +9,7 @@ const { computeReadiness, computeProfileCompleteness } = require('../lib/resume-
 const { splitBullets } = require('../lib/compose');
 const { SCOPE_LABEL } = require('../lib/policy');
 const { DEMO_EMAIL } = require('../lib/auth');
+const ResumeDom = require('../../resume-dom');
 
 function toExperienceView(row) {
   const meta = JSON.parse(row.meta_json || '{}');
@@ -299,7 +300,7 @@ function buildWorkspace(projectId, user) {
     templates: availableTemplates,
     draft: {
       id: draft ? draft.id : null,
-      resume_json: draft ? JSON.parse(draft.resume_json || '{}') : {},
+      resume_json: ResumeDom.attachDocument(draft ? JSON.parse(draft.resume_json || '{}') : {}),
       revision: draft ? draft.revision : 1,
       base_version_id: draft ? draft.base_version_id : null,
       has_unsnapshotted_changes: draft ? Boolean(draft.has_unsnapshotted_changes) : false,
