@@ -184,9 +184,23 @@ test('模板选择与历史版本入口一致', () => {
     texts(proto, '#template-button'),
   );
   assert.deepStrictEqual(
-    texts(app, '.history-open'),
-    texts(proto, '.history-open'),
+    texts(app, '.top-actions .history-open'),
+    texts(proto, '.top-actions .history-open'),
   );
+});
+
+test('移动端在简历工具栏提供可见的历史版本入口', () => {
+  const mobileEntry = app.querySelector('.mobile-history-open.history-open');
+  assert.ok(mobileEntry, '移动端必须存在独立历史版本入口');
+  assert.match(mobileEntry.textContent, /^历史 · \d+$/);
+  assert.match(
+    APP_HTML,
+    /@media\(max-width:760px\)[\s\S]*?\.mobile-history-open\{display:block\}/,
+    '移动端媒体查询必须显示历史版本入口',
+  );
+  mobileEntry.click();
+  assert.ok(app.querySelector('#history-modal').classList.contains('show'));
+  assert.ok(app.querySelector('#history-list').classList.contains('active'));
 });
 
 test('历史版本列表：保留原型内容并补充明确版本状态', () => {
