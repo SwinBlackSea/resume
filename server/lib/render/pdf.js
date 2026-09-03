@@ -46,10 +46,15 @@ class PdfDoc {
   }
 
   line(x1, top, x2, color = '#d1d1d6', width = 0.7) {
-    const y = PAGE_HEIGHT - top;
+    return this.segment(x1, top, x2, top, color, width);
+  }
+
+  segment(x1, top1, x2, top2, color = '#d1d1d6', width = 0.7) {
+    const y1 = PAGE_HEIGHT - top1;
+    const y2 = PAGE_HEIGHT - top2;
     const rgb = hexToRgb01(color);
     this.currentOps.push(
-      `${rgb} RG ${width} w ${fmt(x1)} ${fmt(y)} m ${fmt(x2)} ${fmt(y)} l S\n`,
+      `${rgb} RG ${width} w ${fmt(x1)} ${fmt(y1)} m ${fmt(x2)} ${fmt(y2)} l S\n`,
     );
     return this;
   }
@@ -210,6 +215,49 @@ function layoutResume(doc, font, resume, template) {
     top += 17;
   };
 
+  const drawTable = (block) => {
+    const rows = block.rows || [];
+    const columnCount = Math.max(
+      1,
+      ...rows.map((row) =>
+        (row.cells || []).reduce((sum, cell) => sum + Math.max(1, Number(cell.colspan || 1)), 0)),
+    );
+    const columnWidth = contentWidth / columnCount;
+    rows.forEach((row) => {
+      const cells = row.cells || [];
+      const prepared = cells.map((cell) => {
+        const span = Math.max(1, Number(cell.colspan || 1));
+        const sourceLines = cell.lines && cell.lines.length ? cell.lines : [cell.text || ''];
+        const lines = sourceLines.flatMap((line) =>
+          wrapText(font, line, columnWidth * span - 10, baseSize));
+        return { cell, span, lines: lines.length ? lines : [''] };
+      });
+      const rowHeight = Math.max(
+        baseSize * lineHeight + 8,
+        ...prepared.map((entry) => entry.lines.length * baseSize * 1.35 + 8),
+      );
+      ensureSpace(rowHeight + 1);
+      const rowTop = top;
+      let x = left;
+      doc.line(left, rowTop, left + contentWidth, '#d8dde2', 0.55);
+      prepared.forEach((entry) => {
+        doc.segment(x, rowTop, x, rowTop + rowHeight, '#d8dde2', 0.55);
+        entry.lines.forEach((line, lineIndex) => {
+          doc.text(x + 5, rowTop + 4 + lineIndex * baseSize * 1.35, line, {
+            size: baseSize,
+            color,
+            bold: lineIndex === 0 && entry.lines.length > 1,
+          });
+        });
+        x += columnWidth * entry.span;
+      });
+      doc.segment(left + contentWidth, rowTop, left + contentWidth, rowTop + rowHeight, '#d8dde2', 0.55);
+      doc.line(left, rowTop + rowHeight, left + contentWidth, '#d8dde2', 0.55);
+      top += rowHeight;
+    });
+    top += 6;
+  };
+
   // ---- 模块和顺序由 Resume DOM 决定 ----
   let numberedIndex = 0;
   rendered.blocks.forEach((block) => {
@@ -227,6 +275,8 @@ function layoutResume(doc, font, resume, template) {
       ensureSpace(12);
       doc.line(left, top, PAGE_WIDTH - margin.right, '#d1d1d6', 0.7);
       top += 10;
+    } else if (block.type === 'table') {
+      drawTable(block);
     } else if (block.type === 'paragraph') {
       drawParagraph(block.text);
       top += 6;

@@ -5,10 +5,10 @@
  */
 const db = require('./db');
 const { uuidv7, nowIso, sha256, deepClone } = require('./util');
-const { ensureSystemTemplates } = require('./templates');
 const { putObject, objectKey } = require('./storage');
 const fixtures = require('./fixtures');
 const { DEMO_EMAIL } = require('./auth');
+const ResumeDom = require('../../resume-dom');
 
 /** 按「今天 -offset 天 + 指定时刻」生成 ISO 时间（本地时区构造，保证界面显示与设定一致）。 */
 function atTime(dayOffset, time) {
@@ -31,8 +31,6 @@ function seedIfEmpty() {
   if (existing) return { seeded: false };
 
   return db.tx(() => {
-    const templates = ensureSystemTemplates();
-
     // ---- 用户 ----
     const userId = uuidv7();
     db.run(
@@ -191,7 +189,7 @@ function seedIfEmpty() {
     });
 
     // ---- 当前简历草稿 ----
-    const draftResume = deepClone(fixtures.RESUME_DRAFT);
+    const draftResume = ResumeDom.toResumeDocument(deepClone(fixtures.RESUME_DRAFT));
     const draftId = uuidv7();
     db.run(
       `INSERT INTO resume_drafts (id, project_id, owner_id, resume_json, base_version_id, revision, has_unsnapshotted_changes, created_at, updated_at)
@@ -214,16 +212,16 @@ function seedIfEmpty() {
             return d.toISOString();
           })()
         : atTime(fixture.day_offset, fixture.time);
-      const template = deepClone(templates[fixture.template_key]);
       // 版本保存完整简历内容，仅覆盖版本详情展示的主要经历文本
-      const resumePayload = deepClone(draftResume);
-      resumePayload.summary = fixture.advantage;
-      const mainWork = ((resumePayload.experience || [])[0] || {}).bullets || [];
+      const legacyResume = deepClone(fixtures.RESUME_DRAFT);
+      legacyResume.summary = fixture.advantage;
+      const mainWork = ((legacyResume.experience || [])[0] || {}).bullets || [];
       const workBullet = mainWork.find((b) => b.id === 'target-bullet') || mainWork[0];
       if (workBullet) workBullet.text = fixture.work;
-      const mainProject = ((resumePayload.projects || [])[0] || {}).bullets || [];
+      const mainProject = ((legacyResume.projects || [])[0] || {}).bullets || [];
       const projectBullet = mainProject.find((b) => b.id === 'scale-bullet') || mainProject[0];
       if (projectBullet) projectBullet.text = fixture.project;
+      const resumePayload = ResumeDom.toResumeDocument(legacyResume);
       db.run(
         `INSERT INTO resume_versions (id, project_id, owner_id, version_no, kind, name, base_version_id,
            profile_payload, template_payload, job_payload, resume_payload, change_summary_json,
@@ -251,7 +249,7 @@ function seedIfEmpty() {
             })),
             revision: 1,
           }),
-          JSON.stringify({ template_version_id: template.version_id, ...template }),
+          JSON.stringify({}),
           JSON.stringify({
             id: jobId,
             title: fixture.job.split(' · ')[0],
@@ -267,7 +265,6 @@ function seedIfEmpty() {
             list_summary: fixture.list_summary,
             profile_data: fixture.profile_data,
             job_data: fixture.job_data,
-            template_data: fixture.template_data,
             compare_note: fixture.compare_note,
             time_label: fixture.fixed_date
               ? `${fixture.fixed_date.month} 月 ${fixture.fixed_date.day} 日 ${fixture.fixed_date.time}`
@@ -284,8 +281,8 @@ function seedIfEmpty() {
 
     // ---- 回填项目引用 ----
     db.run(
-      'UPDATE resume_projects SET current_profile_id = ?, current_job_id = ?, current_template_version_id = ?, updated_at = ? WHERE id = ?',
-      [profileId, jobId, templates.classic.version_id, nowIso(), projectId],
+      'UPDATE resume_projects SET current_profile_id = ?, current_job_id = ?, current_template_version_id = NULL, updated_at = ? WHERE id = ?',
+      [profileId, jobId, nowIso(), projectId],
     );
 
     // ---- AI 会话与欢迎语 ----

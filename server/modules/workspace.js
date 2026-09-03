@@ -1,7 +1,7 @@
 'use strict';
 /**
  * 工作区聚合：一次请求返回三栏所需的全部服务端状态（TECH §4.2）。
- * 个人信息、岗位信息、模板、历史版本与生成进度都在工作区内完成，不通过页面跳转打断上下文。
+ * 个人信息、岗位信息、当前简历、历史版本与生成进度都在工作区内完成。
  */
 const db = require('../lib/db');
 const { uuidv7, nowIso, problem } = require('../lib/util');
@@ -70,7 +70,7 @@ function toTemplateView(version) {
     template_version_id: version.id,
     template_id: version.template_id,
     key: schema.key || 'custom',
-    name: definition ? definition.name : schema.name || '自定义模板',
+    name: definition ? definition.name : schema.name || '自定义排版',
     description: schema.description || '',
     version: version.version,
     kind: definition ? definition.kind : 'custom',
@@ -81,7 +81,6 @@ function toTemplateView(version) {
 
 function toVersionView(row, currentVersionId) {
   const summary = JSON.parse(row.change_summary_json || '{}');
-  const templatePayload = JSON.parse(row.template_payload || '{}');
   const jobPayload = JSON.parse(row.job_payload || '{}');
   return {
     id: row.id,
@@ -91,10 +90,10 @@ function toVersionView(row, currentVersionId) {
     status: row.status,
     created_at: row.created_at,
     time_label: summary.time_label || '',
-    template: templatePayload.name || '',
     job: jobPayload.job || `${jobPayload.title || ''}${jobPayload.company ? ` · ${jobPayload.company}` : ''}`,
     changes: summary.changes || [],
     list_summary: summary.list_summary || '',
+    thumbnail_url: `/api/v1/versions/${row.id}/thumbnail`,
     is_base_version: row.id === currentVersionId,
     // 兼容旧客户端；新界面使用 is_base_version，避免把有新修改的草稿误称为“当前版本”。
     is_current: row.id === currentVersionId,
@@ -199,16 +198,6 @@ function buildWorkspace(projectId, user) {
       )
     : null;
 
-  const availableTemplates = db
-    .all(
-      `SELECT tv.* FROM template_versions tv
-       JOIN template_definitions td ON td.id = tv.template_id
-       WHERE (td.kind = 'system' AND td.owner_id IS NULL) OR td.owner_id = ?
-       ORDER BY td.kind DESC, td.name ASC`,
-      [user.id],
-    )
-    .map(toTemplateView);
-
   const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [
     projectId,
     user.id,
@@ -277,9 +266,14 @@ function buildWorkspace(projectId, user) {
   const readiness = computeReadiness({
     profileBasics: basics,
     experiences: experienceRows,
-    template: currentTemplate,
     job: jobRow,
   });
+  const rawDraft = draft ? JSON.parse(draft.resume_json || '{}') : {};
+  const resumeDocument = ResumeDom.toResumeDocument(
+    rawDraft.schema_version === ResumeDom.RESUME_DOCUMENT_VERSION
+      ? rawDraft
+      : ResumeDom.createResumeAggregate(rawDraft, currentTemplate),
+  );
 
   return {
     user: { id: user.id, display_name: user.display_name, email: user.email },
@@ -298,11 +292,9 @@ function buildWorkspace(projectId, user) {
       experiences,
     },
     job: toJobView(jobRow),
-    template: currentTemplate,
-    templates: availableTemplates,
     draft: {
       id: draft ? draft.id : null,
-      resume_json: ResumeDom.attachDocument(draft ? JSON.parse(draft.resume_json || '{}') : {}),
+      resume_json: resumeDocument,
       revision: draft ? draft.revision : 1,
       base_version_id: draft ? draft.base_version_id : null,
       has_unsnapshotted_changes: draft ? Boolean(draft.has_unsnapshotted_changes) : false,

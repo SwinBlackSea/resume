@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1800" viewBox="0 0 2200 1800" role="img" aria-labelledby="title desc">
+  <title id="title">简历星球核心技术组件分解图</title>
+  <desc id="desc">展开 Web 渲染、Resume DOM、Application Server、Resume Harness、DeepSeek Client、文档识别、渲染和基础设施适配模块。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64748b"/></marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".1"/></filter>
+    <style>
+      .title{font:700 34px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#0f172a}.subtitle{font:400 17px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#475569}.zone{font:700 20px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#334155}.card-title{font:700 19px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#172554}.body{font:400 15px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#475569}.path{font:400 13px ui-monospace,SFMono-Regular,Consolas,monospace;fill:#64748b}.small{font:400 14px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#475569}.arrow{fill:none;stroke:#64748b;stroke-width:2.5;marker-end:url(#arrow)}.dash{fill:none;stroke:#2563eb;stroke-width:2.2;stroke-dasharray:8 7;marker-end:url(#arrow)}.support{fill:none;stroke:#94a3b8;stroke-width:2;stroke-dasharray:5 5}
+    </style>
+  </defs>
+  <rect width="2200" height="1800" fill="#f8fafc"/>
+  <text x="60" y="58" class="title">简历星球 · 核心技术组件分解</text>
+  <text x="60" y="90" class="subtitle">在纵向服务架构之下展开可独立评估、替换、测试和优化的局部核心组件</text>
+
+  <rect x="50" y="120" width="1580" height="232" rx="18" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+  <text x="78" y="157" class="zone">Web Application</text>
+  <rect x="80" y="182" width="330" height="126" rx="13" fill="#fff" stroke="#93c5fd" filter="url(#shadow)"/>
+  <text x="102" y="216" class="card-title">Workspace Shell</text><text x="102" y="245" class="body">三栏布局 · Dialog · 响应式工作区</text><text x="102" y="278" class="path">index.html</text>
+  <rect x="445" y="182" width="330" height="126" rx="13" fill="#fff" stroke="#93c5fd" filter="url(#shadow)"/>
+  <text x="467" y="216" class="card-title">State / API Client</text><text x="467" y="245" class="body">自动保存 · revision · SSE 恢复</text><text x="467" y="278" class="path">index.html · IndexedDB</text>
+  <rect x="810" y="172" width="790" height="146" rx="13" fill="#fff" stroke="#60a5fa" stroke-width="2" filter="url(#shadow)"/>
+  <text x="835" y="207" class="card-title">Web Rendering Core</text>
+  <text x="835" y="236" class="body">ResumeDom.Renderer · 可编辑节点控制 · Template/Layout View</text>
+  <text x="835" y="263" class="body">Document Import Preview · Version Detail · Compare Highlight</text>
+  <text x="835" y="294" class="path">index.html → resume-dom.js</text>
+
+  <path d="M840 352V390" class="arrow"/>
+  <rect x="50" y="392" width="1580" height="238" rx="18" fill="#ecfdf5" stroke="#86efac" stroke-width="2"/>
+  <text x="78" y="429" class="zone">Shared Document Core</text>
+  <rect x="80" y="454" width="690" height="140" rx="13" fill="#fff" stroke="#4ade80" stroke-width="2" filter="url(#shadow)"/>
+  <text x="103" y="488" class="card-title">Resume DOM Engine</text>
+  <text x="103" y="517" class="body">Document Normalizer · Safe Node/Style/Attribute Policy · Tree Walker</text>
+  <text x="103" y="544" class="body">Controlled Operations · Legacy Binding · Compare Engine · Renderer</text>
+  <text x="103" y="571" class="path">resume-dom.js</text>
+  <rect x="805" y="454" width="380" height="140" rx="13" fill="#fff" stroke="#86efac" filter="url(#shadow)"/>
+  <text x="828" y="488" class="card-title">Resume Schema / Safety</text><text x="828" y="517" class="body">Schema 校验 · 内容一致性</text><text x="828" y="544" class="body">完整度与生成前置条件</text><text x="828" y="571" class="path">server/lib/resume-schema.js</text>
+  <rect x="1220" y="454" width="380" height="140" rx="13" fill="#fff" stroke="#86efac" filter="url(#shadow)"/>
+  <text x="1243" y="488" class="card-title">Template Schema / Engine</text><text x="1243" y="517" class="body">页面 · 区域 · 字体 · 约束</text><text x="1243" y="544" class="body">系统模板与导入模板</text><text x="1243" y="571" class="path">server/lib/templates.js</text>
+
+  <path d="M840 630V668" class="arrow"/>
+  <rect x="50" y="670" width="1580" height="286" rx="18" fill="#f5f3ff" stroke="#c4b5fd" stroke-width="2"/>
+  <text x="78" y="707" class="zone">API Server / Application Server</text>
+  <rect x="80" y="732" width="370" height="178" rx="13" fill="#fff" stroke="#c4b5fd" filter="url(#shadow)"/>
+  <text x="103" y="766" class="card-title">API Transport</text><text x="103" y="795" class="body">HTTP Router · REST · SSE</text><text x="103" y="822" class="body">请求解析 · Problem Details</text><text x="103" y="849" class="body">静态资源与签名下载</text><text x="103" y="882" class="path">server/index.js · server/lib/util.js</text>
+  <rect x="485" y="722" width="690" height="198" rx="13" fill="#fff" stroke="#a78bfa" stroke-width="2" filter="url(#shadow)"/>
+  <text x="508" y="756" class="card-title">Route / Domain Modules</text>
+  <text x="508" y="786" class="body">Workspace · Profile · Jobs · Templates · Uploads</text>
+  <text x="508" y="813" class="body">Document Imports · Draft · AI · Versions</text>
+  <text x="508" y="840" class="body">Generations · Artifacts</text>
+  <text x="508" y="873" class="path">server/modules/*.js</text>
+  <rect x="1210" y="732" width="390" height="178" rx="13" fill="#fff" stroke="#c4b5fd" filter="url(#shadow)"/>
+  <text x="1233" y="766" class="card-title">Policies / Domain Libraries</text><text x="1233" y="795" class="body">Write Policy · Auth · Idempotency</text><text x="1233" y="822" class="body">Audit · Job Analyzer · Compose</text><text x="1233" y="849" class="body">Polish · Templates · Resume Schema</text><text x="1233" y="882" class="path">server/lib/*.js</text>
+
+  <path d="M840 956V994" class="arrow"/>
+  <rect x="50" y="996" width="1580" height="146" rx="18" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <text x="78" y="1033" class="zone">Async Orchestration</text>
+  <rect x="80" y="1054" width="470" height="62" rx="12" fill="#fff" stroke="#fdba74"/><text x="103" y="1092" class="card-title">Outbox Publisher / Queue Worker</text>
+  <rect x="585" y="1054" width="420" height="62" rx="12" fill="#fff" stroke="#fdba74"/><text x="608" y="1092" class="card-title">Generation DAG / Retry / Finalize</text>
+  <rect x="1040" y="1054" width="560" height="62" rx="12" fill="#fff" stroke="#fdba74"/><text x="1063" y="1092" class="card-title">Task Event Bus / SSE Progress / Recovery</text>
+  <text x="82" y="1133" class="path">server/lib/queue.js · server/lib/events.js</text>
+
+  <path d="M840 1142V1180" class="arrow"/>
+  <rect x="50" y="1182" width="1580" height="402" rx="18" fill="#fff" stroke="#fdba74" stroke-width="2"/>
+  <text x="78" y="1219" class="zone">Execution Pipelines</text>
+  <rect x="80" y="1244" width="470" height="292" rx="14" fill="#fff7ed" stroke="#fdba74" filter="url(#shadow)"/>
+  <text x="103" y="1278" class="card-title">AI Pipeline</text>
+  <text x="103" y="1310" class="body">AI Module</text><text x="215" y="1310" class="body">→ Resume Harness</text>
+  <text x="123" y="1342" class="body">Context Builder · Memory Manager</text>
+  <text x="123" y="1369" class="body">Prompt Registry · Output Schema</text>
+  <text x="123" y="1396" class="body">Harness Orchestrator</text>
+  <text x="103" y="1432" class="body">Model Client Interface → DeepSeek Client</text>
+  <text x="123" y="1459" class="body">HTTP/Timeout/Abort · SSE Decoder</text>
+  <text x="123" y="1486" class="body">JSON Extractor · Error Mapping</text>
+  <text x="103" y="1518" class="path">server/lib/resume-harness · deepseek-client</text>
+  <rect x="585" y="1244" width="570" height="292" rx="14" fill="#fff7ed" stroke="#fdba74" filter="url(#shadow)"/>
+  <text x="608" y="1278" class="card-title">Document Recognition Pipeline</text>
+  <text x="608" y="1310" class="body">Recognition Client / Process Boundary → Runner → Service</text>
+  <text x="628" y="1342" class="body">Input Validator · Command Sandbox</text>
+  <text x="628" y="1369" class="body">PDF Parser · DOCX/DOC Parser · Image/OCR Adapter</text>
+  <text x="628" y="1396" class="body">Semantic Analyzer（复用 DeepSeek Client）</text>
+  <text x="628" y="1423" class="body">Candidate Builder（复用 Resume DOM Engine）</text>
+  <text x="628" y="1450" class="body">Quality Gate · Constants · Safe Errors</text>
+  <text x="608" y="1518" class="path">server/lib/document-recognition/*</text>
+  <rect x="1190" y="1244" width="410" height="292" rx="14" fill="#fff7ed" stroke="#fdba74" filter="url(#shadow)"/>
+  <text x="1213" y="1278" class="card-title">Render Pipeline</text>
+  <text x="1213" y="1310" class="body">Resume DOM Projection</text>
+  <text x="1233" y="1342" class="body">HTML Renderer</text>
+  <text x="1233" y="1369" class="body">PDF Renderer · TTF Engine</text>
+  <text x="1233" y="1396" class="body">DOCX Renderer · ZIP Writer</text>
+  <text x="1233" y="1423" class="body">Artifact Validator / Registry</text>
+  <text x="1213" y="1518" class="path">server/lib/render/*</text>
+
+  <rect x="50" y="1622" width="1580" height="124" rx="18" fill="#fdf2f8" stroke="#f9a8d4" stroke-width="2"/>
+  <text x="78" y="1659" class="zone">Providers / Native Runtimes</text>
+  <text x="82" y="1703" class="card-title">DeepSeek LLM　｜　Cloud OCR / Speech　｜　PaddleOCR　｜　Poppler　｜　LibreOffice　｜　Chromium</text>
+
+  <rect x="1680" y="120" width="470" height="1464" rx="18" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1710" y="157" class="zone">Infrastructure Adapters</text>
+  <rect x="1710" y="188" width="410" height="136" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1733" y="222" class="card-title">Database Adapter</text><text x="1733" y="252" class="body">当前：node:sqlite</text><text x="1733" y="279" class="body">目标：PostgreSQL</text><text x="1733" y="306" class="path">server/lib/db.js</text>
+  <rect x="1710" y="354" width="410" height="136" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1733" y="388" class="card-title">Object Storage Adapter</text><text x="1733" y="418" class="body">当前：本地对象目录</text><text x="1733" y="445" class="body">目标：S3 兼容私有存储</text><text x="1733" y="472" class="path">server/lib/storage.js</text>
+  <rect x="1710" y="520" width="410" height="136" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1733" y="554" class="card-title">Queue Adapter</text><text x="1733" y="584" class="body">当前：DB Outbox + 进程 Worker</text><text x="1733" y="611" class="body">目标：Redis + BullMQ</text><text x="1733" y="638" class="path">server/lib/queue.js</text>
+  <rect x="1710" y="686" width="410" height="136" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1733" y="720" class="card-title">Provider Adapters</text><text x="1733" y="750" class="body">Model Client · OCR Adapter</text><text x="1733" y="777" class="body">Document Command Runner</text><text x="1733" y="804" class="path">deepseek-client · ocr.js · command.js</text>
+  <rect x="1710" y="852" width="410" height="136" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1733" y="886" class="card-title">Security / Control</text><text x="1733" y="916" class="body">Auth · Policy · Idempotency</text><text x="1733" y="943" class="body">Audit · Safe Error · Ownership</text><text x="1733" y="970" class="path">server/lib/auth|policy|audit|idempotency</text>
+  <rect x="1710" y="1018" width="410" height="136" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1733" y="1052" class="card-title">Observability</text><text x="1733" y="1082" class="body">request_id · 任务状态 · 安全日志</text><text x="1733" y="1109" class="body">目标：Trace · Metrics · Sentry</text><text x="1733" y="1136" class="path">util.js · events.js · audit.js</text>
+  <path d="M1630 524H1678" class="support"/><path d="M1630 820H1678" class="support"/><path d="M1630 1086H1678" class="support"/><path d="M1630 1390H1678" class="support"/>
+
+  <path d="M315 1584V1620" class="arrow"/><path d="M870 1584V1620" class="arrow"/><path d="M1395 1584V1620" class="arrow"/>
+  <path d="M315 1244V610H425" class="dash"/><text x="335" y="1168" class="small">AI 操作使用共享文档协议</text>
+  <path d="M870 1244V610H425" class="dash"/><text x="890" y="1168" class="small">候选构建复用 Resume DOM</text>
+  <path d="M1395 1244V610H425" class="dash"/><text x="1415" y="1168" class="small">导出渲染复用 Resume DOM</text>
+</svg>

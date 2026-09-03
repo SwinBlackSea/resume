@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1540" viewBox="0 0 1800 1540" role="img" aria-labelledby="title desc">
+  <title id="title">简历星球自上而下整体架构图</title>
+  <desc id="desc">主调用链从 Web、API Server、Application Server、任务编排、执行服务到 LLM 等底层能力，数据设施位于侧边。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64748b"/></marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".10"/></filter>
+    <style>
+      .title{font:700 34px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#0f172a}.subtitle{font:400 17px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#475569}.layer{font:700 17px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#64748b}.card-title{font:700 21px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#172554}.card-body{font:400 15px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#475569}.small{font:400 14px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#475569}.note{font:600 15px 'Noto Sans SC','Microsoft YaHei',Arial,sans-serif;fill:#334155}.arrow{fill:none;stroke:#64748b;stroke-width:2.6;marker-end:url(#arrow)}.async{fill:none;stroke:#64748b;stroke-width:2.6;stroke-dasharray:9 7;marker-end:url(#arrow)}.support{fill:none;stroke:#94a3b8;stroke-width:2;stroke-dasharray:5 5}.return{fill:none;stroke:#2563eb;stroke-width:2.2;stroke-dasharray:7 6;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1800" height="1540" fill="#f8fafc"/>
+  <text x="60" y="58" class="title">简历星球 · 自上而下目标架构</text>
+  <text x="60" y="90" class="subtitle">主链路：Web → API Server → Application Server → 任务编排 → 专用服务 / Worker → LLM 等底层能力</text>
+
+  <text x="70" y="143" class="layer">01 · WEB</text>
+  <rect x="220" y="112" width="1000" height="112" rx="18" fill="#eff6ff" stroke="#93c5fd" stroke-width="2" filter="url(#shadow)"/>
+  <text x="252" y="151" class="card-title">Web Application</text>
+  <text x="252" y="181" class="card-body">三栏工作区：资料 ｜ 简历正文 ｜ AI 对话</text>
+  <text x="780" y="151" class="card-title">Web Rendering Core</text>
+  <text x="780" y="181" class="card-body">ResumeDom.Renderer · 模板视图 · 导入预览 · 历史比较</text>
+
+  <path d="M720 224V272" class="arrow"/><text x="740" y="255" class="small">REST / SSE / WebSocket</text>
+  <text x="70" y="313" class="layer">02 · API</text>
+  <rect x="220" y="274" width="1000" height="112" rx="18" fill="#f5f3ff" stroke="#c4b5fd" stroke-width="2" filter="url(#shadow)"/>
+  <text x="252" y="313" class="card-title">API Server</text>
+  <text x="252" y="343" class="card-body">路由 · 认证授权 · 限流 · 请求校验 · 幂等 · 签名 URL · 实时连接</text>
+  <text x="940" y="343" class="card-body">不承载耗时任务</text>
+
+  <path d="M720 386V434" class="arrow"/><text x="740" y="417" class="small">受控业务调用</text>
+  <text x="70" y="475" class="layer">03 · SERVER</text>
+  <rect x="150" y="436" width="1140" height="252" rx="18" fill="#ecfdf5" stroke="#86efac" stroke-width="2" filter="url(#shadow)"/>
+  <text x="180" y="477" class="card-title">Application Server</text>
+  <text x="420" y="477" class="card-body">领域规则 · revision · 事务 · AI 写入策略 · 快照与版本编排</text>
+  <rect x="180" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
+  <text x="202" y="546" class="card-title">工作区领域</text><text x="202" y="577" class="card-body">项目 · 资料 · 岗位</text><text x="202" y="604" class="card-body">平级维护，不自动同步</text>
+  <rect x="555" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
+  <text x="577" y="546" class="card-title">简历领域 / Resume DOM Engine</text><text x="577" y="577" class="card-body">规范化 · 受控操作 · 比较 · 渲染投影</text><text x="577" y="604" class="card-body">草稿 · 模板 · 修改事件 · 不可变版本</text>
+  <rect x="930" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
+  <text x="952" y="546" class="card-title">智能与任务领域</text><text x="952" y="577" class="card-body">AI 对话 · 文档导入 · 生成</text><text x="952" y="604" class="card-body">候选结果经用户确认后应用</text>
+
+  <path d="M720 688V736" class="arrow"/><text x="740" y="719" class="small">事务 Outbox</text>
+  <text x="70" y="777" class="layer">04 · ORCHESTRATION</text>
+  <rect x="220" y="738" width="1000" height="112" rx="18" fill="#fff7ed" stroke="#fdba74" stroke-width="2" filter="url(#shadow)"/>
+  <text x="252" y="777" class="card-title">任务编排</text>
+  <text x="252" y="807" class="card-body">Outbox Publisher → Redis / BullMQ → 幂等任务 · 重试 · 超时 · 取消 · 部分成功</text>
+
+  <path d="M720 850V898" class="async"/><text x="740" y="881" class="small">异步分发</text>
+  <text x="70" y="939" class="layer">05 · EXECUTION</text>
+  <rect x="80" y="900" width="1240" height="268" rx="18" fill="#fff" stroke="#fdba74" stroke-width="2"/>
+  <text x="110" y="941" class="card-title">专用服务与 Worker</text>
+  <rect x="110" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="132" y="1014" class="card-title">文档识别服务</text><text x="132" y="1045" class="card-body">PDF · DOCX · DOC · 图片</text><text x="132" y="1072" class="card-body">安全解析 · OCR · 排版候选</text><text x="132" y="1099" class="card-body">独立无网沙箱</text>
+  <rect x="410" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="432" y="1014" class="card-title">OCR / Speech Worker</text><text x="432" y="1045" class="card-body">岗位图片 · 语音转写</text><text x="432" y="1072" class="card-body">返回待确认文本</text>
+  <rect x="710" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="732" y="1014" class="card-title">AI Worker → Resume Harness</text><text x="732" y="1045" class="card-body">Context · Memory · Prompt</text><text x="732" y="1072" class="card-body">Output Schema · Orchestrator</text>
+  <rect x="1010" y="978" width="280" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="1032" y="1014" class="card-title">Render Worker</text><text x="1032" y="1045" class="card-body">HTML · PDF · DOCX</text><text x="1032" y="1072" class="card-body">分页 · 溢出 · 质量检查</text>
+
+  <path d="M700 1168V1216" class="arrow"/><text x="720" y="1199" class="small">模型与运行时调用</text>
+  <text x="70" y="1257" class="layer">06 · ADAPTER / MODEL / RUNTIME</text>
+  <rect x="220" y="1218" width="1000" height="136" rx="18" fill="#fdf2f8" stroke="#f9a8d4" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="250" y="1248" width="280" height="76" rx="12" fill="#fff" stroke="#f9a8d4"/><text x="278" y="1280" class="card-title">DeepSeek Client → LLM</text><text x="278" y="1307" class="card-body">HTTP · SSE · JSON · 超时 · 错误映射</text>
+  <rect x="580" y="1248" width="280" height="76" rx="12" fill="#fff" stroke="#f9a8d4"/><text x="608" y="1280" class="card-title">OCR / Speech Provider</text><text x="608" y="1307" class="card-body">文字识别 · 语音转写</text>
+  <rect x="910" y="1248" width="280" height="76" rx="12" fill="#fff" stroke="#f9a8d4"/><text x="938" y="1280" class="card-title">Chromium / LibreOffice</text><text x="938" y="1307" class="card-body">渲染 · 转换 · 视觉回归</text>
+
+  <rect x="1360" y="274" width="370" height="894" rx="18" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1390" y="315" class="card-title">侧边支撑设施</text><text x="1390" y="343" class="small">不占据主调用层级</text>
+  <rect x="1390" y="380" width="310" height="122" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1415" y="417" class="card-title">PostgreSQL</text><text x="1415" y="447" class="card-body">资料 · 对话 · 草稿 · 快照</text><text x="1415" y="474" class="card-body">版本 · 任务 · 审计</text>
+  <rect x="1390" y="548" width="310" height="110" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1415" y="585" class="card-title">Redis</text><text x="1415" y="615" class="card-body">BullMQ · 锁 · 限流 · 短期缓存</text>
+  <rect x="1390" y="704" width="310" height="122" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1415" y="741" class="card-title">私有对象存储</text><text x="1415" y="771" class="card-body">原文件 · 转码 · 预览</text><text x="1415" y="798" class="card-body">PDF · DOCX · 下载产物</text>
+  <rect x="1390" y="872" width="310" height="122" rx="13" fill="#fff" stroke="#cbd5e1"/>
+  <text x="1415" y="909" class="card-title">可观测性</text><text x="1415" y="939" class="card-body">Trace · 日志 · 指标 · 告警</text><text x="1415" y="966" class="card-body">request_id 贯穿全链路</text>
+  <path d="M1290 540H1388" class="support"/><path d="M1220 794H1388" class="support"/><path d="M1320 1034H1388V765" class="support"/><path d="M1220 330H1330V765H1388" class="support"/>
+
+  <path d="M180 1034H145V168H218" class="return"/><text x="92" y="720" class="small" transform="rotate(-90 92 720)">候选结果、任务进度和最终产物经 API 返回 Web</text>
+
+  <rect x="80" y="1400" width="1650" height="92" rx="16" fill="#fff" stroke="#94a3b8" stroke-width="2"/>
+  <text x="110" y="1435" class="note">关键边界</text>
+  <text x="110" y="1465" class="small">Web、模型和 Worker 都不能直接修改核心数据；用户确认后，由 Application Server 完成权限、revision、幂等和目标校验，再在事务中写入。</text>
+</svg>

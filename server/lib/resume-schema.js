@@ -23,7 +23,10 @@ const RESUME_FIELDS = [
 function validateResumeJson(resume) {
   const errors = [];
   if (!resume || typeof resume !== 'object') return { valid: false, errors: ['简历不是对象'] };
-  const hasDynamicDocument = Boolean(resume.dom_document && resume.dom_document.root);
+  const hasDynamicDocument = Boolean(
+    (resume.schema_version === ResumeDom.RESUME_DOCUMENT_VERSION && resume.root)
+    || (resume.dom_document && resume.dom_document.root),
+  );
   if (!hasDynamicDocument) {
     for (const field of RESUME_FIELDS) {
       if (!(field in resume)) errors.push(`缺少字段 ${field}`);
@@ -81,7 +84,7 @@ function validateContentSafety(resumeJson, userProvidedTexts = []) {
   return { violations, ok: violations.length === 0 };
 }
 
-function computeReadiness({ profileBasics, experiences, template, job }) {
+function computeReadiness({ profileBasics, experiences, job }) {
   const missing = [];
   if (!profileBasics || !profileBasics.name) missing.push('姓名');
   if (!profileBasics || !(profileBasics.phone || profileBasics.email)) missing.push('手机号或邮箱');
@@ -89,11 +92,9 @@ function computeReadiness({ profileBasics, experiences, template, job }) {
     missing.push('至少一段工作或项目经历');
   if (!(experiences || []).some((item) => item.type === 'education' && !item.deleted_at))
     missing.push('一段教育经历');
-  if (!template) missing.push('可用的简历模板');
-  else if (template.status && template.status !== 'ready') missing.push('模板仍在解析中');
   if (!job) missing.push('目标岗位信息');
   else if (job.status !== 'confirmed') missing.push('岗位文本确认');
-  const weights = { 姓名: 20, '手机号或邮箱': 15, '至少一段工作或项目经历': 25, '一段教育经历': 20, '可用的简历模板': 10, '目标岗位信息': 10 };
+  const weights = { 姓名: 20, '手机号或邮箱': 15, '至少一段工作或项目经历': 25, '一段教育经历': 20, '目标岗位信息': 20 };
   const score = Math.min(100, Math.round(
     Object.entries(weights).reduce((sum, [key, value]) => sum + (missing.includes(key) ? 0 : value), 0),
   ));

@@ -65,6 +65,55 @@ function bulletParagraph(text) {
   );
 }
 
+function colorFromCss(value, fallback = '') {
+  const match = String(value || '').match(/#([0-9a-f]{6})/i);
+  return match ? match[1].toUpperCase() : fallback;
+}
+
+function tableCell(cell, width) {
+  const lines = cell.lines && cell.lines.length ? cell.lines : [cell.text || ''];
+  const fill = colorFromCss(cell.style && cell.style['background-color']);
+  const paragraphs = lines.map((line, index) => paragraph(
+    run(line, { size: 19, bold: index === 0 && lines.length > 1 }),
+    { spacing: index === lines.length - 1 ? 0 : 50 },
+  )).join('');
+  return (
+    `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>`
+    + (cell.colspan > 1 ? `<w:gridSpan w:val="${cell.colspan}"/>` : '')
+    + (cell.rowspan > 1 ? '<w:vMerge w:val="restart"/>' : '')
+    + (fill ? `<w:shd w:val="clear" w:fill="${fill}"/>` : '')
+    + `<w:vAlign w:val="center"/><w:tcMar>`
+    + `<w:top w:w="80" w:type="dxa"/><w:left w:w="90" w:type="dxa"/>`
+    + `<w:bottom w:w="80" w:type="dxa"/><w:right w:w="90" w:type="dxa"/>`
+    + `</w:tcMar></w:tcPr>${paragraphs}</w:tc>`
+  );
+}
+
+function tableBlock(block) {
+  const columnCount = Math.max(
+    1,
+    ...(block.rows || []).map((row) =>
+      (row.cells || []).reduce((sum, cell) => sum + Math.max(1, Number(cell.colspan || 1)), 0)),
+  );
+  const tableWidth = 9300;
+  const columnWidth = Math.floor(tableWidth / columnCount);
+  const grid = Array.from({ length: columnCount }, () =>
+    `<w:gridCol w:w="${columnWidth}"/>`).join('');
+  const rows = (block.rows || []).map((row) => {
+    const cells = (row.cells || []).map((cell) =>
+      tableCell(cell, columnWidth * Math.max(1, Number(cell.colspan || 1)))).join('');
+    return `<w:tr>${cells}</w:tr>`;
+  }).join('');
+  return (
+    `<w:tbl><w:tblPr><w:tblW w:w="${tableWidth}" w:type="dxa"/>`
+    + `<w:tblLayout w:type="fixed"/><w:tblBorders>`
+    + `<w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/>`
+    + `<w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/>`
+    + `</w:tblBorders><w:tblCellSpacing w:w="30" w:type="dxa"/></w:tblPr>`
+    + `<w:tblGrid>${grid}</w:tblGrid>${rows}</w:tbl>`
+  );
+}
+
 /** 构建 document.xml 主体。 */
 function buildDocumentXml(resume, template) {
   const schema = template.schema || template;
@@ -107,6 +156,8 @@ function buildDocumentXml(resume, template) {
       body.push(
         paragraph(run(`${numberedIndex}. ${block.text}`, { size: 21 }), { indent: 142 }),
       );
+    } else if (block.type === 'table') {
+      body.push(tableBlock(block));
     } else if (block.type === 'paragraph') {
       body.push(paragraph(run(block.text, { size: 21 })));
     }

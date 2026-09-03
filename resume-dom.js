@@ -6,6 +6,10 @@
   'use strict';
 
   const VERSION = 'resume-dom-v1';
+  const RESUME_DOCUMENT_VERSION = 'resume-document-v3';
+  const AGGREGATE_VERSION = 'resume-aggregate-v2';
+  const TEMPLATE_DOCUMENT_VERSION = 'template-document-v1';
+  const BINDINGS_VERSION = 'layout-bindings-v1';
   const MAX_DEPTH = 40;
   const MAX_NODES = 5000;
   const ALLOWED_TAGS = new Set([
@@ -256,6 +260,143 @@
     return result;
   }
 
+  function rawHasClass(node, className) {
+    return String(node && node.attributes && node.attributes.class || '')
+      .split(/\s+/)
+      .includes(className);
+  }
+
+  function pxValuesToPt(style) {
+    const result = {};
+    Object.entries(style || {}).forEach(([name, value]) => {
+      result[name] = String(value).replace(/(-?\d+(?:\.\d+)?)px\b/g, '$1pt');
+    });
+    return result;
+  }
+
+  function paddingTokens(value) {
+    const tokens = String(value || '').trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return [];
+    if (tokens.length === 1) return [tokens[0], tokens[0], tokens[0], tokens[0]];
+    if (tokens.length === 2) return [tokens[0], tokens[1], tokens[0], tokens[1]];
+    if (tokens.length === 3) return [tokens[0], tokens[1], tokens[2], tokens[1]];
+    return tokens.slice(0, 4);
+  }
+
+  function percentLengthToPt(value, total) {
+    const match = String(value || '').match(/^(-?\d+(?:\.\d+)?)%$/);
+    if (!match) return value;
+    return `${Number(((Number(match[1]) / 100) * total).toFixed(2))}pt`;
+  }
+
+  function pointNumber(value) {
+    const match = String(value || '').match(/^(-?\d+(?:\.\d+)?)pt$/);
+    return match ? Number(match[1]) : 0;
+  }
+
+  function importedFontMetricScale(page) {
+    const family = String(page.style && page.style['font-family'] || '').toLowerCase();
+    if (
+      family.includes('noto sans sc')
+      || family.includes('noto sans cjk')
+      || family.includes('source han sans')
+    ) return 1.448;
+    return 1.2;
+  }
+
+  function upgradeImportedLineMetrics(page) {
+    if (String(page.attributes && page.attributes['data-font-metric-scale'] || '')) return;
+    const scale = importedFontMetricScale(page);
+    const defaultFontSize = pointNumber(page.style && page.style['font-size']);
+
+    function visit(node) {
+      if (!node || node.type !== 'element') return;
+      if (['h1', 'h2', 'p'].includes(node.tag)) {
+        const lineHeight = Number(node.style && node.style['line-height']);
+        if (Number.isFinite(lineHeight) && lineHeight > 0) {
+          const childFontSizes = (node.children || [])
+            .filter((child) => child && child.type === 'element')
+            .map((child) => pointNumber(child.style && child.style['font-size']))
+            .filter((value) => value > 0);
+          const ownFontSize = pointNumber(node.style && node.style['font-size']);
+          const fontSize = ownFontSize || (
+            childFontSizes.length ? Math.max(...childFontSizes) : defaultFontSize
+          );
+          if (fontSize) {
+            node.style['line-height'] = `${
+              Number((lineHeight * fontSize * scale).toFixed(2))
+            }pt`;
+          }
+        }
+      }
+      (node.children || []).forEach(visit);
+    }
+
+    visit(page);
+    page.attributes = {
+      ...(page.attributes || {}),
+      'data-font-metric-scale': String(scale),
+    };
+  }
+
+  /**
+   * document-recognition-v2 初版把 Word 的 pt 逻辑值写成了 px，且页面宽度使用 100%。
+   * 在读取旧草稿时升级为固定 pt 画布，再由前端对整页统一缩放。
+   */
+  function upgradeImportedNativeUnits(root) {
+    if (!rawHasClass(root, 'imported-native-resume')) return root;
+
+    function convertSubtree(node) {
+      if (!node || node.type !== 'element') return;
+      node.style = pxValuesToPt(node.style || {});
+      (node.children || []).forEach(convertSubtree);
+    }
+
+    function visit(node) {
+      if (!node || node.type !== 'element') return;
+      if (rawHasClass(node, 'imported-document-page')) {
+        if (String(node.attributes && node.attributes['data-layout-unit'] || '') !== 'pt') {
+          const ratio = String(node.style && node.style['aspect-ratio'] || '')
+            .match(/([\d.]+)\s*\/\s*([\d.]+)/);
+          let widthPt = ratio ? Number(ratio[1]) : 595.3;
+          let heightPt = ratio ? Number(ratio[2]) : 841.9;
+          if (widthPt > 2000 || heightPt > 2000) {
+            widthPt /= 20;
+            heightPt /= 20;
+          }
+          widthPt = Number((widthPt || 595.3).toFixed(2));
+          heightPt = Number((heightPt || 841.9).toFixed(2));
+          const padding = paddingTokens(node.style && node.style.padding);
+          convertSubtree(node);
+          node.attributes = {
+            ...(node.attributes || {}),
+            'data-layout-unit': 'pt',
+            'data-page-width-pt': String(widthPt),
+            'data-page-height-pt': String(heightPt),
+          };
+          node.style.width = `${widthPt}pt`;
+          node.style['min-height'] = `${heightPt}pt`;
+          node.style['aspect-ratio'] = `${widthPt} / ${heightPt}`;
+          node.style['margin-top'] = '0';
+          if (padding.length) {
+            node.style.padding = [
+              percentLengthToPt(padding[0], heightPt),
+              percentLengthToPt(padding[1], widthPt),
+              percentLengthToPt(padding[2], heightPt),
+              percentLengthToPt(padding[3], widthPt),
+            ].join(' ');
+          }
+        }
+        upgradeImportedLineMetrics(node);
+        return;
+      }
+      (node.children || []).forEach(visit);
+    }
+
+    visit(root);
+    return root;
+  }
+
   function normalizeDocument(input, options) {
     const source = input && input.root ? input : { version: VERSION, root: input };
     let nodeCount = 0;
@@ -305,16 +446,405 @@
       return normalized;
     }
 
-    const root = normalizeNode(source.root || elementNode('resume-root', 'article'), 0);
+    const root = upgradeImportedNativeUnits(
+      normalizeNode(source.root || elementNode('resume-root', 'article'), 0),
+    );
     if (root.type !== 'element') throw new Error('DOM 文档根节点必须是元素');
     return { version: VERSION, root };
   }
 
+  function rawFindNode(node, nodeId) {
+    if (!node) return null;
+    if (node.id === nodeId) return node;
+    for (const child of node.children || []) {
+      const found = rawFindNode(child, nodeId);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function hasImportedPages(documentValue) {
+    let found = false;
+    const document = normalizeDocument(documentValue);
+    (function visit(node) {
+      if (found || !node || node.type !== 'element') return;
+      if (rawHasClass(node, 'imported-document-page')) {
+        found = true;
+        return;
+      }
+      (node.children || []).forEach(visit);
+    })(document.root);
+    return found;
+  }
+
+  function editableNodes(documentValue) {
+    const document = normalizeDocument(documentValue);
+    const result = [];
+    (function visit(node, pageId) {
+      if (!node || node.type !== 'element') return;
+      const nextPageId = rawHasClass(node, 'imported-document-page') ? node.id : pageId;
+      if (node.editable) {
+        result.push({ node, page_id: nextPageId || null });
+        return;
+      }
+      (node.children || []).forEach((child) => visit(child, nextPageId));
+    })(document.root, null);
+    return result;
+  }
+
+  function extractContentDocument(documentValue) {
+    const document = normalizeDocument(documentValue);
+    if (!hasImportedPages(document)) return document;
+    const groups = new Map();
+    editableNodes(document).forEach(({ node, page_id: pageId }) => {
+      const groupId = pageId || 'main';
+      if (!groups.has(groupId)) groups.set(groupId, []);
+      const tag = /^h[1-6]$/.test(node.tag || '') ? node.tag : 'p';
+      groups.get(groupId).push(elementNode(
+        node.id,
+        tag,
+        { class: 'editable' },
+        [],
+        {
+          text: exportNodeText(node),
+          editable: true,
+          label: node.label || '正文',
+          binding: node.binding ? clone(node.binding) : null,
+        },
+      ));
+    });
+    const sections = Array.from(groups.entries()).map(([pageId, children], index) =>
+      elementNode(
+        `content-${cleanId(pageId, `page-${index + 1}`)}`,
+        'section',
+        { class: 'resume-section' },
+        children,
+        { label: `第 ${index + 1} 页内容` },
+      ));
+    return normalizeDocument({
+      version: VERSION,
+      root: elementNode(
+        'resume-root',
+        'article',
+        { class: 'resume-dom-root resume-content-document' },
+        sections,
+      ),
+    }, { dedupeIds: true });
+  }
+
+  function collectTextCarriers(node, result) {
+    if (!node) return result;
+    if (node.type === 'text') {
+      result.push({ node_id: node.id, field: 'value', length: String(node.value || '').length });
+      return result;
+    }
+    if (node.text !== undefined) {
+      result.push({ node_id: node.id, field: 'text', length: String(node.text || '').length });
+    }
+    (node.children || []).forEach((child) => collectTextCarriers(child, result));
+    return result;
+  }
+
+  function createTemplateDocument(documentValue) {
+    const source = normalizeDocument(documentValue);
+    if (!hasImportedPages(source)) return null;
+    const result = clone(source);
+    (function blank(node, insideSlot) {
+      if (!node) return;
+      const isSlot = node.type === 'element' && node.editable;
+      const nextInsideSlot = insideSlot || isSlot;
+      if (isSlot) {
+        node.attributes = {
+          ...(node.attributes || {}),
+          'data-template-slot': node.id,
+        };
+        delete node.binding;
+      }
+      if (nextInsideSlot) {
+        if (node.type === 'text') node.value = '';
+        else if (node.text !== undefined) node.text = '';
+      }
+      (node.children || []).forEach((child) => blank(child, nextInsideSlot));
+    })(result.root, false);
+    return normalizeDocument(result);
+  }
+
+  function createLayoutBindings(contentDocument, renderedDocument, templateDocument) {
+    const content = normalizeDocument(contentDocument);
+    const rendered = normalizeDocument(renderedDocument || content);
+    const template = templateDocument ? normalizeDocument(templateDocument) : null;
+    const items = [];
+    const contentEntries = editableNodes(content);
+    contentEntries.forEach(({ node }, index) => {
+      const renderedNode = rawFindNode(rendered.root, node.id);
+      const templateNode = template && rawFindNode(template.root, node.id);
+      items.push({
+        content_node_id: node.id,
+        template_node_id: templateNode ? templateNode.id : null,
+        region_id: templateNode ? 'imported-page' : 'main',
+        order: index,
+        segments: renderedNode ? collectTextCarriers(renderedNode, []) : [],
+      });
+    });
+    return { version: BINDINGS_VERSION, items };
+  }
+
+  function alignLayoutBindings(contentDocument, templateDocument, blueprint) {
+    const contentEntries = editableNodes(contentDocument);
+    const template = templateDocument ? normalizeDocument(templateDocument) : null;
+    const slots = blueprint && Array.isArray(blueprint.items)
+      ? blueprint.items
+          .filter((item) => item && item.template_node_id)
+          .slice()
+          .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
+      : [];
+    if (!template || !slots.length) {
+      return createLayoutBindings(contentDocument, contentDocument, templateDocument);
+    }
+
+    const usedSlots = new Set();
+    const items = [];
+    const unmatched = [];
+    contentEntries.forEach(({ node }, index) => {
+      const exact = slots.find(
+        (slot) =>
+          !usedSlots.has(slot.template_node_id)
+          && slot.content_node_id === node.id
+          && rawFindNode(template.root, slot.template_node_id),
+      );
+      if (!exact) {
+        unmatched.push({ node, index });
+        return;
+      }
+      usedSlots.add(exact.template_node_id);
+      items.push({
+        ...clone(exact),
+        content_node_id: node.id,
+        order: index,
+      });
+    });
+
+    const remainingSlots = slots.filter(
+      (slot) =>
+        !usedSlots.has(slot.template_node_id)
+        && rawFindNode(template.root, slot.template_node_id),
+    );
+    unmatched.forEach(({ node, index }, unmatchedIndex) => {
+      const slot = remainingSlots[unmatchedIndex];
+      items.push(slot
+        ? {
+            ...clone(slot),
+            content_node_id: node.id,
+            order: index,
+          }
+        : {
+            content_node_id: node.id,
+            template_node_id: null,
+            region_id: 'main',
+            order: index,
+            segments: [],
+          });
+    });
+    items.sort((left, right) => left.order - right.order);
+    return { version: BINDINGS_VERSION, items };
+  }
+
+  function applyTextToTemplateSlot(templateRoot, binding, text) {
+    const slot = rawFindNode(templateRoot, binding.template_node_id);
+    if (!slot) return false;
+    const segments = Array.isArray(binding.segments) ? binding.segments : [];
+    if (!segments.length) {
+      slot.text = text;
+      slot.children = [];
+      return true;
+    }
+    let offset = 0;
+    segments.forEach((segment, index) => {
+      const carrier = rawFindNode(templateRoot, segment.node_id);
+      if (!carrier) return;
+      const remaining = text.length - offset;
+      const count = index === segments.length - 1
+        ? Math.max(0, remaining)
+        : Math.max(0, Math.min(remaining, Number(segment.length || 0)));
+      const value = text.slice(offset, offset + count);
+      if (segment.field === 'value' && carrier.type === 'text') carrier.value = value;
+      else if (carrier.type === 'element') carrier.text = value;
+      offset += count;
+    });
+    if (offset < text.length) {
+      const last = segments[segments.length - 1];
+      const carrier = last && rawFindNode(templateRoot, last.node_id);
+      if (carrier) {
+        if (last.field === 'value' && carrier.type === 'text') carrier.value += text.slice(offset);
+        else if (carrier.type === 'element') carrier.text = String(carrier.text || '') + text.slice(offset);
+      }
+    }
+    return true;
+  }
+
+  function composeAggregateDocument(resume) {
+    const content = normalizeDocument(resume.content_document);
+    const templateDocument = resume.template_document && resume.template_document.document;
+    if (!templateDocument) return content;
+    const rendered = clone(normalizeDocument(templateDocument));
+    const bindings = resume.layout_bindings && Array.isArray(resume.layout_bindings.items)
+      ? resume.layout_bindings.items
+      : [];
+    const mapped = new Set();
+    bindings.forEach((binding) => {
+      if (!binding || !binding.content_node_id || !binding.template_node_id) return;
+      const contentNode = rawFindNode(content.root, binding.content_node_id);
+      if (!contentNode) return;
+      if (applyTextToTemplateSlot(rendered.root, binding, exportNodeText(contentNode))) {
+        mapped.add(binding.content_node_id);
+      }
+    });
+    const unmapped = editableNodes(content)
+      .map((entry) => entry.node)
+      .filter((node) => !mapped.has(node.id));
+    if (unmapped.length) {
+      rendered.root.children.push(elementNode(
+        'resume-unmapped-content',
+        'section',
+        { class: 'resume-section imported-unmapped-content' },
+        unmapped.map((node) => clone(node)),
+        { label: '补充内容' },
+      ));
+    }
+    return normalizeDocument(rendered, { dedupeIds: true });
+  }
+
+  function templateParts(template) {
+    const source = template && typeof template === 'object' ? template : {};
+    const schema = clone(source.schema || source);
+    return {
+      template_version_id: source.template_version_id || null,
+      schema,
+      document: schema.document_template ? normalizeDocument(schema.document_template) : null,
+      binding_blueprint: schema.binding_blueprint
+        && Array.isArray(schema.binding_blueprint.items)
+        ? clone(schema.binding_blueprint)
+        : null,
+    };
+  }
+
+  function createResumeAggregate(resume, template) {
+    const result = clone(resume && typeof resume === 'object' ? resume : {});
+    const rendered = result.dom_document && result.dom_document.root
+      ? normalizeDocument(result.dom_document)
+      : legacyResumeToDom(result);
+    const parts = templateParts(template || result.template_document || {});
+    const content = result.content_document && result.content_document.root
+      ? normalizeDocument(result.content_document)
+      : extractContentDocument(rendered);
+    const documentTemplate = parts.document || createTemplateDocument(rendered);
+    const bindings = parts.binding_blueprint
+      ? alignLayoutBindings(content, documentTemplate, parts.binding_blueprint)
+      : createLayoutBindings(content, rendered, documentTemplate);
+    result.resume_model_version = AGGREGATE_VERSION;
+    result.content_document = content;
+    result.template_document = {
+      version: TEMPLATE_DOCUMENT_VERSION,
+      template_version_id: parts.template_version_id
+        || (result.template_document && result.template_document.template_version_id)
+        || null,
+      schema: parts.schema,
+      document: documentTemplate,
+    };
+    result.layout_bindings = bindings;
+    result.dom_document = composeAggregateDocument(result);
+    return result;
+  }
+
+  function applyTemplate(resume, template) {
+    const current = resume && resume.content_document
+      ? createResumeAggregate(resume, resume.template_document)
+      : createResumeAggregate(resume, null);
+    const parts = templateParts(template);
+    const documentTemplate = parts.document;
+    current.template_document = {
+      version: TEMPLATE_DOCUMENT_VERSION,
+      template_version_id: parts.template_version_id,
+      schema: parts.schema,
+      document: documentTemplate,
+    };
+    current.layout_bindings = parts.binding_blueprint
+      ? alignLayoutBindings(
+          current.content_document,
+          documentTemplate,
+          parts.binding_blueprint,
+        )
+      : createLayoutBindings(
+          current.content_document,
+          current.content_document,
+          documentTemplate,
+        );
+    current.layout_hints = {
+      ...(current.layout_hints || {}),
+      layout: parts.schema.layout || 'classic',
+      max_pages: parts.schema.page && parts.schema.page.max_pages || 2,
+    };
+    current.dom_document = composeAggregateDocument(current);
+    return current;
+  }
+
   function ensureDocument(resume) {
+    if (resume && resume.resume_document && resume.resume_document.root) {
+      return normalizeDocument(resume.resume_document);
+    }
+    if (resume && resume.schema_version === RESUME_DOCUMENT_VERSION && resume.root) {
+      return normalizeDocument(resume);
+    }
+    if (resume && resume.content_document && resume.template_document && resume.layout_bindings) {
+      return composeAggregateDocument(resume);
+    }
     if (resume && resume.dom_document && resume.dom_document.root) {
       return normalizeDocument(resume.dom_document);
     }
     return legacyResumeToDom(resume || {});
+  }
+
+  function plainObject(value, fallback) {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? clone(value)
+      : clone(fallback);
+  }
+
+  /**
+   * 当前唯一持久化模型。旧字段只参与读取，输出不再包含模板、槽位绑定或 legacy 正文字段。
+   */
+  function toResumeDocument(resume) {
+    const source = resume && resume.resume_document
+      ? resume.resume_document
+      : (resume && typeof resume === 'object' ? resume : {});
+    const document = ensureDocument(resume || {});
+    const legacyLayout = source.layout_hints && typeof source.layout_hints === 'object'
+      ? source.layout_hints
+      : {};
+    return {
+      schema_version: RESUME_DOCUMENT_VERSION,
+      root: document.root,
+      page_setup: plainObject(source.page_setup, {
+        size: 'A4',
+        orientation: 'portrait',
+        margins: {},
+        max_pages: legacyLayout.max_pages || null,
+      }),
+      styles: plainObject(source.styles, {}),
+      assets: Array.isArray(source.assets) ? clone(source.assets).slice(0, 500) : [],
+      annotations: Array.isArray(source.annotations)
+        ? clone(source.annotations).slice(0, 5000)
+        : [],
+    };
+  }
+
+  function applyDocumentOperations(resumeDocument, operations, options) {
+    const before = toResumeDocument(resumeDocument);
+    const changed = applyOperations(before, operations, options);
+    return toResumeDocument({
+      ...before,
+      root: changed.root,
+    });
   }
 
   function attachDocument(resume) {
@@ -379,6 +909,25 @@
   function syncLegacyBindings(resume, documentValue) {
     const result = clone(resume || {});
     const document = normalizeDocument(documentValue);
+    if (
+      result.content_document
+      && result.layout_bindings
+      && Array.isArray(result.layout_bindings.items)
+    ) {
+      const content = normalizeDocument(result.content_document);
+      result.layout_bindings.items.forEach((layoutBinding) => {
+        if (!layoutBinding || !layoutBinding.content_node_id) return;
+        const renderedNode = rawFindNode(
+          document.root,
+          layoutBinding.template_node_id || layoutBinding.content_node_id,
+        );
+        const contentNode = rawFindNode(content.root, layoutBinding.content_node_id);
+        if (!renderedNode || !contentNode) return;
+        contentNode.text = exportNodeText(renderedNode);
+        contentNode.children = [];
+      });
+      result.content_document = normalizeDocument(content);
+    }
     walk(document, (node) => {
       const binding = node.binding;
       if (!binding) return;
@@ -413,7 +962,9 @@
         });
       }
     });
-    result.dom_document = document;
+    result.dom_document = result.content_document
+      ? composeAggregateDocument(result)
+      : document;
     return result;
   }
 
@@ -435,6 +986,22 @@
         if (!found) throw new Error(`DOM 节点不存在：${targetId}`);
         if (found.node.type === 'text') found.node.value = String(operation.text == null ? '' : operation.text);
         else {
+          if (
+            operation.replace_children === true
+            || String(found.node.attributes && found.node.attributes['data-rich-text'] || '') === 'true'
+          ) {
+            found.node.children = [];
+            if (found.node.attributes) {
+              delete found.node.attributes['data-rich-text'];
+              if (found.node.attributes['data-rich-layout']) {
+                delete found.node.attributes['data-rich-layout'];
+                delete found.node.style.display;
+                delete found.node.style['grid-template-columns'];
+                delete found.node.style['column-gap'];
+                delete found.node.style['align-items'];
+              }
+            }
+          }
           found.node.text = String(operation.text == null ? '' : operation.text);
         }
         document = normalizeDocument(found.document);
@@ -759,6 +1326,46 @@
       }
     }
 
+    function tableBlock(node) {
+      const rowNodes = [];
+      function collectRows(current) {
+        if (!current || current.type !== 'element') return;
+        if (current.tag === 'tr') {
+          rowNodes.push(current);
+          return;
+        }
+        (current.children || []).forEach(collectRows);
+      }
+      (node.children || []).forEach(collectRows);
+      const rows = rowNodes.map((row) => ({
+        node_id: row.id,
+        cells: (row.children || [])
+          .filter((cell) => cell.type === 'element' && ['td', 'th'].includes(cell.tag))
+          .map((cell) => {
+            const lines = (cell.children || [])
+              .filter((child) => !isEditorOnly(child))
+              .map((child) => exportNodeText(child).trim())
+              .filter(Boolean);
+            return {
+              node_id: cell.id,
+              text: lines.join('\n') || exportNodeText(cell).trim(),
+              lines,
+              colspan: Math.max(1, Number(cell.attributes && cell.attributes.colspan || 1)),
+              rowspan: Math.max(1, Number(cell.attributes && cell.attributes.rowspan || 1)),
+              style: clone(cell.style || {}),
+            };
+          }),
+      })).filter((row) => row.cells.length);
+      if (rows.length) {
+        output.blocks.push({
+          type: 'table',
+          node_id: node.id,
+          rows,
+          style: clone(node.style || {}),
+        });
+      }
+    }
+
     function visit(node, context) {
       if (!node || isEditorOnly(node)) return;
       if (node.type === 'text') {
@@ -781,6 +1388,10 @@
       if (node.tag === 'img') {
         const alt = String(node.attributes && node.attributes.alt || '').trim();
         if (alt) output.blocks.push({ type: 'paragraph', text: alt, node_id: node.id });
+        return;
+      }
+      if (node.tag === 'table') {
+        tableBlock(node);
         return;
       }
       if (hasClass(node, 'resume-row') || node.tag === 'tr') {
@@ -921,10 +1532,23 @@
 
   return {
     VERSION,
+    RESUME_DOCUMENT_VERSION,
+    AGGREGATE_VERSION,
+    TEMPLATE_DOCUMENT_VERSION,
+    BINDINGS_VERSION,
     ALLOWED_TAGS,
     normalizeDocument,
     ensureDocument,
+    toResumeDocument,
+    applyDocumentOperations,
     attachDocument,
+    createResumeAggregate,
+    applyTemplate,
+    extractContentDocument,
+    createTemplateDocument,
+    createLayoutBindings,
+    alignLayoutBindings,
+    composeAggregateDocument,
     legacyResumeToDom,
     findNode,
     nodeText,

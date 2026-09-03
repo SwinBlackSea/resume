@@ -1,8 +1,8 @@
 {
   "name": "resume-planet",
-  "version": "1.4.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "简历星球 · AI Native 简历工作台（PRD v1.4 / TECH v1.4）",
+  "description": "简历星球 · AI Native 简历工作台（PRD v2.1 / TECH v2.1）",
   "type": "commonjs",
   "engines": {
     "node": ">=22.5"
@@ -14,9 +14,15 @@
     "test:ai": "node --test tests/ai-behavior.test.js",
     "test:policy": "node --test tests/policy.test.js",
     "test:parity": "node --test tests/prototype-parity.test.js",
+    "setup:document-recognition": "python3 -m venv .runtime/document-recognition/venv && .runtime/document-recognition/venv/bin/python -m pip install -r server/lib/document-recognition/requirements.txt",
     "start:rule": "node server/index.js"
   },
   "devDependencies": {
     "jsdom": "^26.0.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.1",
+    "sharp": "^0.35.4",
+    "yauzl": "^3.4.0"
   }
 }

@@ -19,14 +19,12 @@ const resumeHarness = require('../server/lib/resume-harness');
 resumeHarness.setModelClientForTests(require('./fakes/resume-model-client'));
 
 const db = require('../server/lib/db');
-const { ensureSystemTemplates } = require('../server/lib/templates');
 const { seedIfEmpty } = require('../server/lib/seed');
 const { createServer } = require('../server/index');
 const queue = require('../server/lib/queue');
 
 /** 初始化数据并启动服务（随机端口）。 */
 function boot({ seed = true } = {}) {
-  ensureSystemTemplates();
   if (seed) seedIfEmpty();
   const server = createServer();
   return new Promise((resolve) => {

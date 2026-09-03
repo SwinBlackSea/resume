@@ -265,7 +265,7 @@ function summarizeOperations(operations) {
 
 function normalizeRewriteProposal({ action, currentText, editingBase, scopeType, scopeId, draft, task, userTexts }) {
   const raw = (action.payload && action.payload.proposal) || action.payload || {};
-  const currentResume = ResumeDom.attachDocument(parseJson(draft.resume_json, {}));
+  const currentResume = ResumeDom.toResumeDocument(parseJson(draft.resume_json, {}));
   let operations = Array.isArray(raw.operations) ? deepClone(raw.operations) : [];
   let replacementResume = null;
   let suggestion = String(raw.suggestion || '').trim();
@@ -274,7 +274,7 @@ function normalizeRewriteProposal({ action, currentText, editingBase, scopeType,
     if (!suggestion) throw problem.unprocessable('INVALID_MODEL_ACTION', '模型没有返回可应用的修改内容');
     operations = [{ op: 'replace_text', node_id: scopeId, text: suggestion }];
     try {
-      ResumeDom.applyOperations(currentResume.dom_document, operations, {
+      ResumeDom.applyOperations(currentResume, operations, {
         lockedNodeId: scopeId,
         allowStructure: false,
       });
@@ -283,23 +283,20 @@ function normalizeRewriteProposal({ action, currentText, editingBase, scopeType,
     }
   } else if (operations.length) {
     try {
-      ResumeDom.applyOperations(currentResume.dom_document, operations, { allowStructure: true });
+      ResumeDom.applyOperations(currentResume, operations, { allowStructure: true });
     } catch (error) {
       throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
     }
     if (!suggestion) suggestion = summarizeOperations(operations);
   } else if (raw.resume_dom && typeof raw.resume_dom === 'object') {
     try {
-      replacementResume = ResumeDom.syncLegacyBindings(
-        currentResume,
-        ResumeDom.normalizeDocument(raw.resume_dom),
-      );
+      replacementResume = ResumeDom.toResumeDocument(raw.resume_dom);
     } catch (error) {
       throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
     }
     if (!suggestion) suggestion = '更新整份简历的内容与结构';
   } else if (raw.resume_json && typeof raw.resume_json === 'object') {
-    replacementResume = ResumeDom.attachDocument(raw.resume_json);
+    replacementResume = ResumeDom.toResumeDocument(raw.resume_json);
     if (!suggestion) suggestion = '更新整份简历的内容与结构';
   } else {
     throw problem.unprocessable('INVALID_MODEL_ACTION', '模型没有返回 DOM 操作或结构化简历');
@@ -637,7 +634,7 @@ function applyRewriteProposal({ user, project, draft, action, requestId, ipHash 
   return db.tx(() => {
     const stored = parseJson(action.payload_json, {});
     const payload = stored.proposal || stored;
-    const resume = ResumeDom.attachDocument(parseJson(draft.resume_json, {}));
+    const resume = ResumeDom.toResumeDocument(parseJson(draft.resume_json, {}));
     const before = { resume_json: deepClone(resume) };
     let nextResume;
     if (payload.scope_type === 'RESUME_BLOCK') {
@@ -646,22 +643,20 @@ function applyRewriteProposal({ user, project, draft, action, requestId, ipHash 
       if (textHash(found.text) !== payload.base_target_hash) {
         throw problem.conflict('REVISION_CONFLICT', '这段内容已经变化，请重新生成建议');
       }
-      const document = ResumeDom.applyOperations(
-        resume.dom_document,
+      nextResume = ResumeDom.applyDocumentOperations(
+        resume,
         payload.operations && payload.operations.length
           ? payload.operations
           : [{ op: 'replace_text', node_id: payload.scope_id, text: payload.suggestion }],
         { lockedNodeId: payload.scope_id, allowStructure: false },
       );
-      nextResume = ResumeDom.syncLegacyBindings(resume, document);
     } else {
       if (payload.operations && payload.operations.length) {
-        const document = ResumeDom.applyOperations(resume.dom_document, payload.operations, {
+        nextResume = ResumeDom.applyDocumentOperations(resume, payload.operations, {
           allowStructure: true,
         });
-        nextResume = ResumeDom.syncLegacyBindings(resume, document);
       } else if (payload.resume_json && typeof payload.resume_json === 'object') {
-        nextResume = ResumeDom.attachDocument(payload.resume_json);
+        nextResume = ResumeDom.toResumeDocument(payload.resume_json);
       } else {
         throw problem.unprocessable('INVALID_PROPOSAL', '整份简历建议缺少 DOM 操作');
       }

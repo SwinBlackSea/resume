@@ -3,6 +3,9 @@
 
 # 运行时数据（SQLite 与对象存储，启动自动生成）
 data/
+.runtime/
+__pycache__/
+*.pyc
 
 # 依赖（仅测试用 jsdom）
 node_modules/

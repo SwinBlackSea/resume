@@ -1,7 +1,8 @@
 'use strict';
 /**
  * 原型结构一致性测试。
- * v1.3 已按最新 PRD 移除“来源/待确认事实/资料到正文使用关系”，
+ * v2.1 已按最新 PRD 移除“来源/待确认事实/资料到正文使用关系”，
+ * 当前简历改为一份可由用户直接编辑、也可由 AI 修改的完整文档，
  * 因此只比对仍然有效的布局、正文和稳定交互，不再要求旧业务文案逐字相同。
  * 做法：分别解析「原型静态 DOM」与「前端加载真实数据后渲染的 DOM」，
  * 对关键区域生成结构签名（标签 + id + class + 文本）并逐项比对。
@@ -178,10 +179,12 @@ test('岗位浮层：覆盖情况与要求条目一致', () => {
   );
 });
 
-test('模板选择与历史版本入口一致', () => {
-  assert.deepStrictEqual(
-    texts(app, '#template-button'),
-    texts(proto, '#template-button'),
+test('直接编辑动作保持原型位置，历史版本入口一致', () => {
+  assert.deepStrictEqual(texts(app, '#edit-document-button'), ['直接编辑']);
+  assert.strictEqual(
+    signature(app.querySelector('#edit-document-button')),
+    signature(proto.querySelector('#edit-document-button')),
+    '直接编辑按钮必须保持原型位置和结构',
   );
   assert.deepStrictEqual(
     texts(app, '.top-actions .history-open'),
@@ -226,6 +229,24 @@ test('历史版本列表：保留原型内容并补充明确版本状态', () =>
   );
   assert.strictEqual(texts(app, '#history-list .current-version').length, 1);
   assert.match(texts(app, '#history-list .current-version')[0], /当前草稿|草稿基于此版/);
+  const rows = app.querySelectorAll('#history-list .version-row');
+  const thumbnails = app.querySelectorAll('#history-list .version-thumb img');
+  assert.strictEqual(thumbnails.length, rows.length, '每个历史版本都应提供真实缩略图');
+  assert.strictEqual(
+    new Set(Array.from(thumbnails).map((image) => image.getAttribute('src'))).size,
+    rows.length,
+    '每个历史版本必须使用自己的缩略图地址',
+  );
+  assert.match(
+    APP_HTML,
+    /toApiUrl\(v\.thumbnail_url\)/,
+    '缩略图地址必须适配网关子目录，不能固定请求站点根路径',
+  );
+  assert.match(
+    APP_HTML,
+    /api\('\/projects\/'\+PROJECT_ID\+'\/versions'\)/,
+    '每次打开历史版本都必须重新读取列表，不能一直显示页面启动时的缓存',
+  );
 });
 
 test('历史详情与比较复用完整 Resume DOM，并提供安全继续选项', async () => {
@@ -250,8 +271,10 @@ test('历史详情与比较复用完整 Resume DOM，并提供安全继续选项
   assert.ok(app.querySelector('#restore-version-modal').classList.contains('show'));
   assert.strictEqual(
     app.querySelectorAll('#restore-version-modal input[name="restore-scope"]').length,
-    2,
+    0,
   );
+  assert.match(app.querySelector('#restore-version-modal').textContent, /完整简历/);
+  assert.match(app.querySelector('#restore-version-modal').textContent, /当前岗位和个人资料/);
   app.querySelector('#cancel-restore-version').click();
 });
 

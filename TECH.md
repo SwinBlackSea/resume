@@ -1,26 +1,64 @@
 # 简历星球 TECH
 
-- 版本：v1.4
-- 日期：2026-09-01
+- 版本：v2.1
+- 日期：2026-09-03
 - 对应产品文档：[PRD.md](./PRD.md)
 - 对应交互原型：[index.prototype.backup.html](./index.prototype.backup.html)
 - 系统提示词协议：[SYSTEM_PROMPT.md](./SYSTEM_PROMPT.md)
 - AI 行为验收集：[AI_BEHAVIOR_TESTS.md](./AI_BEHAVIOR_TESTS.md)
 
+## 变更记录
+
+### 当前生效版本
+
+| 日期 | 版本 | 核心变更 |
+|---|---|---|
+| 2026-09-03 | v2.1 | 单一 ResumeDocument 成为编辑与渲染事实；加入 Word 式直接编辑事务；导入只识别一次；移除模板、预设和槽位绑定 |
+
+### 历史技术决策
+
+以下内容仅用于追溯，不作为当前实现依据：
+
+| 日期 | 版本 | 当时的核心变更 |
+|---|---|---|
+| 2026-09-02 | v1.9 | 文档导入应用事务固定同时持久化 Resume DOM 与隐藏导入模板；新增模板收藏状态和切换前历史/收藏确认 |
+| 2026-09-02 | v2.0 | 简历持久化采用正文、排版结构和渲染绑定三部分；文件导入创建内部排版版本 |
+| 2026-09-02 | v1.8 | 文档识别 v3 引入 Page Scene：统一视觉背景层、坐标文字层和安全 Resume DOM 渲染，复杂 Word 不再由 Web 逐项复刻版式 |
+| 2026-09-02 | v1.7 | 文档识别 v2 保留 DOCX 原生分页、表格和直接样式，PDF/图片生成坐标化 Resume DOM；HTML 完整保留 DOM，PDF/DOCX 保留表格结构 |
+| 2026-09-02 | v1.6 | 文档识别服务增加 PNG/JPG/WEBP、独立子进程客户端、PaddleOCR CPU 适配器、识别任务接口与四种应用事务 |
+| 2026-09-02 | v1.5 | 新增独立 Document Recognition Service、统一导入接口与数据模型、三种格式处理链路、质量门槛、跨模板双模式比较和实施分期 |
+| 2026-09-01 | v1.4 | 建立 Resume Harness、DeepSeek Client、动态 Resume DOM、草稿事件和不可变版本技术方案 |
+
+正文只描述当前目标架构；历史实现差异以本表和 Git 记录为准，废弃方案不得继续作为实现依据。
+
+### v2.1 技术不变量
+
+- 当前简历只有一个事实对象 `ResumeDocument`，统一包含内容、页面结构、样式、资源和可选语义标记；
+- `content_document`、`template_document` 和 `layout_bindings` 仅作为 v2.0 旧数据兼容输入，不得用于新写入；
+- 文件导入应用必须是单一事务，并且幂等地创建一个 `kind=imported` 历史版本；
+- 文件识别只发生在外部文件进入系统时，直接编辑和 AI 协作之间切换不得重新识别；
+- 直接编辑和已应用的 AI 修改使用同一文档事务、revision、自动保存和撤销机制；
+- 不建立模板、模板版本、排版预设或正文到模板槽位的绑定对象；
+- 资料、简历、岗位和对话没有内容归因或自动同步关系。
+
 ## 1. 技术目标
 
-系统需要稳定完成“可选资料 + 当前正文 + 用户沟通 + 模板与岗位 → 可编辑草稿 → AI 生成 → PDF/DOCX → 不可变版本”的闭环，并满足以下约束：
+系统需要稳定完成“可选资料 + 当前简历 + 用户沟通 + 岗位 → 可编辑草稿 → AI 生成 → PDF/DOCX → 不可变版本”的闭环，并满足以下约束：
 
-- 编辑体验低延迟，自动保存可恢复；
+- 提供接近 Word 的低延迟直接编辑，自动保存可恢复；
+- 文本、结构、样式和页面操作均转换为可验证、可撤销的文档事务；
 - 上传文件安全、可管理、可过期清理；
-- OCR、模板解析、AI 生成和文档渲染异步执行；
+- OCR、文件识别、AI 生成和文档渲染异步执行；
+- PDF、DOCX、DOC、PNG、JPG、WEBP 由独立文档识别进程解析，不阻塞 API 进程；
 - AI 写动作结构化、可验证且不直接操作文档；自然语言回答无需套入固定意图流程；
-- 草稿修改可恢复但不污染历史；用户主动保存和成功生成均创建不可变版本；
+- 草稿修改可恢复但不污染历史；用户主动保存、成功生成和确认应用完整文件导入均按规则创建不可变版本；
 - 每次生成输入一致，生成快照与任务一一对应；
 - 用户数据严格隔离，敏感信息加密和脱敏；
 - 任务支持幂等、重试、超时、取消和部分成功。
 
 ## 2. 推荐技术栈
+
+本节描述生产目标选型，不代表当前仓库已迁移到这些框架。当前可运行实现与启动方式以 [README.md](./README.md) 为准，模块协议保持可迁移。
 
 | 层 | 推荐方案 | 说明 |
 |---|---|---|
@@ -32,41 +70,177 @@
 | 缓存/队列 | Redis 7 + BullMQ | 自动保存缓存、限流、异步任务 |
 | 文件存储 | S3 兼容对象存储 | 原始上传、预览图、PDF、DOCX |
 | OCR | 可替换 OCR Provider Adapter | 首选云 OCR，保留本地模型兜底 |
+| 文档识别 | 独立 Document Recognition Service | 原生解析、LibreOffice 转换、页面渲染、OCR/视觉理解和质量校验 |
 | AI | Resume Harness + DeepSeek Client | 应用管理有界会话状态，模型负责语义理解并输出结构化动作 |
-| 文档渲染 | Chromium + DOCX 模板引擎 | HTML/CSS 到 PDF；结构化内容到 DOCX |
+| 文档渲染 | Chromium + DOCX 文档引擎 | ResumeDocument 到 HTML/PDF/DOCX |
 | 可观测性 | OpenTelemetry + Sentry + Prometheus | Trace、错误和业务指标统一 |
-| 部署 | Docker + Kubernetes 或托管容器 | Web/API 与 Worker 独立扩容 |
+| 部署 | 本地/单机使用 PM2 或 systemd | 当前不要求 Docker；生产按规模选择容器化与独立扩容 |
 
-MVP 也可采用单仓库 pnpm workspace：apps/web、apps/api、apps/worker、packages/contracts、packages/resume-schema、packages/template-engine。
+MVP 也可采用单仓库 pnpm workspace：apps/web、apps/api、apps/worker、packages/contracts、packages/resume-document、packages/document-editor。
 
 ## 3. 总体架构
 
-请求链路：
+### 3.1 目标整体架构图
 
-浏览器
-→ Web/BFF
-→ API 服务
-→ PostgreSQL / Redis / 对象存储
+下图以主调用链为中心，从 Web、API Server、Application Server、任务编排、专用服务与 Worker，一直展开到 LLM 等底层能力。PostgreSQL、Redis、对象存储和可观测性作为侧边支撑设施，不占据主调用层级。图中层级是逻辑边界，不要求 MVP 立即拆成独立部署进程。
 
-异步链路：
+![简历星球自上而下整体架构图](./assets/resume-platform-architecture-top-down.svg)
 
-API 服务
-→ BullMQ
-→ OCR Worker / Template Worker / AI Worker / Render Worker
-→ 对象存储
-→ PostgreSQL
-→ WebSocket 或 SSE
-→ 浏览器
+静态 SVG 可在任意支持图片的 Markdown 预览中直接查看；下方保留 Mermaid 源码，便于后续调整模块和链路。
+
+```mermaid
+flowchart TB
+    User["用户"]
+    Web["Web Application<br/>三栏工作区｜浮层｜客户端状态"]
+    API["API Server<br/>路由｜认证授权｜限流｜请求校验｜实时连接"]
+    App["Application Server<br/>领域规则｜revision｜事务｜AI 写入策略｜快照与版本编排"]
+    Orchestrator["任务编排<br/>事务 Outbox｜Redis / BullMQ｜幂等｜重试｜超时｜取消"]
+
+    subgraph Execution["专用服务与 Worker"]
+        Recognition["文档识别服务<br/>PDF / Word / 图片安全解析与完整文档候选"]
+        OCRWorker["OCR / Speech Worker<br/>岗位图片与语音转写"]
+        AIWorker["AI Worker → Resume Harness<br/>Context｜Memory｜Prompt｜Output Schema｜Orchestrator"]
+        RenderWorker["Render Worker<br/>HTML｜PDF｜DOCX｜质量检查"]
+    end
+
+    subgraph Runtime["适配器、模型与基础执行能力"]
+        ModelClient["Model Client Adapter<br/>DeepSeek Client｜SSE Decoder｜JSON Extractor"]
+        LLM["LLM Provider"]
+        OCRProvider["OCR / Speech Provider"]
+        DocumentRuntime["Chromium / LibreOffice"]
+    end
+
+    subgraph SharedCore["共享核心组件"]
+        ResumeDocument["ResumeDocument Engine<br/>编辑事务｜规范化｜比较｜渲染｜导出"]
+        ResumeSchema["Resume Schema / Content Safety"]
+    end
+
+    subgraph Support["侧边支撑设施"]
+        PostgreSQL["PostgreSQL<br/>核心业务事实与状态"]
+        Redis["Redis<br/>队列、锁、限流、短期缓存"]
+        ObjectStore["私有对象存储<br/>原文件、预览和导出产物"]
+        Observability["可观测性<br/>Trace、日志、指标、告警"]
+    end
+
+    User --> Web -->|"REST / SSE / WebSocket"| API --> App
+    App -->|"事务 Outbox"| Orchestrator
+    Orchestrator -.-> Recognition
+    Orchestrator -.-> OCRWorker
+    Orchestrator -.-> AIWorker
+    Orchestrator -.-> RenderWorker
+
+    Recognition --> ModelClient
+    Recognition --> OCRProvider
+    OCRWorker --> OCRProvider
+    AIWorker --> ModelClient --> LLM
+    RenderWorker --> DocumentRuntime
+
+    App --- PostgreSQL
+    Orchestrator --- Redis
+    Web -->|"预签名直传"| ObjectStore
+    Recognition --- ObjectStore
+    RenderWorker --- ObjectStore
+    API --- Observability
+    App --- Observability
+    Web --- ResumeDocument
+    App --- ResumeDocument
+    App --- ResumeSchema
+    Recognition --- ResumeDocument
+    RenderWorker --- ResumeDocument
+```
+
+读图约定和关键边界：
+
+- 主结构严格按 Web → API Server → Application Server → 任务编排 → 专用服务与 Worker → LLM 等底层能力自上而下排列；
+- 实线表示同步请求、受控调用或设施连接，虚线表示经 Outbox 和队列触发的异步任务；
+- PostgreSQL、Redis、对象存储和可观测性位于侧边，只提供数据、文件和运行保障，不作为主调用层级；
+- 左侧资料、中间当前简历、右侧 AI 对话是客户端的三个平级工作区；中间画布直接编辑完整 ResumeDocument；
+- AI、OCR 和文档识别只产生回复、结构化建议或临时候选结果。未经用户“应用修改”“保存到资料”“设为当前岗位”或导入确认，不得改变业务状态；
+- 所有业务写入统一经过 API 鉴权、revision、幂等和目标校验。模型、识别服务和客户端都不能绕过领域服务直接写数据库；
+- 当前草稿和修改事件是可变工作状态；生成快照与历史版本是冻结状态。成功生成通过 finalize 事务创建唯一不可变版本；文件导入应用事务创建唯一 `imported` 版本；失败任务只保留内部诊断；
+- PostgreSQL 保存业务事实与状态，对象存储保存文件，Redis 只承担队列和短期协调，不作为不可恢复的业务事实来源。
+
+### 3.2 核心技术组件分解
+
+整体架构只表达服务层级。`ResumeDocument Engine` 是直接编辑、AI 受控修改、文件导入、历史比较和导出渲染共用的唯一文档协议；旧三部分聚合对象只在兼容层读取。`Resume Harness` 与 `DeepSeek Client` 分离，前者管理业务上下文和输出协议，后者只处理模型供应商通信。
+
+![简历星球核心技术组件分解图](./assets/resume-platform-component-map.svg)
+
+关键依赖方向：
+
+- Web Editor / Renderer → ResumeDocument Engine：直接编辑、导入预览、历史详情和比较复用同一个文档模型；
+- AI Module → Resume Harness → Model Client Interface → DeepSeek Client → DeepSeek LLM；
+- Document Import Module → Recognition Client → Runner / Service → 格式解析器 → Semantic Analyzer → Candidate Builder → Quality Gate；
+- Candidate Builder、直接编辑器、AI 操作和 Render Pipeline 都依赖 ResumeDocument Engine；
+- Render Pipeline 将 ResumeDocument 投影为 HTML、PDF 和 DOCX；
+- Database、Storage、Queue 和 Provider 均通过 Adapter 隔离当前本地实现与生产目标实现。
+
+### 3.3 架构模块索引
+
+| 层级 | 可优化模块 | 内部组件或职责 | 当前实现入口 |
+|---|---|---|---|
+| Web | Workspace Shell | 三栏布局、Dialog、移动端工作区、用户操作入口 | `index.html` |
+| Web | State / API Client | 工作区聚合状态、自动保存、revision、SSE 进度恢复 | `index.html` |
+| Web | Document Editor | 直接编辑、输入法、选择、粘贴、事务合并、自动保存和撤销 | `index.html` + `ResumeDom.Editor` |
+| 共享核心 | ResumeDocument Engine | 完整文档规范化、安全节点、受控操作、旧数据兼容、比较、渲染和导出 | `resume-dom.js` |
+| 共享核心 | Resume Schema / Content Safety | Resume JSON 校验、用户输入一致性检查、生成准备度 | `server/lib/resume-schema.js` |
+| API | API Transport | HTTP 路由、REST、SSE、Problem Details、静态资源 | `server/index.js`、`server/lib/util.js` |
+| Application | Route / Domain Modules | Workspace、Profile、Jobs、Uploads、Document Imports、Draft、AI、Versions、Generations、Artifacts | `server/modules/*.js` |
+| Application | Policy / Control | Auth、Write Policy、Idempotency、Audit、所有权与安全错误 | `server/lib/auth.js`、`policy.js`、`idempotency.js`、`audit.js` |
+| Application | Domain Libraries | Job Analyzer、Compose、Polish、Resume Schema | `server/lib/job-analyzer.js`、`compose.js`、`polish.js` |
+| Orchestration | Outbox / Queue / Event Bus | 事务事件、任务分发、生成 DAG、重试、finalize、SSE 状态 | `server/lib/queue.js`、`events.js` |
+| AI | Resume Harness | Context Builder、Memory Manager、Prompt Registry、Output Schema、Harness Orchestrator | `server/lib/resume-harness/*` |
+| AI | Model Client Interface | Harness 与具体模型供应商之间的 `generate` 契约及测试注入点 | `server/lib/resume-harness/index.js` |
+| AI | DeepSeek Client | HTTP 请求、首次响应/空闲/总超时、取消、SSE 解码、JSON 提取和错误映射 | `server/lib/deepseek-client/*` |
+| 文档识别 | Recognition Process Boundary | 受控客户端、串行化、临时目录、独立子进程和清理 | `server/lib/document-recognition/client.js`、`runner.js` |
+| 文档识别 | Recognition Service | 输入校验、格式路由、解析编排和候选结果汇总 | `service.js`、`constants.js`、`errors.js` |
+| 文档识别 | Format Adapters | PDF/Poppler、DOCX OOXML、DOC/LibreOffice、图片/Sharp、PaddleOCR | `pdf.js`、`docx.js`、`ocr.js`、`command.js` |
+| 文档识别 | Page Scene / Semantic / Quality | 页面视觉层与坐标文字层、AI 阅读顺序与模块理解、ResumeDocument 候选和质量门槛 | `page-scene.js`、`page_scene_runner.py`、`semantic-analyzer.js`、`candidates.js`、`quality.js` |
+| 渲染 | Render Pipeline | ResumeDocument 投影、HTML、PDF、DOCX、TTF 字体、ZIP 和产物登记 | `server/lib/render/*`、`server/modules/artifacts.js` |
+| 基础设施 | Database Adapter | 当前 node:sqlite；生产目标 PostgreSQL | `server/lib/db.js` |
+| 基础设施 | Object Storage Adapter | 当前本地对象目录；生产目标 S3 兼容私有存储 | `server/lib/storage.js` |
+| 基础设施 | Queue Adapter | 当前 DB Outbox + 进程 Worker；生产目标 Redis + BullMQ | `server/lib/queue.js` |
+| 基础设施 | OCR Provider Adapter | 岗位 OCR 与供应商错误归一化 | `server/lib/ocr.js` |
+
+该索引描述稳定职责边界，不要求一个模块对应一个部署进程。优化时应优先保持模块契约稳定，再替换内部实现或部署方式。
+
+### 3.4 主要请求链路
+
+主结构：
+
+用户
+→ Web Application
+→ API Server
+→ Application Server
+→ 任务编排
+→ 文档识别服务 / OCR Worker / AI Worker / Render Worker
+→ LLM、OCR/Speech Provider、Chromium 或 LibreOffice
+
+同步业务链路：
+
+Web → API Server → Application Server → PostgreSQL；处理结果经 API 的 SSE 或 WebSocket 返回 Web。
+
+异步任务链路：
+
+Application Server → 事务 Outbox → Redis / BullMQ → 专用服务或 Worker → PostgreSQL / 对象存储 → API Server → Web。
+
+### 3.5 模块职责
 
 模块职责：
 
 - Web：表单、预览、语音采集、分片上传、任务进度、结果下载；
-- API：认证、授权、业务校验、快照事务、任务编排、签名 URL；
+- API Server：路由、认证授权、限流、请求格式校验、签名 URL 和实时连接，不执行耗时任务；
+- Application Server：领域规则、revision、业务事务、AI 写入策略、快照、版本和任务编排；
+- ResumeDocument Engine：为 Web、AI、导入、历史比较和导出提供统一、安全、稳定 ID 的完整文档协议；
+- Document Editor：把直接输入、粘贴、结构调整和样式修改归并为可撤销文档事务；
+- Resume Harness：组装工作区和锁定范围上下文，管理对话记忆、Prompt、输出 Schema 与模型调用编排；
+- DeepSeek Client：实现 Model Client 契约，封装 DeepSeek HTTP/SSE、超时、取消、JSON 解析和安全错误；
 - Worker：执行耗时或不可信文件处理；
 - PostgreSQL：保存平级资料、对话、可编辑草稿、修改事件、不可变版本、生成快照、任务状态和操作审计；
 - Redis：队列、短期缓存、分布式锁、限流；
 - 对象存储：原始文件、转码文件、缩略图、导出文件；
 - AI/OCR 适配器：屏蔽供应商差异，统一超时和错误码。
+- Document Recognition Service：处理 PDF、DOCX、DOC 和简历图片，输出待确认的完整文档候选，不直接写入资料或草稿。
 
 ## 4. 前端设计
 
@@ -79,16 +253,16 @@ API 服务
 | /projects/:id/versions | 历史版本 |
 | /projects/:id/versions/:versionId | 版本详情与比较 |
 
-个人信息、岗位信息、模板、历史版本和生成进度使用工作区内的居中 Dialog，不通过页面跳转打断当前简历与对话上下文。系统不提供内容来源页，也不在后端维护资料到正文的映射。移动端将左侧资料卡片置于画布上方，右侧 AI 对话改为可关闭浮层；顶栏收起次要按钮后，历史版本入口移动到简历工具栏并继续复用同一浏览器。
+个人信息、岗位信息、历史版本、文档导入和生成进度使用工作区内的 Dialog，不通过页面跳转打断当前简历与对话上下文。系统不提供内容来源页，也不在后端维护资料到正文的映射。文档导入在桌面端并排展示原文件与可编辑重建结果，在移动端切换为上下布局并使用全屏浮层。移动端将左侧资料卡片置于画布上方，右侧 AI 对话改为可关闭浮层；顶栏收起次要按钮后，历史版本和文件导入入口移动到简历工具栏并继续复用相同业务流程。
 
 ### 4.2 状态分层
 
-- 服务端状态：TanStack Query，管理项目、模板、岗位、任务和快照；
+- 服务端状态：TanStack Query，管理项目、当前简历、岗位、任务和历史版本；
 - 表单状态：React Hook Form；
 - 轻量 UI 状态：Zustand，管理当前步骤、抽屉、预览缩放；
 - 临时草稿：IndexedDB，离线保存未同步字段和录音片段；
 - 简历草稿：服务端保存当前 Resume JSON、revision 和 last_versioned_revision；
-- 待成版修改：记录已应用但尚未保存为版本的正文与模板 change events；
+- 待成版修改：记录尚未保存为版本的文档 change events；
 - 任务进度：优先 SSE，断线后使用任务详情接口补状态。
 
 ### 4.3 自动保存
@@ -104,7 +278,7 @@ API 服务
 
 长文本可按字段保存，不整表覆盖，减少冲突。
 
-简历正文或模板每次成功修改后，写入草稿并追加可撤销 change event；不得因此自动创建历史版本。前端仅在存在未成版修改时点亮“保存为版本”。撤销应同时回滚草稿并标记对应事件 reverted。
+直接编辑事务或已应用的 AI 修改每次成功后，写入同一草稿并追加可撤销 change event；不得因此自动创建历史版本。连续输入、输入法组合和连续删除按停顿、焦点和结构边界合并为有意义的事务，不按单个按键写入。前端仅在存在未成版修改时点亮“保存为版本”。撤销应同时回滚草稿并标记对应事件 reverted。
 
 ### 4.4 语音录入
 
@@ -134,7 +308,9 @@ API 服务
 - AuthModule：登录、会话、访问令牌；
 - ProjectModule：项目生命周期；
 - ProfileModule：个人信息与字段修订；
-- TemplateModule：系统模板、自定义模板和版本；
+- ResumeDocumentModule：完整文档校验、事务应用、revision、撤销和兼容迁移；
+- DocumentEditorModule：直接编辑会话、事务归并、粘贴清理和冲突处理；
+- DocumentImportModule：统一文件导入、解析任务、预览、质量门槛和用户应用；
 - UploadModule：预签名上传、扫描、文件元数据；
 - SpeechModule：音频转写任务；
 - JobModule：岗位上传文件、OCR、确认与分析；
@@ -187,17 +363,21 @@ API 服务
 
 所有应用、拒绝和撤销接口必须携带 Idempotency-Key 与 expected_revision，并由 API 根据动作类型重新鉴权和校验。客户端不得直接把模型输出转换为资料、岗位或简历写请求。问答、解释和追问只返回自然语言与空 actions，不创建伪动作。
 
-### 上传、模板和岗位
+### 上传、文档导入和岗位
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | POST | /uploads | 创建上传会话 |
 | POST | /uploads/:id/complete | 完成上传并触发扫描 |
 | DELETE | /uploads/:id | 删除未引用上传 |
-| GET | /templates/system | 获取系统模板 |
-| POST | /templates/custom | 从上传文件创建模板 |
-| GET | /templates/:id/status | 查询解析状态 |
-| PUT | /projects/:id/template | 选择模板版本 |
+| POST | /projects/:id/document-imports | 从已上传的 PDF、DOCX、DOC 或图片创建识别任务 |
+| GET | /projects/:id/document-imports | 获取最近导入任务，用于关闭浮层或断线后的进度恢复 |
+| GET | /document-imports/:id | 获取识别状态、预览、质量提示和可用操作 |
+| GET | /document-imports/:id/events | 订阅识别进度 |
+| POST | /document-imports/:id/review | 用户确认或修订识别结果，使任务进入可应用状态 |
+| POST | /document-imports/:id/apply | 用户确认后应用完整简历文档 |
+| POST | /document-imports/:id/profile-proposal | 生成独立的“保存到资料”确认建议 |
+| POST | /document-imports/:id/retry | 重试失败的识别任务 |
 | POST | /projects/:id/jobs | 创建目标岗位 |
 | POST | /jobs/:id/files | 添加岗位图片 |
 | POST | /jobs/:id/ocr | 发起 OCR |
@@ -209,13 +389,15 @@ API 服务
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| PATCH | /projects/:id/resume-draft | 自动保存当前简历草稿 |
+| PATCH | /projects/:id/resume-draft | 兼容保存完整草稿 |
+| POST | /projects/:id/resume-draft/transactions | 应用直接编辑产生的文档事务 |
 | POST | /projects/:id/resume-draft/changes/:changeId/revert | 撤销已应用修改 |
 | POST | /projects/:id/versions | 用户主动将当前草稿保存为版本 |
 | GET | /projects/:id/versions | 获取用户可见历史版本 |
-| GET | /versions/:id | 获取版本及当时资料、岗位、模板和简历结果 |
+| GET | /versions/:id | 获取版本及当时资料、岗位和完整简历文档 |
+| GET | /versions/:id/thumbnail | 获取或按需生成该版本第一页缩略图 |
 | GET | /versions/:id/compare?target=:targetId | 默认与实时草稿比较；传 target 时与指定版本比较 |
-| POST | /versions/:id/clone | 安全地从版本创建当前草稿，可选恢复当时岗位与模板 |
+| POST | /versions/:id/clone | 将历史版本的完整文档复制为当前草稿 |
 | POST | /projects/:id/generations | 冻结本次输入并发起生成 |
 | GET | /generations/:id | 获取状态和结果 |
 | GET | /generations/:id/events | SSE 进度 |
@@ -224,9 +406,21 @@ API 服务
 | POST | /versions/:id/export | 导出版本数据包 |
 | POST | /artifacts/:id/download-url | 获取短期下载地址 |
 
-创建生成请求包含 project_revision、draft_revision、可空的 profile_revision、template_version_id、job_revision 和 client_request_id。任何非空 revision 不匹配时返回 409，避免用户看到的内容与本次冻结输入不一致。
+`POST /document-imports/:id/apply` 必须携带 `expected_draft_revision`。服务端在同一事务中写入识别后的完整 `ResumeDocument`、记录可撤销草稿事件，并且只创建一个 `kind=imported` 的不可变历史版本；任何导入都不得写入资料。
 
-主动保存版本请求包含 name、draft_revision、可空的 profile_revision、template_version_id、job_revision 和待成版 change_ids。服务端必须在一个事务内校验并深拷贝当时工作区状态，不接受客户端直接提交伪造版本内容。
+客户端流程：
+
+1. 简历工具栏进入文档导入浮层；
+2. 上传完成后优先订阅 SSE，断线时轮询任务详情；
+3. 关闭后再次进入，通过项目导入列表恢复最近一个未完成任务；
+4. 原文件预览使用短期签名地址，导入预览图片仅允许 `inline` 展示；
+5. 重建结果使用通用 ResumeDocument 渲染器，用户修正的可编辑节点在 `/review` 阶段写回候选结果；
+6. `/apply` 必须再次提交当前草稿 revision，成功后刷新工作区、提供撤销并返回自动创建的版本 ID；
+7. 应用后直接编辑与 AI 编辑都继续操作这份草稿，切换编辑方式不得再次调用识别服务。
+
+创建生成请求包含 project_revision、draft_revision、可空的 profile_revision、job_revision 和 client_request_id。任何非空 revision 不匹配时返回 409，避免用户看到的内容与本次冻结输入不一致。
+
+主动保存版本请求包含 name、draft_revision、可空的 profile_revision、job_revision 和待成版 change_ids。服务端必须在一个事务内校验并深拷贝当时工作区状态，不接受客户端直接提交伪造版本内容。
 
 ## 7. 数据模型
 
@@ -238,19 +432,13 @@ users
 - email、phone、display_name、status
 
 resume_projects
-- name、current_profile_id 可空、current_template_version_id、current_job_id 可空、revision、status
+- name、current_profile_id 可空、current_job_id 可空、revision、status
 
 profiles
 - project_id、basics_json、summary、revision
 
 experiences
 - profile_id、type、organization、title、start_date、end_date、is_current、description、sort_order、revision
-
-template_definitions
-- owner_id 可空；name、kind、status、template_upload_id 可空
-
-template_versions
-- template_id、version、schema_json、preview_artifact_id、parser_version、checksum
 
 target_jobs
 - project_id、title、company、confirmed_text、analysis_json、revision、status
@@ -260,6 +448,13 @@ job_files
 
 uploads
 - owner_id、object_key、original_name、mime_type、size、sha256、status、expires_at
+
+document_imports
+- project_id、upload_id、entry_context（当前统一为 workspace，保留字段用于兼容旧任务）
+- status、detected_format、page_count、parser_version、model_version
+- document_candidate、quality_report、warning_codes
+- preview_artifact_ids、applied_mode 可空（兼容旧任务）
+- applied_version_id 可空、expires_at、created_at、updated_at
 
 ai_conversations
 - project_id、active_scope_type、active_scope_id、status（active / closed）、created_at、updated_at
@@ -273,7 +468,7 @@ ai_action_requests
 - applied_at、rejected_at、reverted_at
 
 resume_drafts
-- project_id 唯一、resume_json、revision、last_versioned_revision、has_unversioned_changes
+- project_id 唯一、resume_document JSONB、revision、last_versioned_revision、has_unversioned_changes
 
 resume_change_events
 - project_id、draft_revision、change_type、scope_type、scope_id
@@ -282,14 +477,14 @@ resume_change_events
 ### 7.2 版本、生成与冻结输入
 
 resume_versions
-- project_id、version_no、kind（manual / generated）、name
-- profile_payload 可空、template_payload、job_payload 可空、resume_payload JSONB
+- project_id、version_no、kind（manual / generated / imported）、name
+- profile_payload 可空、job_payload 可空、resume_document_payload JSONB
 - change_summary_json、artifact_refs_json、generation_snapshot_id 可空、status
 - created_by、created_at
 
 generation_snapshots
 - project_id、generation_no
-- profile_payload 可空、resume_input_payload、template_payload、job_payload 可空 JSONB
+- profile_payload 可空、resume_document_input、job_payload 可空 JSONB
 - generation_brief、generation_config、input_hash、status
 - created_by、created_at
 
@@ -301,10 +496,10 @@ generation_jobs
 - error_code、error_message_safe、token_usage_json、cost_amount
 
 resume_outputs
-- snapshot_id、resume_json、explanation_json、validation_json、status
+- snapshot_id、resume_document、explanation_json、validation_json、status
 
 artifacts
-- snapshot_id 可空、version_id 可空、type
+- snapshot_id 可空、version_id 可空、document_import_id 可空、type
 - object_key、mime_type、size、sha256、status、expires_at 可空
 
 audit_logs
@@ -318,11 +513,14 @@ audit_logs
 - resume_drafts(project_id) 唯一；
 - resume_change_events(project_id, mutation_id) 唯一；
 - generation_jobs(snapshot_id) 唯一；
+- document_imports(project_id, upload_id) 可按有效任务建立条件唯一索引，重复请求由 Idempotency-Key 合并；
 - artifacts(snapshot_id, type, sha256) 唯一；
-- artifacts 至少关联 snapshot_id 或 version_id；manual 版本产物可只关联 version_id；
+- artifacts 至少关联 snapshot_id、version_id 或 document_import_id 之一；manual 版本产物可只关联 version_id；
 - resume_versions 和 generation_snapshots 的冻结 payload 禁止 UPDATE；状态变化使用受限服务或独立事件表；
 - 复制版本只深拷贝内容到当前草稿，不写版本父子字段；个人资料永不由该操作覆盖；
 - ai_action_requests 不包含 evidence、source、dependency_fact_ids 或资料到正文映射字段；
+- document_imports 的识别结果是临时候选数据，不建立到 profiles 或 resume_drafts 的自动写入关系；
+- 导入确认后，`document_imports.applied_version_id` 记录自动创建的历史版本；完整文档由草稿和版本各自持有；
 - audit_logs 只记录操作主体、目标、时间和必要前后值，不承担内容归因；
 - 对象键包含 owner_id 的不可猜测前缀，但授权仍以数据库为准；
 - input_hash 用于重复生成提示和冻结输入一致性检查，不能替代幂等键。
@@ -334,9 +532,9 @@ audit_logs
 在一个数据库事务中：
 
 1. SELECT FOR UPDATE 锁定项目；
-2. 校验 owner、project/draft revision、模板 ready；岗位存在时还需 confirmed；
+2. 校验 owner、project/draft revision；岗位存在时还需 confirmed；
 3. 预占一次生成额度；
-4. 读取可选资料、当前草稿、模板版本、可选岗位和本次生成要求；
+4. 读取可选资料、当前完整草稿、可选岗位和本次生成要求；
 5. 将这些平级输入深拷贝成规范化 JSON；
 6. 分配下一个 generation_no；
 7. 写入 generation_snapshots；
@@ -350,13 +548,21 @@ audit_logs
 
 ### 8.2 主动保存版本
 
-在单个事务中锁定项目与草稿，校验 owner、draft、可选 profile、可选 job、template revision 和 change_ids，分配下一个项目版本号，深拷贝当时资料、岗位、模板及 Resume JSON，写入 `kind=manual` 的 resume_version，再把草稿的 last_versioned_revision 更新为当前 revision 并清除 has_unversioned_changes。重复 Idempotency-Key 不得新增版本。
+在单个事务中锁定项目与草稿，校验 owner、draft、可选 profile、可选 job 和 change_ids，分配下一个项目版本号，深拷贝当时资料、岗位及完整 `ResumeDocument`，写入 `kind=manual` 的 resume_version，再把草稿的 last_versioned_revision 更新为当前 revision 并清除 has_unversioned_changes。重复 Idempotency-Key 不得新增版本。
 
-版本时间只存 UTC `created_at`，所有“今天 / 月日”均由客户端根据当前时区动态计算。手动保存和生成版本使用同一套摘要字段：changes、list_summary、profile_data、job_data、template_data、compare_note。
+版本时间只存 UTC `created_at`，所有“今天 / 月日”均由客户端根据当前时区动态计算。手动保存和生成版本使用同一套摘要字段：changes、list_summary、profile_data、job_data、compare_note。
+
+### 8.2.1 文件导入版本
+
+文件导入是完整简历替换，因此确认应用事务除更新草稿外，必须分配下一个 `version_no` 并创建且仅创建一个 `kind=imported` 的不可变版本。版本冻结个人资料、岗位和完整 `ResumeDocument`；资料仅被冻结用于展示当时上下文，不被导入内容覆盖。重复 Idempotency-Key 返回同一个 `version_id`。
 
 ### 8.3 历史浏览、比较与继续修改
 
-版本详情返回冻结的 `resume_payload`、profile/template/job payload 和 artifacts。Web 使用与当前画布相同的 `ResumeDom.Renderer` 只读渲染完整正文树，因此新增“海外经历”等任意模块不需要历史页面增加专用字段。
+版本详情返回冻结的 `resume_document_payload`、profile/job payload 和 artifacts。Web 使用与当前画布相同的 `ResumeDocument.Renderer` 只读渲染完整文档，因此新增“海外经历”等任意模块不需要历史页面增加专用字段。
+
+历史按简历项目组织。每个版本冻结自己的完整文档，后续草稿的内容、样式、页面或资源变化不得影响旧版本。
+
+历史列表不加载所有版本的完整文档。每个列表项只返回缩略图地址，缩略图在首次请求时由服务端生成并作为 `thumbnail` artifact 持久化：文件导入版本优先使用导入时的第一页预览，其他版本优先栅格化冻结 PDF 的第一页；Poppler 不可用时使用正文密度和文档色彩生成安全降级图。缩略图按 `version_id + type` 唯一，重复请求复用同一产物，响应只允许当前用户以内联图片方式读取。
 
 `ResumeDom.compareDocuments(before, after)` 按稳定节点 ID 展开两棵正文树，输出：
 
@@ -366,15 +572,14 @@ audit_logs
 - attributes / style：安全属性与样式变化；
 - before / after 两侧需要高亮的节点 ID。
 
-`GET /versions/:id/compare` 不传 target 时必须读取当前 `resume_draft.resume_json`，不得退化为比较 `base_version_id`；传 target 时校验目标版本属于同一项目和用户。接口同时比较当前岗位和模板的稳定业务字段。Web 双栏均渲染完整 Resume DOM，并按节点 ID 高亮。
+`GET /versions/:id/compare` 不传 target 时必须读取当前 `resume_draft.resume_document`，不得退化为比较 `base_version_id`；传 target 时校验目标版本属于同一项目和用户。比较覆盖文字、结构、样式、页面设置和资源。若两份文档差异过大或节点连续性不足，界面使用并排浏览和摘要，不伪造逐项对应关系。
 
 `POST /versions/:id/clone` 请求体包含：
 
 - `draft_revision`：并发校验；
-- `discard_unsaved`：仅在用户明确放弃当前未保存修改时为 true；
-- `restore_context`：是否同时恢复版本中冻结的岗位和模板。
+- `discard_unsaved`：仅在用户明确放弃当前未保存修改时为 true。
 
-事务先检查未成版 change events；存在修改且 `discard_unsaved=false` 时返回 `409 UNSAVED_DRAFT_CHANGES`。明确放弃时将这些事件标记为 reverted，再替换草稿。`restore_context=true` 时只恢复仍属于当前用户和项目的岗位及可访问模板；已失效对象保留当前选择并在响应中列出。该操作永不修改 profile，不创建历史版本，原 resume_version 继续不可变。
+事务先检查未成版 change events；存在修改且 `discard_unsaved=false` 时返回 `409 UNSAVED_DRAFT_CHANGES`。明确放弃时将这些事件标记为 reverted，再把历史版本的完整文档深拷贝为当前草稿。该操作不修改 profile 或当前岗位，不创建历史版本，也不建立版本父子字段；原 resume_version 继续不可变。
 
 版本导出统一准备 HTML、PDF、DOCX artifact；主界面提供 PDF 和 Word 两种下载入口。
 
@@ -392,7 +597,7 @@ Worker 按以下 DAG 执行：
 
 每一步写入任务步骤表或事件流，并具有独立超时、最大重试次数和错误码。PDF 与 DOCX 中一个成功时整体为 partial。
 
-### 8.4 幂等与重试
+### 8.5 幂等与重试
 
 - 创建生成接口以 owner_id + Idempotency-Key 建唯一索引；
 - 每个 Worker 使用 snapshot_id + step_name 作为 job key；
@@ -412,7 +617,7 @@ Worker 按以下 DAG 执行：
 
 阶段二：简历生成
 
-输入冻结的可选 Profile、当前 Resume、用户本次生成要求、可选 JobAnalysis 和模板约束；输出严格匹配 Resume Schema 的 JSON。正文以 `dom_document` 动态树为渲染基准，Profile 只是可选参考，当前正文和用户在本次沟通中明确提供的信息同样可以进入结果。
+输入冻结的可选 Profile、当前 `ResumeDocument`、用户本次生成要求和可选 JobAnalysis；输出严格匹配 ResumeDocument Schema 的 JSON。Profile 只是可选参考，当前文档和用户在本次沟通中明确提供的信息同样可以进入结果。
 
 模型不直接生成 HTML、PDF 或 DOCX，避免结构漂移和提示注入影响渲染。
 
@@ -429,15 +634,18 @@ Worker 按以下 DAG 执行：
 
 ### 9.3 结构化输出
 
-Resume Schema 的规范正文：
+`ResumeDocument v3` 是唯一现行结构：
 
-- dom_document.version
-- dom_document.root
-- DOM node：id、type、tag、attributes、style、text、children、editable、label
+- `schema_version = resume-document-v3`
+- `root`：完整可编辑节点树，包含文字、结构和稳定节点 ID
+- `page_setup`：页面尺寸、页边距、分页和页眉页脚设置
+- `styles`：文档级样式表和节点直接样式
+- `assets`：图片、图标、背景和字体等受控资源引用
+- `annotations`：可选语义标记，只辅助 AI 理解和可访问性，不限制模块结构
 
-`dom_document` 使用安全标签和属性白名单，节点 ID 在当前文档内唯一且稳定。正文结构不预设固定模块，可包含姓名、联系方式、工作经历、海外经历或模板定义的其他任意模块。
+节点字段包括 id、type、tag、attributes、style、text、children、editable、label。文档使用安全标签、属性和样式白名单，节点 ID 在当前文档内唯一且稳定。正文结构不预设固定模块，可包含姓名、联系方式、工作经历、海外经历、“技能证书”或用户新增的任意模块。
 
-以下字段作为旧数据、资料生成器和现有模板的兼容投影保留，不再决定正文可以出现哪些模块：
+以下字段作为旧数据和资料生成器的兼容投影保留，不再决定正文可以出现哪些模块：
 
 - basics、headline、summary
 - experience[]、projects[]、education[]、skills[]
@@ -445,7 +653,7 @@ Resume Schema 的规范正文：
 - validation_issues[]
 - layout_hints
 
-新草稿可以只提供合法 `dom_document`；旧草稿没有该字段时由通用组件确定性转换。绑定到兼容字段的旧节点修改后同步回写相应字段，自定义节点只存在于动态正文树中。解析或校验失败时任务立即终止并返回安全错误，不用第二次语义调用改判结果。
+新写入统一保存 `ResumeDocument v3`。旧草稿中的 `content_document`、`template_document`、`layout_bindings` 或 `dom_document` 只由读取层确定性合并为完整文档；下一次直接编辑、AI 应用或文件导入写入时升级为 v3，不再双写旧字段。解析或校验失败时任务立即终止并返回安全错误，不用第二次语义调用改判结果。
 
 ### 9.4 提示词与模型版本
 
@@ -514,7 +722,7 @@ AI Gateway 与业务写服务之间设置确定性的写入策略层：
 
 RESUME_REWRITE_PROPOSAL 被用户应用后，只更新 resume_draft 并追加 resume_change_event，不创建历史版本。用户主动保存时创建 manual 版本；生成任务成功时创建 generated 版本。
 
-正文操作使用受控 Resume DOM 协议：
+简历操作使用受控 ResumeDocument 协议：
 
 - RESUME_BLOCK 只允许对锁定节点执行 `replace_text`；
 - RESUME_DOCUMENT 可执行 `replace_text`、`insert_node`、`remove_node`、`move_node`、`set_attributes`、`set_style`；
@@ -531,15 +739,51 @@ RESUME_REWRITE_PROPOSAL 被用户应用后，只更新 resume_draft 并追加 re
 - 岗位切换后更新 current_job_id 并重新分析匹配，不直接重写简历；
 - 同一任务只有 active_proposal_id 指向的简历建议可应用；应用前校验 base_target_hash 与当前岗位 revision；
 - “应用”“确认”等短句只能绑定同一任务内唯一的当前动作；存在歧义时追问；
-- 开始新对话时关闭旧 conversation，取消未完成任务并拒绝旧对话中的未应用建议；已保存资料、当前岗位、简历、模板和版本保持不变；
+- 开始新对话时关闭旧 conversation，取消未完成任务并拒绝旧对话中的未应用建议；已保存资料、当前岗位、当前简历和版本保持不变；
 - 旧对话结束后返回的异步结果以 CONVERSATION_ENDED 终止，不得补写消息或动作；
 - 操作审计记录 actor、action、target、time 和必要前后值，只用于安全、撤销和排错，不表达内容从哪里来。
 
 系统提示词的可执行基线见 [SYSTEM_PROMPT.md](./SYSTEM_PROMPT.md)。提示词只负责提高理解与建议质量，不能替代 Schema、权限、revision 和幂等校验。
 
-## 10. OCR 与模板解析
+## 10. 文档识别、OCR 与完整文档重建
 
-### 10.1 OCR 管线
+### 10.1 独立文档识别服务
+
+文档识别服务独立于 Web/API 和 Resume Harness。当前单机实现由 API 通过受控客户端启动独立 Node 子进程，不要求 Docker；生产可平移为独立进程服务。它接受 PDF、DOCX、DOC、PNG、JPG、JPEG、WEBP，没有资料或草稿写权限，只读取授权的临时文件并返回候选结果。子进程边界用于故障隔离，不等同于生产安全沙箱。
+
+统一处理链路：
+
+1. 校验扩展名、MIME、magic bytes、文件大小、页数、加密状态和解压后大小；
+2. 确定性文件解析在生产环境的无网络、低权限、限 CPU/内存/时间沙箱中清理并标准化；当前单机版先通过独立子进程和超时控制隔离；
+3. PDF 读取文字层、字形、坐标、图片和页面尺寸，并生成去文字视觉背景；
+4. DOCX 解析 OOXML 作为文字与语义校验，同时由 LibreOffice 标准化为 PDF 后进入统一页面场景链路；
+5. DOC 先通过固定版本 LibreOffice 转为 DOCX 和 PDF，再进入同一页面场景链路；
+6. 图片先去除 EXIF、自动旋转并标准化为 PNG，再进行 OCR；
+7. 每页输出 `page-scene-v1`：固定页面尺寸、视觉背景、可编辑文字节点、文字坐标和直接样式；
+8. 配置 AI 时，由受控 Model Client 将确定性文字块与最多两页预览交给视觉模型判断阅读顺序、模块关系和单双栏；这一步可以联网，但不参与文字抄录或页面像素还原，调用失败时确定性结果继续可用；
+9. 原生解析文本、OCR 结果与模型结构交叉校验；
+10. 输出单一 `document_candidate`、预览图和 `quality_report`；
+11. 识别完成进入 `needs_review`；用户完成确认或必要修订后进入 `ready`，最终应用后进入 `applied`。
+
+约束：
+
+- 原始文字以确定性解析或 OCR 为准，模型不得补写文件中不存在的内容；
+- 模型不得直接生成可执行 HTML/CSS，只输出符合 Schema 的语义与布局描述；
+- Page Scene 由确定性解析器生成安全 ResumeDocument；模型只补充阅读顺序和区域判断，不得覆盖原始文字、坐标或视觉层；
+- 用户确认后，应用事务固定保存完整 `ResumeDocument`，不接受客户端导入模式分支；
+- 应用事务自动创建一个 `imported` 历史版本；识别任务记录该版本 ID，幂等重放不得再次创建；
+- 保存到资料必须生成独立确认建议；
+- 任务状态为 uploaded / scanning / normalizing / extracting / analyzing / validating / needs_review / ready / applied / failed。
+
+质量门槛：
+
+- 文件中的可见文本必须有完整性覆盖检查，关键数字、日期、电话、邮箱、公司和职位逐项校验；
+- 任何低置信度、疑似遗漏、阅读顺序冲突、字体替换、溢出或分页异常都进入 `needs_review`；
+- 质量检查未通过时不得返回可直接应用结果；
+- 回归集覆盖文字版 PDF、扫描型 PDF、标准 DOCX、旧 DOC、单双栏、表格、文本框、多页和中英混排；
+- 发布指标分别统计文字完整率、关键字段准确率、结构完整率、预览通过率和人工修订率，不以单一“识别率”替代。
+
+### 10.2 OCR 管线
 
 1. 去除 EXIF；
 2. 旋转校正、裁边和清晰度检查；
@@ -550,33 +794,29 @@ RESUME_REWRITE_PROPOSAL 被用户应用后，只更新 resume_draft 并追加 re
 7. 用户确认后生成新 revision；
 8. 分析始终读取 confirmed_text。
 
-### 10.2 自定义模板
+### 10.3 从文件重建完整文档
 
-统一内部 Template Schema：
+文件识别一次性重建 `ResumeDocument` 的节点树、页面设置、样式、资源和可选语义标记。渲染器遍历真实节点树，不根据 `experience/projects/education/skills` 等固定字段判断模块是否存在，也不把样式抽成可跨简历复用的模板对象。
 
-- document：动态正文引擎、根节点和安全能力；
-- page：尺寸、页边距、最大页数；
-- regions：区域、栏数、流向；
-- typography：字体、字号、行高、颜色；
-- section_rules：系统初始草稿的默认顺序、默认标题和标题样式，不限制用户后续新增模块；
-- constraints：每区最大行数、分页规则；
-- assets：背景图、图标、装饰元素。
+PDF 优先读取文字层和坐标，扫描型页面结合 OCR 与页面图片；DOCX 同时使用 OOXML 和 PDF 预览；DOC 先经 LibreOffice 标准化；图片使用 OCR 文本与视觉结构分析。
 
-模板负责布局和表现，Resume DOM 负责实际内容结构。渲染器遍历真实节点树，不根据 `experience/projects/education/skills` 等固定字段判断模块是否存在。
+当前 `document-recognition-v3` 的重建规则：
 
-图片模板：作为背景层，使用预定义安全区或用户标注文本区。
+- PDF、DOCX、DOC 先归一化为 PDF 页面，再提取 `page-scene-v1`；不同文件格式不再对应不同的 Web 排版实现；
+- 视觉背景层从页面中移除可提取文字，但保留图片、底色、边框、表格线、页眉页脚和装饰图形；
+- 文字层按 PDF 点坐标保存行、run、字体、字号、颜色、粗斜体和目标宽度，ResumeDocument Renderer 使用同一通用组件渲染；
+- 浏览器字体与原字形存在差异时，文字 run 按目标宽度做横向校准；页面宽度变化只缩放整页；
+- 混合样式文字在未编辑时保留 run；用户或 AI 修改该行后合并为安全纯文本节点，避免旧 run 与新文字重复；
+- 图片和无文字层 PDF 继续使用 OCR；原图文字与编辑层的安全分离属于下一阶段，当前必须标记并进入人工检查；
+- OOXML 解析继续用于内容完整性、语义和降级，不再承担复刻完整 Word 排版引擎的职责。
 
-PDF：优先读取文本层和坐标；扫描件退化为图片模板。
-
-DOC/DOCX：在隔离容器中转为 PDF 预览，同时解析段落、表格、样式和占位符。旧 DOC 先经 LibreOffice 转换。
-
-复杂、加密、含宏或外部链接的文件应拒绝或清理。模板解析结果必须由用户预览确认。
+复杂、加密、含宏或外部链接的文件应拒绝或清理。完整文档重建结果必须由用户预览确认。确认应用后，直接编辑器读取现有结构并产生精确事务；在直接编辑与 AI 编辑之间切换不经过识别服务。
 
 ## 11. 渲染与质量检查
 
 ### 11.1 PDF
 
-- Resume DOM + Template Schema → HTML/CSS；
+- ResumeDocument → HTML/CSS；
 - 使用固定版本 Chromium 打印 PDF；
 - 字体打包并显式声明中文字体回退；
 - 禁止渲染器访问公网；
@@ -585,7 +825,7 @@ DOC/DOCX：在隔离容器中转为 PDF 预览，同时解析段落、表格、�
 
 ### 11.2 DOCX
 
-- 使用 Resume DOM 的标题、段落、经历行、列表等语义块映射 OOXML 模板；
+- 使用 ResumeDocument 的页面、标题、段落、列表、表格和图片等节点映射 OOXML；
 - 不通过 PDF 反转 DOCX；
 - 固定标题、段落、列表、页边距和字体样式；
 - 清理作者、路径、修订记录等隐私元数据；
@@ -593,9 +833,9 @@ DOC/DOCX：在隔离容器中转为 PDF 预览，同时解析段落、表格、�
 
 ### 11.3 验证
 
-- Resume DOM 通过安全结构校验；
+- ResumeDocument 通过安全结构校验；
 - 具体数字、组织、职位、项目和技能均通过本次输入一致性校验；
-- PDF 页数符合模板约束；
+- PDF 页数符合文档页面约束；
 - 文本抽取结果与 Resume JSON 做语义和关键数字比对；
 - 输出文件 SHA-256 写入 artifacts；
 - 下载响应强制 attachment 和安全文件名。
@@ -614,6 +854,7 @@ DOC/DOCX：在隔离容器中转为 PDF 预览，同时解析段落、表格、�
 - AI 供应商配置零保留/不训练，发送最小必要数据；
 - 支持删除账号、导出数据、撤回处理授权；
 - 原始临时上传 24 小时清理；被项目引用的文件按账号保留策略处理；
+- 未应用的文档识别候选、转码文件和预览图按临时数据策略清理，不进入资料或历史版本；
 - 管理支持访问需要工单、用户授权和审计。
 
 ## 13. 可靠性与可观测性
@@ -632,6 +873,7 @@ DOC/DOCX：在隔离容器中转为 PDF 预览，同时解析段落、表格、�
 - HTTP 请求量、错误率、延迟；
 - 队列长度、等待时间、执行时间、重试次数、死信量；
 - OCR 成功率和低置信度占比；
+- 文档导入各格式成功率、文字完整率、关键字段准确率、结构完整率、预览通过率和人工修订率；
 - AI schema 通过率、内容一致性校验失败率、token 和成本；
 - PDF/DOCX 成功率、页数异常率；
 - 快照创建与生成任务的一致性；
@@ -645,7 +887,7 @@ Trace 从 Web request_id 贯穿 API、outbox、队列、外部模型和渲染。
 |---|---|---|
 | PROFILE_INCOMPLETE | 个人信息不完整 | 定位缺失字段 |
 | REVISION_CONFLICT | 编辑版本冲突 | 比较并合并 |
-| TEMPLATE_UNSUPPORTED | 模板格式或结构不支持 | 更换文件/系统模板 |
+| DOCUMENT_UNSUPPORTED | 文档格式或结构暂不支持 | 更换文件或简化后重试 |
 | FILE_UNSAFE | 文件未通过安全扫描 | 更换文件 |
 | OCR_LOW_CONFIDENCE | OCR 置信度过低 | 修订或粘贴文本 |
 | JOB_NOT_CONFIRMED | 岗位文本未确认 | 确认岗位信息 |
@@ -671,7 +913,13 @@ Schema 校验、完整度计算、revision 冲突、输入 hash、内容一致�
 - 新用户完整生成；
 - 语音拒权后键盘输入；
 - 多图岗位 OCR 与排序；
-- 自定义模板解析失败后切换系统模板；
+- PDF、DOCX、DOC、PNG、JPG、WEBP 分别完成识别、预览和用户确认，未确认时草稿与资料保持不变；
+- 导入结果经一次确认应用为完整文档，并且只创建一个 imported 历史版本；
+- 直接输入、粘贴、结构和样式修改写入同一草稿，并按文档事务自动保存和撤销；
+- 直接编辑与 AI 编辑切换不调用文档识别，旧 AI 建议在 revision 变化后失效；
+- 低置信度、文本遗漏、阅读顺序冲突、字体替换和页面溢出不得直接应用；
+- 保存导入内容到资料必须创建独立确认，不得自动覆盖已有资料；
+- 文档识别失败后退出导入或更换文件；
 - 重复点击生成只产生一个生成快照和一个 generated 版本；
 - 应用多次 AI 修改只产生草稿事件，不自动产生历史版本；
 - 主动保存只产生一个 manual 版本并清空待成版标记；
@@ -679,8 +927,9 @@ Schema 校验、完整度计算、revision 冲突、输入 hash、内容一致�
 - 生成中刷新页面恢复状态；
 - PDF 成功而 DOCX 失败；
 - 版本详情使用通用正文渲染器还原完整动态简历，历史版本默认与实时草稿全文比较；
+- 历史列表使用各版本冻结结果的第一页缩略图；不同完整文档不得继续显示成同一张图，重复访问不得重复生成 artifact；
 - 当前草稿有未保存修改时复制旧版本返回冲突；先保存或明确放弃后才能继续；
-- 复制旧版本可选恢复当时岗位与模板，但不覆盖个人信息或原版本；
+- 复制旧版本完整文档，不覆盖个人信息、当前岗位或原版本；
 - 跨用户访问返回 404；
 - 删除账号后文件按策略清理。
 
@@ -716,7 +965,7 @@ Worker 按队列分别扩容。AI 生成和渲染设置独立并发上限，防�
 
 ### 迭代 1：可编辑工作区
 
-账号、项目、个人信息、自动保存、简历草稿/change events、主动保存版本、三种系统模板、实时预览。
+账号、项目、个人信息、完整简历草稿、直接编辑事务、自动保存、撤销、主动保存版本和实时预览。
 
 ### 迭代 2：多模态输入
 
@@ -726,13 +975,17 @@ Worker 按队列分别扩容。AI 生成和渲染设置独立并发上限，防�
 
 生成快照事务、任务编排、generated 版本、AI 结构化生成、内容一致性校验、PDF/DOCX、进度恢复。
 
-### 迭代 4：自定义模板与上线质量
+### 迭代 4：文档识别服务与统一导入
 
-PDF/Word/图片模板解析、版本比较/复制/导出、额度、审计、全链路监控、安全测试和灰度发布。
+独立 Document Recognition Service、PDF/DOCX/DOC/图片安全解析与标准化、DOCX 原生段落/分页/表格/直接样式重建、PDF/图片坐标化重建、预览确认、完整 ResumeDocument 单一应用事务、资料零自动写入、imported 历史版本。
+
+### 迭代 5：复杂排版与上线质量
+
+文本框、浮动图片、复杂合并单元格、页眉页脚、扫描型 PDF、缺失字体替换、高保真降级、可视化校正、完整文档比较、版本复制/导出、额度、审计、全链路监控、安全测试和灰度发布。
 
 ## 18. 关键技术决策
 
-1. 用户版本深拷贝个人资料、岗位、模板和简历 JSON，不引用可变业务表。
+1. 用户版本深拷贝个人资料、岗位和完整 ResumeDocument，不引用可变业务表。
 2. 先提交数据库 outbox，再投递队列，避免“有快照无任务”。
 3. AI 只输出严格结构化 JSON，文档由确定性渲染器生成。
 4. 生成内容只做本次输入的一致性校验，不保存逐句归因；发现用户未提供的具体陈述时不出最终文件。
@@ -741,4 +994,9 @@ PDF/Word/图片模板解析、版本比较/复制/导出、额度、审计、全
 7. 编辑使用 revision 乐观锁，生成请求显式携带用户看到的 revision。
 8. AI 自由组织对话回复；只有资料、岗位和简历写动作使用结构化协议，并由确定性写入策略执行。
 9. AI 推测或含义不明的信息先追问；岗位变化和所有业务写动作均由用户明确应用，非法或不确定写动作采用零写入。
-10. 已应用修改先进入可撤销草稿事件；只有用户主动保存或生成成功才进入历史版本。
+10. 已应用修改先进入可撤销草稿事件；用户主动保存、生成成功或确认应用完整文件导入时进入历史版本，其中导入有且只有一个 `imported` 版本。
+11. PDF、DOCX、DOC 共用独立文档识别服务；确定性解析负责原始文字和几何信息，视觉模型只负责语义、阅读顺序和区域关系。
+12. 文件识别只产生临时候选结果，用户确认后才能应用到当前简历；保存到资料始终是独立动作。
+13. 历史属于简历项目，每个版本冻结完整文档；比较不假设版本与当前草稿结构连续，差异过大时并排浏览。
+14. 产品不建立模板或排版预设；每份简历的页面与样式属于自身文档，复制旧版本就是复制完整文档继续修改。
+15. Word 式直接编辑和 AI 修改共享同一事务、revision、自动保存与撤销协议，切换编辑方式不重新识别文档。

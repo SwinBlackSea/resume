@@ -25,7 +25,10 @@ const MIME_EXTENSION = {
 
 function safeFileName(versionName, type) {
   const cleaned = String(versionName || '简历').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40);
-  return `${cleaned}.${MIME_EXTENSION[type] || type}`;
+  const extension = String(type || '').startsWith('import_')
+    ? 'png'
+    : MIME_EXTENSION[type] || type;
+  return `${cleaned}.${extension}`;
 }
 
 const routes = [
@@ -93,11 +96,16 @@ const routes = [
         ? db.get('SELECT name FROM resume_versions WHERE id = ?', [artifact.version_id])
         : null;
       const fileName = safeFileName(version ? version.name : '简历', artifact.type);
+      const inlinePreview =
+        Boolean(artifact.document_import_id)
+        && query.get('view') === 'inline'
+        && String(artifact.mime_type || '').startsWith('image/');
       res.writeHead(200, {
         'content-type': artifact.mime_type || 'application/octet-stream',
         'content-length': buffer.length,
-        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+        'content-disposition': `${inlinePreview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
       });
       res.end(buffer);
       audit.log({

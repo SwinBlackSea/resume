@@ -16,10 +16,14 @@ const { composeResume, splitBullets } = require('./compose');
 const { analyzeJobText, matchJobWithProfile } = require('./job-analyzer');
 const { validateResumeJson, validateContentSafety } = require('./resume-schema');
 const { recognizeJobFiles } = require('./ocr');
+const documentRecognition = require('./document-recognition');
+const fs = require('node:fs');
 const { putObject } = require('./storage');
+const { objectPath } = require('./storage');
 const { renderPdf } = require('./render/pdf');
 const { renderDocx } = require('./render/docx');
 const { renderHtml } = require('./render/html');
+const ResumeDom = require('../../resume-dom');
 
 const STEPS = [
   { key: 'analyze_job', label: '正在校验资料与岗位', progress: 15 },
@@ -104,7 +108,9 @@ async function runGeneration(snapshotId) {
   const owner = { id: snapshot.owner_id };
   const projectId = snapshot.project_id;
   const profilePayload = JSON.parse(snapshot.profile_payload || '{}');
-  const templatePayload = JSON.parse(snapshot.template_payload || '{}');
+  const resumeInput = ResumeDom.toResumeDocument(
+    JSON.parse(snapshot.resume_input_payload || snapshot.template_payload || '{}'),
+  );
   const jobPayload = JSON.parse(snapshot.job_payload || '{}');
 
   const attempt = job.attempt_count + 1;
@@ -135,19 +141,30 @@ async function runGeneration(snapshotId) {
     const facts = (profilePayload.experiences || [])
       .filter((exp) => !exp.deleted_at)
       .flatMap((exp) => splitBullets(exp.description))
-      .concat([profilePayload.summary || '']);
+      .concat([profilePayload.summary || '', ResumeDom.plainText(resumeInput)]);
     const match = matchJobWithProfile(analysis, facts);
     const jobView = { ...jobPayload, analysis: { ...analysis, match } };
 
     // ---- compose_resume ----
     advance('compose_resume');
-    const resume = composeResume({
+    const composed = composeResume({
       profileBasics: profilePayload.basics || {},
       profileSummary: profilePayload.summary || '',
       experiences: profilePayload.experiences || [],
       job: jobView,
-      template: templatePayload,
+      template: {},
     });
+    const generationNotes = composed.generation_notes || [];
+    const validationIssues = composed.validation_issues || [];
+    const generatedDocument = ResumeDom.toResumeDocument(
+      ResumeDom.createResumeAggregate(composed, {}),
+    );
+    const resume = {
+      ...generatedDocument,
+      page_setup: resumeInput.page_setup,
+      styles: resumeInput.styles,
+      assets: resumeInput.assets,
+    };
 
     // ---- validate_facts ----
     advance('validate_facts');
@@ -168,14 +185,14 @@ async function runGeneration(snapshotId) {
 
     // ---- render_html ----
     advance('render_html');
-    const htmlString = renderHtml({ resume, template: templatePayload });
+    const htmlString = renderHtml({ resume, template: {}, ownerId: owner.id });
     const htmlFile = writeArtifactFile(owner.id, snapshotId, 'html', Buffer.from(htmlString, 'utf8'), 'text/html; charset=utf-8');
 
     // ---- render_pdf ∥ render_docx（并行，允许部分成功） ----
     advance('render_artifacts');
     const [pdfResult, docxResult] = await Promise.allSettled([
-      Promise.resolve().then(() => renderPdf({ resume, template: templatePayload })),
-      Promise.resolve().then(() => renderDocx({ resume, template: templatePayload })),
+      Promise.resolve().then(() => renderPdf({ resume, template: {} })),
+      Promise.resolve().then(() => renderDocx({ resume, template: {} })),
     ]);
 
     const pdfFile = pdfResult.status === 'fulfilled'
@@ -203,11 +220,11 @@ async function runGeneration(snapshotId) {
 
     // ---- validate_artifacts ----
     advance('validate_artifacts');
-    const maxPages = (templatePayload.schema && templatePayload.schema.page && templatePayload.schema.page.max_pages) || 2;
+    const maxPages = resume.page_setup.max_pages || 2;
     const validation = {
       schema_valid: schemaCheck.valid,
       content_issues: contentCheck.violations,
-      validation_issues: resume.validation_issues || [],
+      validation_issues: validationIssues,
       pdf_pages: pdfResult.status === 'fulfilled' ? pdfResult.value.pages : null,
       page_limit: maxPages,
       page_overflow: pdfResult.status === 'fulfilled' ? pdfResult.value.pages > maxPages : false,
@@ -235,8 +252,8 @@ async function runGeneration(snapshotId) {
         owner.id,
         JSON.stringify(resume),
         JSON.stringify({
-          generation_notes: resume.generation_notes,
-          validation_issues: resume.validation_issues,
+          generation_notes: generationNotes,
+          validation_issues: validationIssues,
           match,
         }),
         JSON.stringify(validation),
@@ -264,13 +281,13 @@ async function runGeneration(snapshotId) {
           `AI 生成版本 · ${jobView.title || '当前岗位'}`,
           null, // 生成版本以快照为输入，base 留空
           JSON.stringify(profilePayload),
-          JSON.stringify(templatePayload),
+          JSON.stringify({}),
           JSON.stringify(jobView),
           JSON.stringify(resume),
           JSON.stringify({
-            changes: (resume.generation_notes || []).map((note) => note.text),
-            list_summary: (resume.generation_notes || []).length
-              ? (resume.generation_notes || []).slice(0, 2).map((note) => note.text).join('、')
+            changes: generationNotes.map((note) => note.text),
+            list_summary: generationNotes.length
+              ? generationNotes.slice(0, 2).map((note) => note.text).join('、')
               : 'AI 已按当前要求生成完整简历',
             profile_data: `${(profilePayload.basics && profilePayload.basics.name) || ''}｜${
               (profilePayload.basics && profilePayload.basics.city) || ''
@@ -278,9 +295,8 @@ async function runGeneration(snapshotId) {
               (profilePayload.experiences || []).filter((item) => item.type === 'project').length
             } 个项目`,
             job_data: [jobView.title, jobView.company].filter(Boolean).join('｜') || '未设置岗位',
-            template_data: `${templatePayload.name || '系统模板'}｜生成时排版`,
             compare_note: '',
-            validation_issues: resume.validation_issues || [],
+            validation_issues: validationIssues,
             match,
           }),
           JSON.stringify({}),
@@ -448,6 +464,178 @@ function runTemplateParse({ templateVersionId }) {
   return { ok: true };
 }
 
+function emitDocumentImport(importId, state) {
+  events.publish(importId, { ...state, id: importId, at: nowIso() });
+}
+
+function updateDocumentImport(importId, patch) {
+  const fields = Object.keys(patch);
+  if (!fields.length) return;
+  db.run(`UPDATE document_imports SET ${fields.map((field) => `${field} = ?`).join(', ')}, updated_at = ? WHERE id = ?`, [
+    ...fields.map((field) => patch[field]),
+    nowIso(),
+    importId,
+  ]);
+  emitDocumentImport(importId, patch);
+}
+
+function attachSceneBackgroundArtifacts(contentCandidate, pageArtifactIds) {
+  const root =
+    contentCandidate
+    && contentCandidate.resume_json
+    && contentCandidate.resume_json.dom_document
+    && contentCandidate.resume_json.dom_document.root;
+  if (!root || !pageArtifactIds.size) return;
+  function visit(node) {
+    if (!node || node.type !== 'element') return;
+    const page = Number(
+      node.attributes && node.attributes['data-scene-background-page'],
+    );
+    if (Number.isFinite(page) && pageArtifactIds.has(page)) {
+      node.attributes = {
+        ...(node.attributes || {}),
+        'data-scene-background-artifact-id': pageArtifactIds.get(page),
+      };
+    }
+    (node.children || []).forEach(visit);
+  }
+  visit(root);
+}
+
+async function runDocumentImport(importId) {
+  const row = db.get(
+    `SELECT di.*, u.object_key, u.original_name, u.mime_type, u.size
+     FROM document_imports di
+     JOIN uploads u ON u.id = di.upload_id
+     WHERE di.id = ?`,
+    [importId],
+  );
+  if (!row || row.status === 'applied') return;
+  let runtimeDir = null;
+  try {
+    updateDocumentImport(importId, {
+      status: 'scanning',
+      error_code: null,
+      error_message_safe: null,
+    });
+    updateDocumentImport(importId, { status: 'normalizing' });
+    updateDocumentImport(importId, { status: 'extracting' });
+    const result = await documentRecognition.recognize({
+      inputPath: objectPath(row.object_key),
+      originalName: row.original_name,
+      mimeType: row.mime_type,
+    });
+    runtimeDir = result.runtime_dir;
+    updateDocumentImport(importId, { status: 'analyzing' });
+    updateDocumentImport(importId, { status: 'validating' });
+    const previewArtifactIds = [];
+    for (const preview of result.previews || []) {
+      if (!preview.path || !fs.existsSync(preview.path)) continue;
+      const buffer = fs.readFileSync(preview.path);
+      const key = `${row.owner_id}/document-imports/${importId}/page-${preview.page}.png`;
+      putObject(key, buffer);
+      const artifactId = uuidv7();
+      db.run(
+        `INSERT INTO artifacts
+         (id, snapshot_id, version_id, document_import_id, owner_id, type, object_key, mime_type, size, sha256, status, expires_at, created_at)
+         VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
+        [
+          artifactId,
+          importId,
+          row.owner_id,
+          `import_preview_${preview.page}`,
+          key,
+          preview.mime_type || 'image/png',
+          buffer.length,
+          sha256(buffer),
+          row.expires_at || null,
+          nowIso(),
+        ],
+      );
+      previewArtifactIds.push(artifactId);
+    }
+    const sceneBackgroundArtifactIds = new Map();
+    for (const background of result.scene_backgrounds || []) {
+      if (!background.path || !fs.existsSync(background.path)) continue;
+      const buffer = fs.readFileSync(background.path);
+      const key = `${row.owner_id}/document-imports/${importId}/scene-background-${background.page}.png`;
+      putObject(key, buffer);
+      const artifactId = uuidv7();
+      db.run(
+        `INSERT INTO artifacts
+         (id, snapshot_id, version_id, document_import_id, owner_id, type, object_key, mime_type, size, sha256, status, expires_at, created_at)
+         VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'ready', NULL, ?)`,
+        [
+          artifactId,
+          importId,
+          row.owner_id,
+          `import_scene_background_${background.page}`,
+          key,
+          background.mime_type || 'image/png',
+          buffer.length,
+          sha256(buffer),
+          nowIso(),
+        ],
+      );
+      sceneBackgroundArtifactIds.set(Number(background.page), artifactId);
+    }
+    attachSceneBackgroundArtifacts(result.content_candidate, sceneBackgroundArtifactIds);
+    if (
+      result.layout_candidate
+      && result.layout_candidate.schema
+      && result.layout_candidate.schema.assets
+    ) {
+      result.layout_candidate.schema.assets.scene_background_artifact_ids =
+        [...sceneBackgroundArtifactIds.entries()]
+          .sort((left, right) => left[0] - right[0])
+          .map(([, artifactId]) => artifactId);
+    }
+    db.run(
+      `UPDATE document_imports
+       SET status = 'needs_review', detected_format = ?, page_count = ?, parser_version = ?,
+           model_version = ?, content_candidate = ?, layout_candidate = ?, quality_report = ?,
+           warning_codes = ?, preview_artifact_ids = ?, error_code = NULL, error_message_safe = NULL,
+           updated_at = ?
+       WHERE id = ?`,
+      [
+        result.detected_format,
+        result.page_count,
+        result.parser_version,
+        result.model_version,
+        JSON.stringify(result.content_candidate),
+        JSON.stringify(result.layout_candidate),
+        JSON.stringify(result.quality_report),
+        JSON.stringify(result.warning_codes || []),
+        JSON.stringify(previewArtifactIds),
+        nowIso(),
+        importId,
+      ],
+    );
+    emitDocumentImport(importId, {
+      status: 'needs_review',
+      progress: 100,
+      warning_codes: result.warning_codes || [],
+    });
+    return { ok: true, status: 'needs_review' };
+  } catch (error) {
+    const code = error.code || 'DOCUMENT_RECOGNITION_FAILED';
+    const safe =
+      code === 'DOCUMENT_ENCRYPTED'
+        ? '文件已加密，请解除密码后重新上传'
+        : error.message || '文档识别失败，请稍后重试';
+    updateDocumentImport(importId, {
+      status: 'failed',
+      error_code: code,
+      error_message_safe: safe,
+    });
+    console.error('[document-recognition] failed', importId, code, error.message);
+    if (error.retryable) throw error;
+    return { ok: false, status: 'failed', error_code: code };
+  } finally {
+    documentRecognition.cleanup(runtimeDir);
+  }
+}
+
 // ---------------------------------------------------------------- Worker 循环
 
 const HANDLERS = {
@@ -455,6 +643,7 @@ const HANDLERS = {
   'job.ocr.requested': ({ aggregateId }) => runJobOcr(aggregateId),
   'job.analyze.requested': ({ aggregateId }) => runJobAnalyze(aggregateId),
   'template.parse.requested': ({ payload }) => runTemplateParse(payload),
+  'document-import.recognition.requested': ({ aggregateId }) => runDocumentImport(aggregateId),
 };
 
 let timer = null;
@@ -477,7 +666,10 @@ async function processOnce(limit = 10) {
       db.run("UPDATE outbox_events SET status = 'done', processed_at = ? WHERE id = ?", [nowIso(), row.id]);
     } catch (err) {
       const attempts = row.attempts + 1;
-      const retryable = err && err.code === 'PROVIDER_TEMPORARY';
+      const retryable =
+        err
+        && ['PROVIDER_TEMPORARY', 'DOCUMENT_SERVICE_UNAVAILABLE', 'DOCUMENT_RECOGNITION_TIMEOUT']
+          .includes(err.code);
       if (retryable && attempts < 3) {
         // 可重试错误使用指数退避加随机抖动（TECH §8.4）
         const delay = Math.round(Math.min(30000, 500 * 2 ** attempts) + Math.random() * 300);
@@ -521,5 +713,6 @@ module.exports = {
   runJobOcr,
   runJobAnalyze,
   runTemplateParse,
+  runDocumentImport,
   STEPS,
 };

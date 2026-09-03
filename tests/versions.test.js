@@ -70,7 +70,6 @@ test('保存为版本：只新增一个版本并清空待成版标记（发布�
       draft_revision: draft.revision,
       profile_revision: before.profile.revision,
       job_revision: before.job.revision,
-      template_version_id: before.template.template_version_id,
     },
   });
   assert.strictEqual(res.status, 200, JSON.stringify(res.body));
@@ -82,6 +81,12 @@ test('保存为版本：只新增一个版本并清空待成版标记（发布�
   assert.strictEqual(after.draft.has_unsnapshotted_changes, false);
   assert.strictEqual(after.draft.pending_changes.length, 0, '待成版修改应清空');
   assert.strictEqual(after.draft.base_version_id, res.body.id);
+  const storedManual = JSON.parse(
+    db.get('SELECT resume_payload FROM resume_versions WHERE id = ?', [res.body.id]).resume_payload,
+  );
+  assert.strictEqual(storedManual.schema_version, ResumeDom.RESUME_DOCUMENT_VERSION);
+  assert.ok(storedManual.root);
+  assert.strictEqual(Object.hasOwn(storedManual, 'template_document'), false);
 });
 
 test('重复 Idempotency-Key 保存版本：不新增版本', async () => {
@@ -92,7 +97,6 @@ test('重复 Idempotency-Key 保存版本：不新增版本', async () => {
     draft_revision: before.draft.revision,
     profile_revision: before.profile.revision,
     job_revision: before.job.revision,
-    template_version_id: before.template.template_version_id,
   };
   const first = await helpers.call(ctx, 'POST', `/projects/${projectId}/versions`, { idemKey: key, body: payload });
   const second = await helpers.call(ctx, 'POST', `/projects/${projectId}/versions`, { idemKey: key, body: payload });
@@ -155,13 +159,55 @@ test('历史比较默认覆盖动态简历全文与当前实时草稿', async ()
   assert.ok(detail.body.resume, '版本详情必须返回可完整渲染的历史简历');
 });
 
-test('从旧版本继续：先保护未保存修改，可选择恢复岗位和模板且不改个人信息', async () => {
+test('历史列表使用各版本真实第一页缩略图，重复访问不重复生成', async () => {
+  const current = await workspace();
+  const versions = current.versions.slice(0, 3);
+  assert.ok(versions.length >= 2);
+  versions.forEach((version) => {
+    assert.strictEqual(
+      version.thumbnail_url,
+      `/api/v1/versions/${version.id}/thumbnail`,
+    );
+  });
+
+  const origin = ctx.base.replace('/api/v1', '');
+  const buffers = [];
+  for (const version of versions) {
+    const response = await fetch(origin + version.thumbnail_url);
+    assert.strictEqual(response.status, 200);
+    assert.match(response.headers.get('content-type') || '', /^image\/png/);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    assert.ok(buffer.length > 500, '缩略图应包含有效图片内容');
+    buffers.push(buffer);
+  }
+  assert.ok(
+    new Set(buffers.map((buffer) => buffer.toString('base64'))).size > 1,
+    '不同正文或排版的版本不应继续显示成同一张图',
+  );
+
+  const repeated = await fetch(origin + versions[0].thumbnail_url);
+  assert.strictEqual(repeated.status, 200);
+  assert.strictEqual(
+    db.get(
+      "SELECT COUNT(*) AS total FROM artifacts WHERE version_id = ? AND type = 'thumbnail'",
+      [versions[0].id],
+    ).total,
+    1,
+  );
+
+  const crossUser = await fetch(origin + versions[0].thumbnail_url, {
+    headers: { 'x-user-id': otherUser },
+  });
+  assert.strictEqual(crossUser.status, 404);
+});
+
+test('从旧版本继续：先保护未保存修改，只复制完整简历且不改资料和岗位', async () => {
   const before = await workspace();
   const oldVersion = before.versions[before.versions.length - 1]; // 最早的版本
   const historical = await helpers.call(ctx, 'GET', `/versions/${oldVersion.id}`);
   const blocked = await helpers.call(ctx, 'POST', `/versions/${oldVersion.id}/clone`, {
     idemKey: `clone-blocked-${oldVersion.id}`,
-    body: { draft_revision: before.draft.revision, restore_context: true },
+    body: { draft_revision: before.draft.revision },
   });
   assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
   assert.strictEqual(blocked.body.title, 'UNSAVED_DRAFT_CHANGES');
@@ -170,7 +216,6 @@ test('从旧版本继续：先保护未保存修改，可选择恢复岗位和�
   const cloneBody = {
     draft_revision: before.draft.revision,
     discard_unsaved: true,
-    restore_context: true,
   };
   const res = await helpers.call(ctx, 'POST', `/versions/${oldVersion.id}/clone`, {
     idemKey: cloneKey,
@@ -179,6 +224,7 @@ test('从旧版本继续：先保护未保存修改，可选择恢复岗位和�
   assert.strictEqual(res.status, 200, JSON.stringify(res.body));
   assert.strictEqual(res.body.original_version_intact, true);
   assert.strictEqual(res.body.profile_unchanged, true);
+  assert.strictEqual(res.body.job_unchanged, true);
   const replay = await helpers.call(ctx, 'POST', `/versions/${oldVersion.id}/clone`, {
     idemKey: cloneKey,
     body: cloneBody,
@@ -191,16 +237,9 @@ test('从旧版本继续：先保护未保存修改，可选择恢复岗位和�
   assert.strictEqual(after.draft.revision, res.body.draft_revision);
   assert.strictEqual(after.draft.has_unsnapshotted_changes, false);
   assert.strictEqual(after.draft.pending_changes.length, 0, '明确放弃后旧待保存修改必须清理');
-  assert.deepStrictEqual(after.profile, before.profile, '恢复历史上下文不得覆盖个人信息');
-  if (historical.body.template_payload.template_version_id) {
-    assert.strictEqual(
-      after.template.template_version_id,
-      historical.body.template_payload.template_version_id,
-    );
-  }
-  if (historical.body.job_payload.id) {
-    assert.strictEqual(after.job.id, historical.body.job_payload.id);
-  }
+  assert.deepStrictEqual(after.profile, before.profile, '复制历史简历不得覆盖个人信息');
+  assert.deepStrictEqual(after.job, before.job, '复制历史简历不得切换当前岗位');
+  assert.deepStrictEqual(after.draft.resume_json, historical.body.resume);
   const stillThere = db.get('SELECT * FROM resume_versions WHERE id = ?', [oldVersion.id]);
   assert.strictEqual(stillThere.version_no, oldVersion.version_no, '原版本不得被覆盖');
 });
@@ -214,7 +253,7 @@ test('一键生成：创建快照与 generated 版本，并产出 PDF/DOCX（发
       project_revision: before.project.revision,
       profile_revision: before.profile.revision,
       job_revision: before.job.revision,
-      template_version_id: before.template.template_version_id,
+      draft_revision: before.draft.revision,
     },
   });
   assert.strictEqual(res.status, 200, JSON.stringify(res.body));
@@ -229,12 +268,17 @@ test('一键生成：创建快照与 generated 版本，并产出 PDF/DOCX（发
   const output = status.body.output;
   assert.ok(output.validation.artifacts.pdf, '必须产出 PDF');
   assert.ok(output.validation.artifacts.docx, '必须产出 DOCX');
-  assert.ok(output.resume_json.experience.length > 0);
+  assert.strictEqual(output.resume_json.schema_version, ResumeDom.RESUME_DOCUMENT_VERSION);
+  assert.match(ResumeDom.plainText(output.resume_json), /产品|项目/);
 
   const after = await workspace();
   assert.strictEqual(after.versions.length, before.versions.length + 1, '只应新增一个版本');
   const created = after.versions[0];
   assert.strictEqual(created.kind, 'generated');
+  const storedGenerated = JSON.parse(
+    db.get('SELECT resume_payload FROM resume_versions WHERE id = ?', [created.id]).resume_payload,
+  );
+  assert.strictEqual(storedGenerated.schema_version, ResumeDom.RESUME_DOCUMENT_VERSION);
 
   // 快照与任务一一对应
   const snapshots = db.all(
@@ -242,6 +286,8 @@ test('一键生成：创建快照与 generated 版本，并产出 PDF/DOCX（发
     [projectId, res.body.generation_no],
   );
   assert.strictEqual(snapshots.length, 1, '同一 generation_no 只能有一个快照');
+  const frozenResume = JSON.parse(snapshots[0].resume_input_payload);
+  assert.strictEqual(frozenResume.schema_version, ResumeDom.RESUME_DOCUMENT_VERSION);
 });
 
 test('重复提交同一生成请求：只产生一个快照与一个版本', async () => {
@@ -252,7 +298,7 @@ test('重复提交同一生成请求：只产生一个快照与一个版本', as
     project_revision: before.project.revision,
     profile_revision: before.profile.revision,
     job_revision: before.job.revision,
-    template_version_id: before.template.template_version_id,
+    draft_revision: before.draft.revision,
   };
   const first = await helpers.call(ctx, 'POST', `/projects/${projectId}/generations`, { idemKey: key, body: payload });
   const second = await helpers.call(ctx, 'POST', `/projects/${projectId}/generations`, { idemKey: key, body: payload });
@@ -287,6 +333,21 @@ test('跨用户访问返回 404（发布验收 9）', async () => {
   const versions = (await workspace()).versions;
   const versionRes = await helpers.call(ctx, 'GET', `/versions/${versions[0].id}`, { user: otherUser });
   assert.strictEqual(versionRes.status, 404, '他人不得访问该版本');
+});
+
+test('现行 API 不提供模板列表、切换模板或只恢复排版接口', async () => {
+  const current = await workspace();
+  const version = current.versions[0];
+  const list = await helpers.call(ctx, 'GET', '/templates');
+  const switchTemplate = await helpers.call(ctx, 'PUT', `/projects/${projectId}/template`, {
+    body: { template_version_id: 'legacy-template' },
+  });
+  const applyLayout = await helpers.call(ctx, 'POST', `/versions/${version.id}/apply-layout`, {
+    body: { draft_revision: current.draft.revision },
+  });
+  assert.strictEqual(list.status, 404);
+  assert.strictEqual(switchTemplate.status, 404);
+  assert.strictEqual(applyLayout.status, 404);
 });
 
 test('导出产物可下载且 DOCX 与 PDF 来自同一份结构化简历', async () => {

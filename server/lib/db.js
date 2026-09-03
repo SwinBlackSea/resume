@@ -109,6 +109,7 @@ function migrateContentRelations(database) {
       ['resume_versions', 'template_payload'],
       ['resume_versions', 'job_payload'],
       ['generation_snapshots', 'profile_payload'],
+      ['generation_snapshots', 'resume_input_payload'],
       ['generation_snapshots', 'template_payload'],
       ['generation_snapshots', 'job_payload'],
       ['generation_snapshots', 'generation_config'],
@@ -144,6 +145,7 @@ function migrateContentRelations(database) {
       BEFORE UPDATE ON generation_snapshots
       FOR EACH ROW WHEN
         OLD.profile_payload   IS NOT NEW.profile_payload  OR
+        OLD.resume_input_payload IS NOT NEW.resume_input_payload OR
         OLD.template_payload  IS NOT NEW.template_payload OR
         OLD.job_payload       IS NOT NEW.job_payload      OR
         OLD.generation_config IS NOT NEW.generation_config OR
@@ -168,15 +170,61 @@ function getDb() {
   if (!conversationColumns.some((column) => column.name === 'status')) {
     db.exec("ALTER TABLE ai_conversations ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
   }
+  const artifactColumns = db.prepare('PRAGMA table_info(artifacts)').all();
+  if (!artifactColumns.some((column) => column.name === 'document_import_id')) {
+    db.exec('ALTER TABLE artifacts ADD COLUMN document_import_id TEXT REFERENCES document_imports(id)');
+  }
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS ix_artifacts_document_import ON artifacts(document_import_id, type)',
+  );
+  const snapshotColumns = db.prepare('PRAGMA table_info(generation_snapshots)').all();
+  if (!snapshotColumns.some((column) => column.name === 'resume_input_payload')) {
+    db.exec(
+      "ALTER TABLE generation_snapshots ADD COLUMN resume_input_payload TEXT NOT NULL DEFAULT '{}'",
+    );
+  }
   // v1.3：不再建立内容来源、证据映射或资料到正文派生关系。
   // 旧本地库只迁移结构，用户内容与必要的操作记录继续保留。
-  const templateColumns = db.prepare('PRAGMA table_info(template_definitions)').all();
+  let templateColumns = db.prepare('PRAGMA table_info(template_definitions)').all();
   if (
     templateColumns.some((item) => item.name === 'source_upload_id') &&
     !templateColumns.some((item) => item.name === 'template_upload_id')
   ) {
     db.exec('ALTER TABLE template_definitions RENAME COLUMN source_upload_id TO template_upload_id');
+    templateColumns = db.prepare('PRAGMA table_info(template_definitions)').all();
   }
+  const documentImportColumns = db.prepare('PRAGMA table_info(document_imports)').all();
+  if (!documentImportColumns.some((item) => item.name === 'applied_template_version_id')) {
+    db.exec(
+      'ALTER TABLE document_imports ADD COLUMN applied_template_version_id TEXT REFERENCES template_versions(id)',
+    );
+  }
+  if (!documentImportColumns.some((item) => item.name === 'applied_version_id')) {
+    db.exec(
+      'ALTER TABLE document_imports ADD COLUMN applied_version_id TEXT REFERENCES resume_versions(id)',
+    );
+  }
+  db.exec(
+    `UPDATE document_imports
+     SET applied_template_version_id = (
+       SELECT tv.id
+       FROM template_versions tv
+       JOIN template_definitions td ON td.id = tv.template_id
+       WHERE td.owner_id = document_imports.owner_id
+         AND td.template_upload_id = document_imports.upload_id
+       ORDER BY tv.version DESC
+       LIMIT 1
+     )
+     WHERE status = 'applied'
+       AND applied_template_version_id IS NULL
+       AND EXISTS (
+         SELECT 1
+         FROM template_versions tv
+         JOIN template_definitions td ON td.id = tv.template_id
+         WHERE td.owner_id = document_imports.owner_id
+           AND td.template_upload_id = document_imports.upload_id
+       )`,
+  );
   const legacyJobFiles = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'job_sources'")
     .get();

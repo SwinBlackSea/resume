@@ -4,7 +4,7 @@
  *
  * - /api/v1/* 走 REST 路由（TECH §5.2：路径版本为 /api/v1）
  * - / 与静态资源返回 index.html（前端统一维护在单一 HTML，见 AGENTS.md）
- * - 启动时初始化系统模板与演示数据，并启动 outbox Worker
+ * - 启动时初始化兼容数据与演示数据，并启动 outbox Worker
  */
 const http = require('node:http');
 const fs = require('node:fs');
@@ -18,15 +18,14 @@ const { uuidv7, sendJson, sendProblem, readJsonBody, problem } = require('./lib/
 const db = require('./lib/db');
 const { resolveUser, ipHash } = require('./lib/auth');
 const { seedIfEmpty } = require('./lib/seed');
-const { ensureSystemTemplates } = require('./lib/templates');
 const queue = require('./lib/queue');
 
 const MODULES = [
   './modules/workspace',
   './modules/profile',
   './modules/jobs',
-  './modules/templates',
   './modules/uploads',
+  './modules/document-imports',
   './modules/draft',
   './modules/ai',
   './modules/versions',
@@ -158,7 +157,6 @@ function createServer() {
 }
 
 function bootstrap({ port = 8787 } = {}) {
-  ensureSystemTemplates();
   const seeded = seedIfEmpty();
   queue.startWorker();
   const server = createServer();

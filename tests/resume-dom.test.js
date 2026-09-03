@@ -148,11 +148,96 @@ test('通用差异引擎识别动态模块、文本和样式变化，不把固�
   assert.strictEqual(diff.counts.moved, 0, '插入新模块不应把后续原有模块误判为移动');
 });
 
+test('导入简历保存为单一完整文档，页面、样式与可编辑内容一起保留', () => {
+  const importedDocument = ResumeDom.normalizeDocument({
+    version: ResumeDom.VERSION,
+    root: ResumeDom.elementNode('resume-root', 'article', {}, [
+      ResumeDom.elementNode(
+        'imported-page-1',
+        'section',
+        { class: 'imported-document-page' },
+        [
+          ResumeDom.elementNode(
+            'imported-background-1',
+            'img',
+            { class: 'imported-scene-background', src: '/preview/page-1.png' },
+          ),
+          ResumeDom.elementNode(
+            'imported-summary',
+            'p',
+            { class: 'imported-scene-text' },
+            [],
+            { text: '负责产品规划与增长实验。', editable: true, label: '个人总结' },
+          ),
+        ],
+      ),
+    ]),
+  });
+  const document = ResumeDom.toResumeDocument({
+    dom_document: importedDocument,
+    page_setup: { size: 'A4', max_pages: 1 },
+    styles: { '--accent': '#0066cc' },
+    assets: [{ id: 'page-1', type: 'preview' }],
+  });
+
+  assert.strictEqual(document.schema_version, ResumeDom.RESUME_DOCUMENT_VERSION);
+  assert.ok(ResumeDom.findNode(document, 'imported-summary'));
+  assert.ok(
+    ResumeDom.findNode(document, 'imported-background-1'),
+    '完整文档必须直接保留页面视觉结构',
+  );
+  assert.match(ResumeDom.plainText(document), /增长实验/);
+  assert.deepStrictEqual(document.page_setup, { size: 'A4', max_pages: 1 });
+  assert.deepStrictEqual(document.styles, { '--accent': '#0066cc' });
+  assert.strictEqual(document.assets[0].id, 'page-1');
+  assert.strictEqual(Object.hasOwn(document, 'content_document'), false);
+  assert.strictEqual(Object.hasOwn(document, 'template_document'), false);
+  assert.strictEqual(Object.hasOwn(document, 'layout_bindings'), false);
+});
+
+test('直接编辑事务修改同一文档，并保留页面、样式和资源', () => {
+  const document = ResumeDom.toResumeDocument({
+    ...legacyResume,
+    page_setup: { size: 'A4', orientation: 'portrait', max_pages: 2 },
+    styles: { '--accent': '#1d1d1f' },
+    assets: [{ id: 'avatar', type: 'image' }],
+  });
+  const changed = ResumeDom.applyDocumentOperations(document, [
+    { op: 'replace_text', node_id: 'target-bullet', text: '负责产品规划、验证和上线。' },
+    { op: 'set_style', node_id: 'target-bullet', style: { 'font-weight': '700' } },
+  ]);
+
+  assert.strictEqual(changed.schema_version, ResumeDom.RESUME_DOCUMENT_VERSION);
+  assert.match(ResumeDom.plainText(changed), /规划、验证和上线/);
+  assert.strictEqual(ResumeDom.findNode(changed, 'target-bullet').node.style['font-weight'], '700');
+  assert.deepStrictEqual(changed.page_setup, document.page_setup);
+  assert.deepStrictEqual(changed.styles, document.styles);
+  assert.deepStrictEqual(changed.assets, document.assets);
+});
+
 test('整份简历可由 AI 新增动态模块，新增内容可继续选中改写并撤销', async (t) => {
   const ctx = await helpers.boot();
   t.after(() => helpers.close(ctx));
   const projectId = await helpers.defaultProject(ctx);
-  const before = (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body;
+  let before = (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body;
+  if (ResumeDom.findNode(before.draft.resume_json, 'section-overseas')) {
+    const cleaned = await helpers.call(
+      ctx,
+      'POST',
+      `/projects/${projectId}/resume-draft/transactions`,
+      {
+        body: {
+          expected_revision: before.draft.revision,
+          mutation_id: `remove-existing-overseas-${Date.now()}`,
+          operations: [{ op: 'remove_node', node_id: 'section-overseas' }],
+          label: '清理已有海外经历测试模块',
+          input_type: 'structure',
+        },
+      },
+    );
+    assert.strictEqual(cleaned.status, 200, JSON.stringify(cleaned.body));
+    before = (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body;
+  }
 
   const proposed = await helpers.call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
     body: {
@@ -174,7 +259,7 @@ test('整份简历可由 AI 新增动态模块，新增内容可继续选中改�
   assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
 
   const after = (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body;
-  const added = ResumeDom.findNode(after.draft.resume_json.dom_document, 'overseas-content-1');
+  const added = ResumeDom.findNode(after.draft.resume_json, 'overseas-content-1');
   assert.ok(added);
   assert.strictEqual(ResumeDom.nodeText(added.node), '曾参与跨国团队协作');
   assert.strictEqual(Object.hasOwn(after.draft.resume_json, 'overseas'), false);
@@ -201,7 +286,7 @@ test('整份简历可由 AI 新增动态模块，新增内容可继续选中改�
   assert.strictEqual(reverted.status, 200, JSON.stringify(reverted.body));
   const restored = (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body;
   assert.strictEqual(
-    ResumeDom.findNode(restored.draft.resume_json.dom_document, 'section-overseas'),
+    ResumeDom.findNode(restored.draft.resume_json, 'section-overseas'),
     null,
   );
 });

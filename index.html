@@ -22,7 +22,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 .ai-orb{position:relative;width:32px;height:32px;display:grid;place-items:center;flex:none;border-radius:50%;color:white;background:conic-gradient(from 210deg,#0071e3,#8e5ce6,#50b7ff,#0071e3);box-shadow:0 5px 15px rgba(75,93,215,.23)}.ai-orb:after{content:"✦";font-size:13px}
 .doc-toolbar{display:flex;align-items:center;margin-bottom:10px;padding:0 2px}.doc-toolbar b{font-size:11px}.doc-tools{position:relative;margin-left:auto;display:flex;align-items:center;gap:5px}.doc-tools button{height:28px;padding:0 9px;border:0;border-radius:8px;background:rgba(118,118,128,.08);color:#66666b;font-size:9px}.doc-tools button:hover{background:rgba(118,118,128,.14)}.mobile-history-open{display:none}.zoom-control{position:relative}.zoom-menu{position:absolute;z-index:30;top:34px;right:0;display:none;min-width:112px;padding:5px;border:1px solid rgba(0,0,0,.07);border-radius:12px;background:rgba(255,255,255,.96);box-shadow:0 12px 34px rgba(0,0,0,.13);backdrop-filter:blur(18px)}.zoom-menu.show{display:block;animation:pop .16s ease}.zoom-menu button{width:100%;display:block;text-align:left;background:transparent}.zoom-menu button.active{background:#eaf3ff;color:#0066cc}
 .resume{position:relative;min-height:900px;padding:58px 64px 64px;background:#fff;box-shadow:0 24px 70px rgba(0,0,0,.12);font-family:Arial,"PingFang SC",sans-serif}.resume-top{padding-bottom:19px;border-bottom:2px solid #1d1d1f}.resume-top h1{margin:0;font-size:30px;letter-spacing:4px}.resume-top p{margin:7px 0 0;color:#5f6265;font-size:10px}.resume-section{margin-top:25px}.resume-section h2{margin:0 0 11px;padding-bottom:6px;border-bottom:1px solid #d1d1d6;font-size:12px;letter-spacing:1.5px}.resume-section p,.resume-section li{font-size:9.5px;line-height:1.75;color:#414448}.resume-section p{margin:5px 0}.resume-section ul{margin:7px 0;padding-left:16px}.resume-section li{position:relative;margin:5px 0;padding:3px 4px;border-radius:5px;transition:.18s}.resume-section li:hover,.editable.selected{background:#f2f7ff;box-shadow:0 0 0 1px rgba(0,113,227,.12)}.resume-row{display:flex;align-items:baseline;margin-top:12px;font-size:10px;font-weight:700}.resume-row .role{margin-left:12px;color:#4d5155;font-weight:500}.resume-row time{margin-left:auto;color:#73767a;font-size:9px;font-weight:400}
-.resume.template-modern .resume-top{border-bottom-color:#0071e3}.resume.template-modern .resume-top h1,.resume.template-modern .resume-section h2{color:#0066cc}.resume.template-modern .resume-section h2{border-bottom-color:#bad7f2}.resume.template-minimal{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}.resume.template-minimal .resume-top{border-bottom:1px solid #d9d9de}.resume.template-minimal .resume-section h2{border:0;padding-bottom:0;color:#55555a;letter-spacing:2px}.resume.template-minimal .resume-section{margin-top:29px}
+.manual-edit-toolbar{display:none;align-items:center;gap:5px;margin:0 0 10px;padding:7px 9px;border:1px solid rgba(0,0,0,.07);border-radius:12px;background:rgba(255,255,255,.92);box-shadow:0 7px 22px rgba(0,0,0,.05)}.manual-edit-toolbar.show{display:flex}.manual-edit-toolbar button{min-width:30px;height:29px;padding:0 9px;border:0;border-radius:8px;background:#f1f1f5;color:#55555a;font-size:9px}.manual-edit-toolbar button:hover{background:#e7effa;color:#0066cc}.manual-edit-toolbar .manual-edit-status{margin-left:auto;color:#318354;font-size:9px}.resume.manual-editing [data-resume-editable=true]{cursor:text;border-radius:4px;outline:0}.resume.manual-editing [data-resume-editable=true]:hover,.resume.manual-editing [data-resume-editable=true]:focus{background:#f2f7ff;box-shadow:0 0 0 1px rgba(0,113,227,.16)}.resume.manual-editing [data-resume-editable=true]:focus{box-shadow:0 0 0 2px rgba(0,113,227,.2)}
 .selection-tools{position:fixed;z-index:45;display:none;padding:5px;border:1px solid rgba(255,255,255,.6);border-radius:12px;background:rgba(36,36,39,.92);box-shadow:0 12px 35px rgba(0,0,0,.2);backdrop-filter:blur(18px)}.selection-tools.show{display:flex;animation:pop .18s ease}.selection-tools button{height:29px;padding:0 9px;border:0;border-radius:8px;background:transparent;color:#fff;font-size:9px}.selection-tools button:hover{background:rgba(255,255,255,.13)}.selection-tools .spark{color:#a9cfff}
 .advisor{position:sticky;top:68px;grid-column:3;grid-row:2;height:calc(100vh - 172px);padding:22px 18px 30px;border-left:1px solid var(--line);background:rgba(250,250,252,.72);overflow:auto}.advisor-head{display:flex;align-items:center}.advisor-head .ai-orb{width:28px;height:28px}.advisor-head b{margin-left:9px}.live{margin-left:auto;display:flex;align-items:center;gap:5px;color:#318354;font-size:9px}.live i{width:6px;height:6px;border-radius:50%;background:#34c759}
 .tabs{display:flex;margin:18px 0 14px;padding:3px;border-radius:11px;background:rgba(118,118,128,.09)}.tabs button{flex:1;height:30px;border:0;border-radius:8px;background:transparent;color:#737378;font-size:10px}.tabs button.active{background:#fff;color:#1d1d1f;box-shadow:0 2px 8px rgba(0,0,0,.07);font-weight:650}.tab-panel{display:none}.tab-panel.active{display:block}
@@ -33,10 +33,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 .composer-wrap{position:sticky;bottom:0;z-index:25;grid-column:2/4;grid-row:3;padding:10px 32px 16px;border-top:1px solid var(--line);background:rgba(248,248,250,.8);backdrop-filter:saturate(180%) blur(24px)}.quick-prompts{max-width:1040px;margin:0 auto 7px;display:flex;gap:6px;overflow:auto}.quick-prompts button{height:25px;padding:0 9px;white-space:nowrap;border:0;border-radius:99px;background:rgba(118,118,128,.08);color:#77777c;font-size:9px}.quick-prompts button:hover{background:rgba(0,113,227,.09);color:var(--blue)}
 .composer{max-width:1040px;height:58px;margin:auto;display:flex;align-items:center;gap:8px;padding:7px 8px 7px 10px;border:1px solid rgba(0,0,0,.08);border-radius:19px;background:rgba(255,255,255,.94);box-shadow:0 12px 40px rgba(0,0,0,.09);transition:.2s}.composer:focus-within,.composer.drag{border-color:rgba(0,113,227,.35);box-shadow:0 12px 44px rgba(0,0,0,.1),0 0 0 4px rgba(0,113,227,.08)}.composer button{width:38px;height:38px;flex:none;border:0;border-radius:12px;background:#f2f2f7;color:#5f5f64}.composer .mic.on{background:#ffebe9;color:#d84d42;animation:pulse 1.1s infinite}.composer input{min-width:0;flex:1;border:0;outline:0;background:transparent;font-size:12px}.composer .send{background:var(--blue);color:#fff}.composer .send:disabled{background:#d1d1d6}
 .overlay{position:fixed;inset:0;z-index:80;display:none;place-items:center;padding:20px;background:rgba(0,0,0,.24);backdrop-filter:blur(14px)}.overlay.show{display:grid;animation:fade .2s ease}.modal{width:min(720px,100%);max-height:calc(100vh - 40px);overflow:auto;border:1px solid rgba(255,255,255,.65);border-radius:26px;background:rgba(250,250,252,.95);box-shadow:0 35px 100px rgba(0,0,0,.25);animation:modal .3s cubic-bezier(.2,.8,.2,1)}.modal-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;padding:21px 23px 16px;border-bottom:1px solid var(--line);background:rgba(250,250,252,.86);backdrop-filter:blur(20px)}.modal-head h2{margin:0;font-size:19px;letter-spacing:-.5px}.modal-head p{margin:3px 0 0;color:#8e8e93;font-size:9px}.close{margin-left:auto;width:34px;height:34px;border:0;border-radius:50%;background:rgba(118,118,128,.11);color:#6e6e73;font-size:17px}.modal-body{padding:20px 23px 24px}
-.history-browser{width:min(920px,100%)}.history-back{display:none;width:34px;height:34px;margin-right:10px;border:0;border-radius:50%;background:#eeeef2;color:#55555a}.history-back.show{display:block}.history-view{display:none}.history-view.active{display:block}.history-list{padding:18px 23px 24px}.history-day{margin:4px 2px 8px;color:#8e8e93;font-size:9px;font-weight:700}.history-day:not(:first-child){margin-top:18px}.version-row{width:100%;display:grid;grid-template-columns:54px minmax(0,1fr) auto;align-items:center;gap:13px;padding:11px;margin-bottom:7px;border:1px solid transparent;border-radius:16px;background:rgba(255,255,255,.78);text-align:left;transition:.18s}.version-row:hover{border-color:rgba(0,0,0,.06);background:#fff;box-shadow:0 8px 26px rgba(0,0,0,.06);transform:translateY(-1px)}.version-thumb{width:54px;height:70px;padding:9px 7px;border-radius:5px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.11)}.version-thumb:before{content:"";display:block;width:55%;height:4px;margin-bottom:7px;background:#36363a}.version-thumb:after{content:"";display:block;height:40px;background:repeating-linear-gradient(#b7b7bc 0 1px,transparent 1px 7px)}.version-row-copy{min-width:0}.version-row-copy b,.version-row-copy span{display:block}.version-row-copy b{font-size:11px}.version-row-copy span{margin-top:4px;color:#8e8e93;font-size:8px}.version-row-copy em{display:block;margin-top:5px;color:#66666b;font-size:8.5px;font-style:normal}.version-kind{display:inline-block!important;width:max-content;margin-top:5px!important;padding:2px 6px;border-radius:99px;background:#f0f0f4;color:#74747a!important;font-size:7px!important}.version-row-end{display:flex;align-items:center;gap:10px}.current-version{padding:4px 7px;border-radius:99px;background:#eaf3ff;color:#0066cc;font-size:8px}.version-arrow{color:#aaaab0;font-size:18px}
+.history-browser{width:min(920px,100%)}.history-back{display:none;width:34px;height:34px;margin-right:10px;border:0;border-radius:50%;background:#eeeef2;color:#55555a}.history-back.show{display:block}.history-view{display:none}.history-view.active{display:block}.history-list{padding:18px 23px 24px}.history-day{margin:4px 2px 8px;color:#8e8e93;font-size:9px;font-weight:700}.history-day:not(:first-child){margin-top:18px}.version-row{width:100%;display:grid;grid-template-columns:54px minmax(0,1fr) auto;align-items:center;gap:13px;padding:11px;margin-bottom:7px;border:1px solid transparent;border-radius:16px;background:rgba(255,255,255,.78);text-align:left;transition:.18s}.version-row:hover{border-color:rgba(0,0,0,.06);background:#fff;box-shadow:0 8px 26px rgba(0,0,0,.06);transform:translateY(-1px)}.version-thumb{position:relative;width:54px;height:70px;padding:9px 7px;overflow:hidden;border-radius:5px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.11)}.version-thumb:before{content:"";display:block;width:55%;height:4px;margin-bottom:7px;background:#36363a}.version-thumb:after{content:"";display:block;height:40px;background:repeating-linear-gradient(#b7b7bc 0 1px,transparent 1px 7px)}.version-thumb.has-image{padding:0}.version-thumb.has-image:before,.version-thumb.has-image:after{display:none}.version-thumb img{display:block;width:100%;height:100%;object-fit:contain;background:#fff}.version-row-copy{min-width:0}.version-row-copy b,.version-row-copy span{display:block}.version-row-copy b{font-size:11px}.version-row-copy span{margin-top:4px;color:#8e8e93;font-size:8px}.version-row-copy em{display:block;margin-top:5px;color:#66666b;font-size:8.5px;font-style:normal}.version-kind{display:inline-block!important;width:max-content;margin-top:5px!important;padding:2px 6px;border-radius:99px;background:#f0f0f4;color:#74747a!important;font-size:7px!important}.version-row-end{display:flex;align-items:center;gap:10px}.current-version{padding:4px 7px;border-radius:99px;background:#eaf3ff;color:#0066cc;font-size:8px}.version-arrow{color:#aaaab0;font-size:18px}
 .snapshot-layout{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}.snapshot-paper{min-height:520px;padding:42px 45px;border-radius:4px;background:#fff;box-shadow:0 16px 45px rgba(0,0,0,.1);font-family:Arial,"PingFang SC";font-size:8px;overflow:hidden}.snapshot-paper .ai-marker,.compare-copy .ai-marker{display:none}.snapshot-paper [data-resume-editable],.compare-copy [data-resume-editable]{pointer-events:none}.snapshot-side{padding:16px;border-radius:17px;background:#fff}.snapshot-side h3{margin:0 0 13px;font-size:12px}.snapshot-meta{display:grid;grid-template-columns:74px 1fr;gap:7px;padding-bottom:13px;border-bottom:1px solid rgba(0,0,0,.06);font-size:8.5px}.snapshot-meta span:nth-child(odd){color:#8e8e93}.snapshot-changes{margin-top:13px}.snapshot-change{padding:9px 10px;margin-top:6px;border-radius:10px;background:#f5f5f7;color:#55555a;font-size:8.5px}.snapshot-data-toggle{width:100%;height:33px;margin-top:13px;border:0;border-radius:10px;background:#edf5ff;color:#0066cc;font-size:9px}.snapshot-data{display:none;margin-top:8px;padding:4px 11px;border-radius:11px;background:#f8f8fa}.snapshot-data.show{display:block}.snapshot-data div{padding:8px 0;border-bottom:1px solid rgba(0,0,0,.055)}.snapshot-data div:last-child{border:0}.snapshot-data b,.snapshot-data span{display:block}.snapshot-data b{font-size:8px}.snapshot-data span{margin-top:2px;color:#818187;font-size:8px;line-height:1.45}.history-actions{position:relative;display:flex;justify-content:flex-end;gap:7px;margin-top:15px}.history-actions button{height:35px;padding:0 12px;border:0;border-radius:10px;background:#eeeef2;color:#55555a;font-size:9px}.history-actions .primary{background:#0071e3;color:#fff}.history-actions button:disabled{opacity:.45}.download-menu{position:absolute;right:183px;bottom:41px;display:none;width:126px;padding:5px;border:1px solid rgba(0,0,0,.07);border-radius:11px;background:#fff;box-shadow:0 12px 32px rgba(0,0,0,.14)}.download-menu.show{display:block}.download-menu button{width:100%;display:block;text-align:left;background:#fff}.download-menu button:hover{background:#f3f5f8}.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.compare-card{padding:16px;border-radius:16px;background:#fff;min-width:0}.compare-card h3{margin:0 0 3px;font-size:11px}.compare-card>span{color:#8e8e93;font-size:8px}.compare-copy{min-height:430px;margin-top:14px;padding:30px 28px;border-radius:5px;background:#fff;color:#55555a;font-family:Arial,"PingFang SC";font-size:7px;line-height:1.55;box-shadow:inset 0 0 0 1px rgba(0,0,0,.045);overflow:hidden}.diff-added{background:#e9f8ef!important;box-shadow:0 0 0 2px rgba(40,163,106,.22)!important}.diff-removed{background:#fff0ee!important;box-shadow:0 0 0 2px rgba(211,72,54,.18)!important}.diff-changed{background:#fff8df!important;box-shadow:0 0 0 2px rgba(225,157,35,.2)!important}.compare-note{padding:12px;margin-top:12px;border-radius:13px;background:#edf5ff;color:#476378;font-size:9px;line-height:1.6}.compare-change-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.compare-change{padding:9px 10px;border-radius:10px;background:#fff;color:#5b5b60}.restore-choice{display:flex;gap:10px;padding:12px;margin-top:8px;border:1px solid rgba(0,0,0,.07);border-radius:13px;background:#fff}.restore-choice input{margin-top:2px}.restore-choice b,.restore-choice span{display:block}.restore-choice b{font-size:10px}.restore-choice span{margin-top:2px;color:#818187;font-size:8px}.restore-warning{padding:11px;margin-bottom:13px;border-radius:12px;background:#fff5e9;color:#96551e;font-size:9px;line-height:1.55}.restore-warning.clean{background:#eef8f2;color:#367252}.restore-version-actions{display:flex;justify-content:flex-end;gap:7px;flex-wrap:wrap;margin-top:16px}.restore-version-actions button{height:35px;padding:0 13px;border:0;border-radius:10px;background:#eeeef2;color:#55555a}.restore-version-actions .primary{background:#0071e3;color:#fff}.restore-version-actions .danger{background:#fff0ee;color:#b8473d}
 .rewrite-modal{width:min(600px,100%)}.rewrite-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.rewrite-box{padding:14px;border-radius:14px;background:#f2f2f7;color:#626267;font-size:10px;line-height:1.65}.rewrite-box.new{background:#edf5ff}.rewrite-box label{display:block;margin-bottom:7px;color:#8e8e93;font-size:8px;font-weight:700}.rewrite-box ins{text-decoration:none;background:rgba(0,113,227,.1);color:#0066cc}.modal-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:15px}
-.template-modal{width:min(650px,100%)}.template-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.template-choice{padding:13px;border:1px solid rgba(0,0,0,.07);border-radius:16px;background:#fff;text-align:left;transition:.18s}.template-choice:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(0,0,0,.07)}.template-choice.active{border-color:rgba(0,113,227,.38);box-shadow:0 0 0 3px rgba(0,113,227,.08)}.template-preview{height:112px;margin-bottom:10px;padding:14px;border-radius:8px;background:#f5f5f7}.template-preview:before{content:"";display:block;width:48%;height:8px;margin-bottom:12px;background:#343437}.template-preview:after{content:"";display:block;height:58px;background:repeating-linear-gradient(#a8a8ad 0 2px,transparent 2px 10px)}.template-choice[data-template="modern"] .template-preview{border-top:7px solid #0071e3}.template-choice[data-template="minimal"] .template-preview{background:#fff;border:1px solid #ededf0}.template-choice b,.template-choice span{display:block}.template-choice b{font-size:10px}.template-choice span{margin-top:3px;color:#8e8e93;font-size:8px}.template-upload{display:flex;align-items:center;margin-top:13px;padding:12px 14px;border-radius:14px;background:#f2f2f7}.template-upload span{color:#77777c;font-size:9px}.template-upload button{margin-left:auto;height:31px;padding:0 10px;border:0;border-radius:9px;background:#fff;color:#55555a;font-size:9px}
 .save-version-modal{width:min(520px,100%)}.version-name-field{display:block;color:#77777c;font-size:9px}.version-name-field input{width:100%;height:42px;margin-top:7px;padding:0 12px;border:1px solid rgba(0,0,0,.1);border-radius:11px;background:#fff;outline:0;font-size:11px}.version-name-field input:focus{border-color:rgba(0,113,227,.38);box-shadow:0 0 0 4px rgba(0,113,227,.07)}.save-change-summary{margin-top:15px;padding:13px;border-radius:14px;background:#f5f5f7}.save-change-summary b{font-size:10px}.save-change-list{margin:8px 0 0;padding:0;list-style:none}.save-change-list li{padding:5px 0;color:#626267;font-size:9px}.save-change-list li:before{content:"✓";margin-right:7px;color:#278052}.save-version-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:16px}.save-version-actions button{height:35px;padding:0 13px;border:0;border-radius:10px;background:#eeeef2;color:#55555a}.save-version-actions .primary{background:#0071e3;color:#fff}
 .agent-run{text-align:center;padding:34px}.agent-run .ai-orb{width:46px;height:46px;margin:auto}.agent-run h2{margin:15px 0 4px;font-size:18px}.agent-run>p{margin:0;color:#8e8e93;font-size:10px}.run-log{max-width:420px;margin:21px auto 0;text-align:left}.run-step{display:flex;align-items:center;gap:9px;padding:8px 0;color:#9a9aa0;font-size:10px}.run-step i{width:17px;height:17px;display:grid;place-items:center;border-radius:50%;background:#e9e9ed;font-style:normal;font-size:8px}.run-step.done{color:#3a3a3e}.run-step.done i{background:#e8f7ef;color:var(--green)}.run-step.active{color:var(--blue);font-weight:650}.run-step.active i{background:#eaf4ff;animation:pulse 1s infinite}
 .toast{position:fixed;z-index:100;left:50%;bottom:118px;padding:10px 15px;border-radius:99px;background:rgba(29,29,31,.92);color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translate(-50%,12px);pointer-events:none;transition:.22s}.toast.show{opacity:1;transform:translate(-50%,0)}
@@ -80,6 +79,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 @keyframes sendThinking{to{transform:rotate(360deg)}}@keyframes targetThinking{50%{box-shadow:inset 3px 0 #7c5ce7,0 0 0 3px rgba(88,86,214,.08)}}@keyframes locateTarget{50%{box-shadow:inset 3px 0 #0071e3,0 0 0 5px rgba(0,113,227,.14)}}
 @media(prefers-reduced-motion:reduce){.assistant-tools .send.is-thinking:before,.editable.ai-target-thinking,.editable.locate-pulse{animation:none!important}}
 @media(max-width:760px){.editable.ai-target:after{left:4px;top:-19px;width:auto;padding:3px 6px;transform:none}.editable.ai-target{margin-top:24px}}
+.document-import-trigger .compact{display:none}.document-import-modal{width:min(980px,100%);overflow:auto}.document-import-stage{display:none}.document-import-stage.active{display:block}.document-import-drop{min-height:310px;display:grid;place-items:center;padding:34px;border:1.5px dashed rgba(0,113,227,.28);border-radius:20px;background:linear-gradient(145deg,#f8fbff,#f7f5ff);text-align:center;transition:.2s}.document-import-drop.drag{border-color:#0071e3;background:#edf6ff;box-shadow:0 0 0 5px rgba(0,113,227,.07)}.document-import-drop-icon{width:58px;height:58px;display:grid;place-items:center;margin:0 auto 16px;border-radius:18px;background:#fff;color:#0071e3;box-shadow:0 10px 30px rgba(0,113,227,.12);font-size:20px;font-weight:700}.document-import-drop h3{margin:0;font-size:16px;letter-spacing:-.25px}.document-import-drop p{max-width:430px;margin:6px auto 17px;color:#7a7a80;font-size:10px;line-height:1.7}.document-import-drop button,.document-import-actions button,.document-import-retry{height:37px;padding:0 14px;border:0;border-radius:11px;background:#ececf1;color:#55555a;font-size:10px;font-weight:650}.document-import-drop button,.document-import-actions .primary{background:#0071e3;color:#fff}.document-import-limit{display:block;margin-top:11px;color:#99999e;font-size:8px}.document-import-file{display:flex;align-items:center;gap:11px;padding:12px 14px;border-radius:14px;background:#fff}.document-import-file-icon{width:36px;height:36px;display:grid;place-items:center;flex:none;border-radius:10px;background:#edf5ff;color:#0066cc;font-size:9px;font-weight:750;text-transform:uppercase}.document-import-file-copy{min-width:0;flex:1}.document-import-file-copy b,.document-import-file-copy span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.document-import-file-copy b{font-size:10px}.document-import-file-copy span{margin-top:2px;color:#8e8e93;font-size:8px}.document-import-processing{min-height:350px;display:grid;align-content:center;max-width:520px;margin:auto}.document-import-processing .ai-orb{width:48px;height:48px;margin:0 auto 16px}.document-import-processing h3,.document-import-processing>p{text-align:center}.document-import-processing h3{margin:0;font-size:17px}.document-import-processing>p{margin:5px 0 20px;color:#85858a;font-size:9px}.document-import-progress{height:7px;margin:17px 0 7px;border-radius:99px;background:#e6e6eb;overflow:hidden}.document-import-progress i{display:block;width:4%;height:100%;border-radius:99px;background:linear-gradient(90deg,#7c5ce7,#0071e3);transition:width .35s}.document-import-progress-meta{display:flex;color:#8b8b91;font-size:8px}.document-import-progress-meta span:last-child{margin-left:auto}.document-import-error{display:none;padding:14px;margin-top:14px;border-radius:13px;background:#fff0ee;color:#98463f;font-size:9px;line-height:1.6}.document-import-error.show{display:block}.document-import-error .document-import-retry{display:block;margin-top:10px;background:#fff;color:#b8473d}.document-import-review{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.document-import-review-column{min-width:0}.document-import-review-head{display:flex;align-items:flex-start;min-height:42px;margin-bottom:8px}.document-import-review-head div{min-width:0}.document-import-review-head b,.document-import-review-head span{display:block}.document-import-review-head b{font-size:11px}.document-import-review-head span{margin-top:2px;color:#85858a;font-size:8px}.document-import-review-head em{margin-left:auto;padding:3px 7px;border-radius:99px;background:#eaf8f1;color:#278052;font-size:7px;font-style:normal}.document-import-source,.document-import-result{height:510px;padding:13px;border-radius:16px;background:#e9e9ed;overflow:auto}.document-import-source-empty{height:100%;display:grid;place-items:center;color:#8b8b91;font-size:9px;text-align:center}.document-import-page{display:block;width:min(100%,430px);margin:0 auto 13px;background:#fff;box-shadow:0 8px 28px rgba(0,0,0,.13)}.document-import-result{padding:18px;background:#ededf1}.document-import-result .resume{min-height:0;padding:35px 38px;box-shadow:0 8px 28px rgba(0,0,0,.12);zoom:.68!important}.document-import-result [data-resume-editable=true]{cursor:text;border-radius:3px}.document-import-result [data-resume-editable=true]:hover,.document-import-result [data-resume-editable=true]:focus{background:#f2f7ff;box-shadow:0 0 0 1px rgba(0,113,227,.16);outline:0}.document-import-quality{display:flex;align-items:center;gap:8px;padding:10px 12px;margin:14px 0;border-radius:13px;background:#eef8f2;color:#397356;font-size:9px}.document-import-quality.warn{background:#fff6ea;color:#925a26}.document-import-quality strong{font-size:9px}.document-import-quality span{margin-left:auto;color:inherit;opacity:.8;font-size:8px}.document-import-modes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.document-import-mode{position:relative;display:flex;gap:9px;padding:12px;border:1px solid rgba(0,0,0,.075);border-radius:13px;background:#fff;cursor:pointer}.document-import-mode:has(input:checked){border-color:rgba(0,113,227,.35);box-shadow:0 0 0 3px rgba(0,113,227,.07)}.document-import-mode input{margin:2px 0 0}.document-import-mode b,.document-import-mode span{display:block}.document-import-mode b{font-size:9px}.document-import-mode span{margin-top:2px;color:#85858a;font-size:8px;line-height:1.45}.document-import-actions{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:7px;padding-top:15px;margin-top:15px;background:linear-gradient(transparent,rgba(250,250,252,.98) 18%)}.document-import-actions button:disabled{opacity:.46;cursor:wait}.document-import-actions .secondary{margin-right:auto}.document-import-edit-hint{margin-top:7px;color:#85858a;font-size:8px}
+.resume:has(.imported-document-page){min-height:0;padding:0;background:transparent;box-shadow:none}.resume .imported-page-shell{position:relative;width:100%;overflow:hidden}.resume .imported-page-shell+.imported-page-shell{margin-top:18px}.resume .imported-document-page{display:block;border:0;border-radius:0;transform-origin:top left;box-shadow:0 24px 70px rgba(0,0,0,.12)}.resume .imported-scene-background{display:block;visibility:hidden}.resume .imported-scene-background.scene-loaded{visibility:visible}.resume .imported-scene-text{box-sizing:border-box}.resume .imported-scene-span{display:inline-block}.resume .imported-paragraph{max-width:none}.resume .imported-title,.resume .imported-heading,.resume .imported-paragraph{font:inherit;color:inherit}.resume .imported-table{font:inherit;color:inherit}.resume .imported-table td{font:inherit;color:inherit}.document-import-result .resume:has(.imported-document-page){padding:0;box-shadow:none;zoom:1!important}
+@media(max-width:760px){#document-import-modal{padding:0}.document-import-trigger .wide{display:none}.document-import-trigger .compact{display:inline}.document-import-modal{width:100%;height:100%;max-height:none;border-radius:0}.document-import-modal .modal-head{padding:16px 17px 12px}.document-import-modal .modal-body{padding:14px 14px 18px}.document-import-drop{min-height:calc(100vh - 150px);padding:24px 18px}.document-import-review{grid-template-columns:1fr}.document-import-source,.document-import-result{height:430px}.document-import-result .resume{padding:30px 25px;zoom:.74!important}.document-import-modes{grid-template-columns:1fr}.document-import-actions{padding-bottom:max(4px,env(safe-area-inset-bottom))}.document-import-review-head{min-height:auto}.document-import-quality{align-items:flex-start;flex-wrap:wrap}.document-import-quality span{width:100%;margin-left:0}}
 </style>
 </head>
 <body>
@@ -100,8 +102,9 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 <div class="canvas-inner">
   <div class="undo-bar" id="undo-bar"><span id="undo-message">已应用修改</span><button id="undo-action">撤销</button></div>
 
-  <div class="doc-toolbar"><b>当前简历</b><div class="doc-tools"><button class="mobile-history-open history-open" aria-label="打开历史版本">历史 · 3</button><button id="template-button">模板：经典商务</button><div class="zoom-control"><button id="zoom-button">缩放：90%</button><div class="zoom-menu" id="zoom-menu"><button data-zoom=".75">75%</button><button class="active" data-zoom=".9">90%</button><button data-zoom="1">100%</button><button data-zoom="fit">适应宽度</button></div></div></div></div>
-  <article class="resume template-classic" id="resume-document" style="zoom:.9"></article>
+  <div class="doc-toolbar"><b>当前简历</b><div class="doc-tools"><button class="mobile-history-open history-open" aria-label="打开历史版本">历史 · 3</button><button class="document-import-trigger" id="document-import-button"><span class="wide">从文件导入</span><span class="compact">导入</span></button><button class="edit-document" id="edit-document-button">直接编辑</button><div class="zoom-control"><button id="zoom-button">缩放：90%</button><div class="zoom-menu" id="zoom-menu"><button data-zoom=".75">75%</button><button class="active" data-zoom=".9">90%</button><button data-zoom="1">100%</button><button data-zoom="fit">适应宽度</button></div></div></div></div>
+  <div class="manual-edit-toolbar" id="manual-edit-toolbar"><button data-command="bold"><b>B</b></button><button data-command="italic"><i>I</i></button><button data-command="insertUnorderedList">项目符号</button><button id="add-resume-section">＋ 模块</button><span class="manual-edit-status edit-hint">修改会自动保存，完成后可继续让 AI 编辑</span></div>
+  <article class="resume" id="resume-document" style="zoom:.9"></article>
 </div>
 </main>
 
@@ -139,15 +142,15 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 <div class="selection-tools" id="selection-tools"><button class="spark rewrite-action">✦ 帮我改写</button><button data-intent="简洁">更精炼</button><button data-intent="成果">强调成果</button><button data-intent="岗位">更符合岗位</button></div>
 
 <div class="overlay" id="history-modal"><div class="modal history-browser">
-  <div class="modal-head" id="history-head"><button class="history-back" id="history-back" aria-label="返回">←</button><div><h2 id="history-title">历史版本</h2><p id="history-subtitle">生成或主动保存的版本都会保存在这里</p></div><button class="close">×</button></div>
+  <div class="modal-head" id="history-head"><button class="history-back" id="history-back" aria-label="返回">←</button><div><h2 id="history-title">历史版本</h2><p id="history-subtitle">导入、生成或主动保存的版本都会保存在这里</p></div><button class="close">×</button></div>
   <div class="history-view history-list active" id="history-list"></div>
 
   <div class="history-view modal-body" id="history-detail">
-    <div class="snapshot-layout"><div class="snapshot-paper resume template-classic" id="snapshot-resume"></div>
-    <div class="snapshot-side"><h3>这个版本</h3><div class="snapshot-meta"><span>目标岗位</span><span id="snapshot-job"></span><span>模板</span><span id="snapshot-template"></span><span>生成时间</span><span id="snapshot-time"></span></div><div class="snapshot-changes"><h3>主要调整</h3><div id="snapshot-change-list"></div></div><button class="snapshot-data-toggle" id="snapshot-data-toggle">查看当时的资料</button><div class="snapshot-data" id="snapshot-data"><div><b>个人资料</b><span id="snapshot-profile-data"></span></div><div><b>岗位信息</b><span id="snapshot-job-data"></span></div><div><b>简历模板</b><span id="snapshot-template-data"></span></div></div></div></div>
+    <div class="snapshot-layout"><div class="snapshot-paper resume" id="snapshot-resume"></div>
+    <div class="snapshot-side"><h3>这个版本</h3><div class="snapshot-meta"><span>目标岗位</span><span id="snapshot-job"></span><span>文档页数</span><span id="snapshot-pages"></span><span>生成时间</span><span id="snapshot-time"></span></div><div class="snapshot-changes"><h3>主要调整</h3><div id="snapshot-change-list"></div></div><button class="snapshot-data-toggle" id="snapshot-data-toggle">查看当时的资料</button><div class="snapshot-data" id="snapshot-data"><div><b>个人资料</b><span id="snapshot-profile-data"></span></div><div><b>岗位信息</b><span id="snapshot-job-data"></span></div></div></div></div>
     <div class="history-actions"><button id="compare-version">与当前草稿比较</button><button id="download-version">下载</button><div class="download-menu" id="download-menu"><button data-type="pdf">下载 PDF</button><button data-type="docx">下载 Word</button></div><button class="primary" id="copy-version">从此版本继续修改</button></div>
   </div>
-  <div class="history-view modal-body" id="history-compare"><div class="compare-grid"><div class="compare-card old"><h3 id="compare-old-title"></h3><span id="compare-old-time"></span><div class="compare-copy resume template-classic" id="compare-old-copy"></div></div><div class="compare-card current"><h3 id="compare-current-title">当前草稿</h3><span id="compare-current-time"></span><div class="compare-copy resume template-classic" id="compare-current-copy"></div></div></div><div class="compare-note"><div id="compare-note"></div><div class="compare-change-list" id="compare-change-list"></div></div></div>
+  <div class="history-view modal-body" id="history-compare"><div class="compare-grid"><div class="compare-card old"><h3 id="compare-old-title"></h3><span id="compare-old-time"></span><div class="compare-copy resume" id="compare-old-copy"></div></div><div class="compare-card current"><h3 id="compare-current-title">当前草稿</h3><span id="compare-current-time"></span><div class="compare-copy resume" id="compare-current-copy"></div></div></div><div class="compare-note"><div id="compare-note"></div><div class="compare-change-list" id="compare-change-list"></div></div></div>
 </div></div>
 
 <div class="overlay" id="save-version-modal"><div class="modal save-version-modal">
@@ -158,8 +161,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 <div class="overlay" id="restore-version-modal"><div class="modal save-version-modal">
   <div class="modal-head"><div><h2>从这个版本继续修改</h2><p>原来的历史版本会保留，不会被覆盖</p></div><button class="close">×</button></div>
   <div class="modal-body"><div class="restore-warning" id="restore-warning"></div>
-    <label class="restore-choice"><input type="radio" name="restore-scope" value="resume" checked><span><b>只使用这份简历正文</b><span>保留现在选择的岗位和模板</span></span></label>
-    <label class="restore-choice"><input type="radio" name="restore-scope" value="context"><span><b>同时使用当时的岗位和模板</b><span>个人信息不会被改动；已失效的岗位或模板会保留当前选择</span></span></label>
+    <p>会复制这个版本的完整简历作为当前草稿。历史版本不会改变，当前岗位和个人资料也不会被替换。</p>
     <div class="restore-version-actions"><button id="cancel-restore-version">取消</button><button class="danger" id="discard-and-restore">放弃当前修改并继续</button><button class="primary" id="save-and-restore">先保存当前草稿并继续</button><button class="primary" id="confirm-restore-version">从此版本继续</button></div>
   </div>
 </div></div>
@@ -169,9 +171,32 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
   <div class="modal-body"><p id="new-chat-summary" style="margin:0;color:#626267;font-size:10px;line-height:1.8"></p><div class="save-version-actions"><button id="cancel-new-chat">取消</button><button class="primary" id="confirm-new-chat">开始新对话</button></div></div>
 </div></div>
 
-<div class="overlay" id="template-modal"><div class="modal template-modal">
-  <div class="modal-head"><div><h2>选择简历模板</h2><p>内容不会变化，只调整排版和视觉风格</p></div><button class="close">×</button></div>
-  <div class="modal-body"><div class="template-grid" id="template-grid"></div><div class="template-upload"><span id="template-upload-status">已有自己的图片、PDF 或 Word 模板？</span><button id="template-upload-button">上传模板</button><input type="file" id="template-file" hidden accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp"></div></div>
+<div class="overlay" id="document-import-modal"><div class="modal document-import-modal">
+  <div class="modal-head"><div><h2 id="document-import-title">从文件导入</h2><p id="document-import-subtitle">上传简历，确认识别结果后直接应用</p></div><button class="close" aria-label="关闭文件导入">×</button></div>
+  <div class="modal-body">
+    <section class="document-import-stage active" id="document-import-upload-stage">
+      <div class="document-import-drop" id="document-import-drop">
+        <div><span class="document-import-drop-icon">⇧</span><h3>拖入一份简历文件</h3><p>支持 PDF、Word 和常见图片。系统会还原为一份完整、可直接编辑的简历，确认前不会改变当前草稿。</p><button id="document-import-choose">选择文件</button><span class="document-import-limit">PDF、DOCX、DOC、PNG、JPG、WEBP · 最大 20 MB</span></div>
+      </div>
+      <input type="file" id="document-import-file" hidden accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp">
+    </section>
+    <section class="document-import-stage" id="document-import-processing-stage">
+      <div class="document-import-processing">
+        <div class="ai-orb"></div><h3>正在识别这份文件</h3><p id="document-import-status-text">正在检查文件</p>
+        <div class="document-import-file"><span class="document-import-file-icon" id="document-import-file-type">PDF</span><span class="document-import-file-copy"><b id="document-import-file-name"></b><span id="document-import-file-meta"></span></span></div>
+        <div class="document-import-progress"><i id="document-import-progress-bar"></i></div><div class="document-import-progress-meta"><span id="document-import-progress-label">准备识别</span><span id="document-import-progress-value">4%</span></div>
+        <div class="document-import-error" id="document-import-error"><span id="document-import-error-message"></span><button class="document-import-retry" id="document-import-retry">重新识别</button></div>
+      </div>
+    </section>
+    <section class="document-import-stage" id="document-import-review-stage">
+      <div class="document-import-review">
+        <div class="document-import-review-column"><div class="document-import-review-head"><div><b>原文件</b><span id="document-import-source-meta">逐页查看原来的样子</span></div></div><div class="document-import-source" id="document-import-preview-pages"></div></div>
+        <div class="document-import-review-column"><div class="document-import-review-head"><div><b>可编辑结果</b><span>点击文字可在应用前修正</span></div><em>尚未应用</em></div><div class="document-import-result"><article class="resume" id="document-import-resume"></article></div><div class="document-import-edit-hint">这里只修改本次识别结果；确认应用后才会替换当前草稿。</div></div>
+      </div>
+      <div class="document-import-quality" id="document-import-quality"><strong id="document-import-quality-title">识别完成</strong><span id="document-import-quality-detail"></span></div>
+      <div class="document-import-actions"><button class="secondary" id="document-import-replace-file">换个文件</button><button id="document-import-cancel">暂不使用</button><button class="primary" id="document-import-apply">确认并应用</button></div>
+    </section>
+  </div>
 </div></div>
 
 <div class="overlay" id="run-modal"><div class="modal" style="width:min(540px,100%)"><div class="agent-run"><div class="ai-orb"></div><h2>AI 正在生成新简历</h2><p id="generation-status">你可以关闭窗口，任务会继续运行</p><div class="run-log" id="run-log"><div class="run-step active"><i>1</i>正在校验资料与岗位</div><div class="run-step"><i>2</i>正在冻结本次输入</div><div class="run-step"><i>3</i>正在重组简历内容</div><div class="run-step"><i>4</i>正在渲染 PDF 与 DOCX</div><div class="run-step"><i>5</i>正在检查内容是否真实</div></div></div></div></div>
@@ -239,7 +264,7 @@ function refresh(){return api('/projects/'+PROJECT_ID).then(function(data){WS=da
 var pendingChanges=[],lastChange=null;
 function labelOfScope(scopeLabel,changeType){
   var short=String(scopeLabel||'').replace('@简历 · ','');
-  if(changeType==='template')return short;
+  if(changeType==='document_transaction')return short||'直接编辑简历';
   return '修改'+short;
 }
 function syncPendingFromServer(){
@@ -264,15 +289,16 @@ function periodOf(item){
   var s=item.start||item.start_date||'',e=item.end||item.end_date||'';
   if(!s&&!e)return '';return s+' — '+(e||'至今');}
 function maskPhone(p){p=String(p||'');return p.length>=7?p.slice(0,3)+' **** '+p.slice(-4):p}
-function layoutKey(){return ((WS.draft.resume_json||{}).layout_hints||{}).layout||'classic'}
 function exps(type){return (WS.profile.experiences||[]).filter(function(e){return e.type===type})}
 
 function renderAll(){
   renderContextCards();renderResume();renderProfileModal();renderJobModal();
-  renderTemplates();renderChat();renderHistory();syncPendingFromServer();
+  renderChat();renderHistory();syncPendingFromServer();
+  updateHistoryCount();
+}
+function updateHistoryCount(){
   $$(".history-open").forEach(function(button){
     button.textContent=(button.classList.contains("mobile-history-open")?'历史 · ':'历史版本 · ')+WS.versions.length;});
-  $("#template-button").textContent='模板：'+(WS.template?WS.template.name:'未选择');
 }
 
 function renderContextCards(){
@@ -294,15 +320,211 @@ function renderContextCards(){
 }
 
 var resumeDomRenderer=null;
+var manualEditMode=false,manualEditTarget=null,manualEditTimer=null,manualEditComposing=false;
+var manualSaveChain=Promise.resolve();
+var importedPageFitters=new WeakMap();
+function fitImportedSceneText(container){
+  function fit(){
+    Array.prototype.forEach.call(container.querySelectorAll("[data-scene-text-width-pt]"),function(element){
+      var targetPt=Number(element.dataset.sceneTextWidthPt||0);
+      if(!targetPt)return;
+      element.style.transform="none";
+      var natural=element.scrollWidth;
+      if(!natural)return;
+      var targetPx=targetPt*96/72;
+      element.style.transform="scaleX("+(targetPx/natural).toFixed(5)+")";});}
+  fit();
+  if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);
+}
+function hydrateImportedScene(container){
+  fitImportedSceneText(container);
+  var images=Array.prototype.slice.call(container.querySelectorAll("[data-scene-background-artifact-id]"));
+  if(!images.length)return;
+  var urls={};
+  images.forEach(function(image){
+    var id=image.dataset.sceneBackgroundArtifactId;
+    var request=urls[id]||(urls[id]=artifactPreviewUrl(id));
+    request.then(function(url){
+      if(!image.isConnected)return;
+      image.onload=function(){image.classList.add("scene-loaded")};
+      image.src=url;
+      if(image.complete)image.classList.add("scene-loaded");
+    }).catch(function(){image.classList.remove("scene-loaded")});});
+}
+function fitImportedPages(container){
+  var previous=importedPageFitters.get(container);
+  if(previous){if(previous.observer)previous.observer.disconnect();if(previous.onResize)window.removeEventListener("resize",previous.onResize);}
+  var pages=Array.prototype.slice.call(container.querySelectorAll(".imported-document-page"));
+  if(!pages.length){importedPageFitters.delete(container);return;}
+  var shells=pages.map(function(page){
+    var shell=page.parentElement&&page.parentElement.classList.contains("imported-page-shell")
+      ?page.parentElement:document.createElement("div");
+    if(!shell.classList.contains("imported-page-shell")){
+      shell.className="imported-page-shell";
+      page.parentNode.insertBefore(shell,page);shell.appendChild(page);}
+    return {shell:shell,page:page};});
+  function resize(){
+    shells.forEach(function(item){
+      var available=item.shell.clientWidth,natural=item.page.offsetWidth;
+      if(!available||!natural)return;
+      var scale=Math.min(1,available/natural);
+      item.page.style.transform="scale("+scale+")";
+      item.page.style.marginLeft=available>natural?Math.round((available-natural)/2)+"px":"0";
+      item.shell.style.height=Math.ceil(item.page.scrollHeight*scale)+"px";});}
+  var state={observer:null,onResize:null};
+  if(typeof ResizeObserver!=="undefined"){
+    state.observer=new ResizeObserver(resize);
+    state.observer.observe(container);
+    shells.forEach(function(item){state.observer.observe(item.page);});
+  }else{
+    state.onResize=resize;window.addEventListener("resize",resize);}
+  importedPageFitters.set(container,state);requestAnimationFrame(resize);
+}
 function renderResume(){
   var r=WS.draft.resume_json||{},doc=$("#resume-document");
   var domDocument=ResumeDom.ensureDocument(r);
-  doc.className='resume template-'+layoutKey();
+  doc.className='resume'+(manualEditMode?' manual-editing':'');
   if(!resumeDomRenderer)resumeDomRenderer=new ResumeDom.Renderer(doc);
   resumeDomRenderer.render(domDocument);
+  hydrateImportedScene(doc);
+  fitImportedPages(doc);
   bindEditables();bindAiMarkers();
+  if(manualEditMode)enableDirectEditElements();
   syncResumeTargetMarkers();
 }
+function directElementText(element){
+  var copy=element.cloneNode(true);
+  Array.prototype.forEach.call(copy.querySelectorAll(".ai-marker,[data-editor-only=true]"),function(node){node.remove()});
+  return String(copy.textContent||'').replace(/\u00a0/g,' ');
+}
+function setManualEditStatus(text,busy){
+  var status=$("#manual-edit-toolbar .manual-edit-status");
+  status.textContent=text;status.style.color=busy?'#8a6227':'#318354';
+}
+function enableDirectEditElements(){
+  $$("#resume-document [data-resume-editable=true]").forEach(function(element){
+    element.setAttribute("contenteditable","true");
+    element.spellcheck=true;
+    if(element.dataset.savedText===undefined)element.dataset.savedText=directElementText(element);
+  });
+}
+function queueDocumentTransaction(operations,label,inputType,scopeId){
+  var mutationId=uid();
+  setManualEditStatus("正在保存…",true);
+  manualSaveChain=manualSaveChain.catch(function(){/* 上一次失败不阻断后续用户操作 */}).then(function(){
+    return api('/projects/'+PROJECT_ID+'/resume-draft/transactions',{method:'POST',body:{
+      expected_revision:WS.draft.revision,mutation_id:mutationId,operations:operations,
+      scope_id:scopeId||null,label:label||'直接编辑简历',input_type:inputType||'direct_edit'}});
+  }).then(function(result){
+    WS.draft.revision=result.revision;
+    WS.draft.resume_json=result.resume_json;
+    WS.draft.has_unsnapshotted_changes=true;
+    markUnsaved(label||'直接编辑简历');
+    showUndo(null,null,label||'已直接编辑简历',{changeId:result.change_id});
+    setManualEditStatus("已自动保存",false);
+    return result;
+  }).catch(function(error){
+    setManualEditStatus("保存失败",true);
+    toast(error.message);
+    if(error.code==='REVISION_CONFLICT'){
+      manualEditMode=false;
+      return refresh();
+    }
+    return null;
+  });
+  return manualSaveChain;
+}
+function saveDirectElement(element,inputType){
+  if(!element||manualEditComposing)return manualSaveChain;
+  clearTimeout(manualEditTimer);manualEditTimer=null;
+  var before=String(element.dataset.savedText||'');
+  var after=directElementText(element);
+  if(before===after)return manualSaveChain;
+  element.dataset.savedText=after;
+  var label='直接修改'+getScopeName(element).replace('@简历 · ','');
+  return queueDocumentTransaction([
+    {op:'replace_text',node_id:element.dataset.nodeId,text:after,replace_children:true}
+  ],label,inputType||'typing',element.dataset.nodeId);
+}
+function startDirectEditing(){
+  manualEditMode=true;
+  selectedText=null;activeContext=null;activeTaskId=null;continuationContext=null;
+  proposalResumeScopeId=null;
+  $("#selection-label").textContent='@整份简历';
+  $("#selection-context").classList.add("global");
+  $("#selection-context").classList.remove("data-scope");
+  $("#resume-document").classList.add("manual-editing");
+  $("#manual-edit-toolbar").classList.add("show");
+  $("#edit-document-button").classList.add("active");
+  $("#edit-document-button").textContent="完成编辑";
+  $("#selection-tools").classList.remove("show");
+  enableDirectEditElements();
+  setManualEditStatus("修改会自动保存",false);
+}
+function finishDirectEditing(){
+  if(!manualEditMode)return Promise.resolve();
+  if(manualEditTarget)saveDirectElement(manualEditTarget,"typing");
+  return manualSaveChain.then(function(){
+    manualEditMode=false;manualEditTarget=null;
+    $("#manual-edit-toolbar").classList.remove("show");
+    $("#edit-document-button").classList.remove("active");
+    $("#edit-document-button").textContent="直接编辑";
+    return refresh();
+  });
+}
+$("#edit-document-button").onclick=function(){
+  if(manualEditMode)finishDirectEditing();else startDirectEditing();
+};
+$("#resume-document").addEventListener("focusin",function(event){
+  var element=event.target.closest&&event.target.closest("[data-resume-editable=true]");
+  if(!manualEditMode||!element)return;
+  manualEditTarget=element;
+  if(element.dataset.savedText===undefined)element.dataset.savedText=directElementText(element);
+});
+$("#resume-document").addEventListener("input",function(event){
+  var element=event.target.closest&&event.target.closest("[data-resume-editable=true]");
+  if(!manualEditMode||!element||manualEditComposing)return;
+  manualEditTarget=element;clearTimeout(manualEditTimer);
+  setManualEditStatus("等待保存…",true);
+  manualEditTimer=setTimeout(function(){saveDirectElement(element,"typing")},650);
+});
+$("#resume-document").addEventListener("focusout",function(event){
+  var element=event.target.closest&&event.target.closest("[data-resume-editable=true]");
+  if(manualEditMode&&element)saveDirectElement(element,"typing");
+});
+$("#resume-document").addEventListener("compositionstart",function(){manualEditComposing=true});
+$("#resume-document").addEventListener("compositionend",function(event){
+  manualEditComposing=false;
+  var element=event.target.closest&&event.target.closest("[data-resume-editable=true]");
+  if(manualEditMode&&element)saveDirectElement(element,"composition");
+});
+$$('#manual-edit-toolbar [data-command]').forEach(function(button){
+  button.onclick=function(){
+    if(!manualEditTarget){toast('请先点选要调整的文字');return;}
+    var command=button.dataset.command,style={};
+    if(command==='bold')style['font-weight']='700';
+    else if(command==='italic')style['font-style']='italic';
+    else if(command==='insertUnorderedList'){
+      style.display='list-item';style['list-style-type']='disc';style['margin-left']='18px';
+    }
+    queueDocumentTransaction([
+      {op:'set_style',node_id:manualEditTarget.dataset.nodeId,style:style}
+    ],'调整文字样式','formatting',manualEditTarget.dataset.nodeId).then(function(){renderResume()});
+  };
+});
+$("#add-resume-section").onclick=function(){
+  var documentValue=ResumeDom.ensureDocument(WS.draft.resume_json||{});
+  var suffix=Date.now().toString(36),sectionId='manual-section-'+suffix;
+  var section={
+    id:sectionId,type:'element',tag:'section',attributes:{class:'resume-section'},label:'新模块',children:[
+      {id:sectionId+'-title',type:'element',tag:'h2',attributes:{},children:[],text:'技能证书',editable:true,label:'模块标题'},
+      {id:sectionId+'-content',type:'element',tag:'p',attributes:{class:'editable'},children:[],text:'点击这里填写内容',editable:true,label:'模块内容'}
+    ]
+  };
+  queueDocumentTransaction([
+    {op:'insert_node',parent_id:documentValue.root.id,node:section}
+  ],'增加技能证书模块','structure',sectionId).then(function(){renderResume()});
+};
 /** AI 建议标记：选中对应内容、切换作用范围并预填意图（原型交互） */
 function bindAiMarkers(){
   $$("#resume-document .ai-marker").forEach(function(marker){
@@ -384,19 +606,6 @@ function renderJobModal(){
     a.keywords.map(function(k){return '<span>'+esc(k)+'</span>'}).join('')+'</div></div></section>';
   $("#job-records").innerHTML=html;
   $$("#job-records .record-toggle").forEach(function(btn){btn.onclick=function(){btn.closest(".record-group").classList.toggle("open")}});
-}
-
-/* ---------------- 模板选择 ---------------- */
-function renderTemplates(){
-  var map={classic:'经典商务',modern:'现代分栏',minimal:'极简留白'};
-  var desc={classic:'稳重清晰，适合多数岗位',modern:'更有识别度，突出重点',minimal:'克制轻盈，强调内容'};
-  var current=(WS.template||{}).key||'classic';
-  var items=(WS.templates||[]).slice().sort(function(x,y){
-    var o={classic:0,modern:1,minimal:2};return (o[x.key]==null?9:o[x.key])-(o[y.key]==null?9:o[y.key]);});
-  $("#template-grid").innerHTML=items.map(function(t){
-    var key=t.key==='custom'?'custom':t.key;
-    return '<button class="template-choice'+(t.template_version_id===(WS.template||{}).template_version_id?' active':'')+'" data-template="'+esc(key)+'" data-name="'+esc(t.name)+'" data-version="'+esc(t.template_version_id)+'"><span class="template-preview"></span><b>'+esc(t.name)+'</b><span>'+esc(desc[key]||'自定义模板')+'</span></button>';}).join('');
-  $$("#template-grid .template-choice").forEach(function(b){b.onclick=function(){pickTemplate(b)}});
 }
 
 /* ---------------- AI 对话 ---------------- */
@@ -568,9 +777,11 @@ function renderHistory(){
     var day=dayLabel(v.created_at);
     if(day!==lastDay){html+='<div class="history-day">'+esc(day)+'</div>';lastDay=day;}
     var currentLabel=(v.is_base_version||v.is_current)?(WS.draft.has_unsnapshotted_changes?'草稿基于此版':'当前草稿'):'';
-    var kindLabel=v.kind==='generated'?'AI 生成':'手动保存';
-    html+='<button class="version-row" data-version="'+esc(v.id)+'"><span class="version-thumb"></span><span class="version-row-copy"><b>'+esc(v.name)+'</b><span>'+esc(fmtTime(v.created_at)+(v.template?' · '+v.template:''))+'</span><span class="version-kind">'+kindLabel+'</span><em>'+esc(v.list_summary||(v.changes.length?v.changes.length+' 处调整':'保存完整草稿'))+'</em></span><span class="version-row-end">'+(currentLabel?'<span class="current-version">'+currentLabel+'</span>':'')+'<span class="version-arrow">›</span></span></button>';});
+    var kindLabel=v.kind==='generated'?'AI 生成':(v.kind==='imported'?'文件导入':'手动保存');
+    var thumbnail=v.thumbnail_url?'<span class="version-thumb has-image"><img src="'+esc(toApiUrl(v.thumbnail_url))+'" alt="'+esc(v.name)+'缩略图" loading="lazy" decoding="async" draggable="false"></span>':'<span class="version-thumb"></span>';
+    html+='<button class="version-row" data-version="'+esc(v.id)+'">'+thumbnail+'<span class="version-row-copy"><b>'+esc(v.name)+'</b><span>'+esc(fmtTime(v.created_at))+'</span><span class="version-kind">'+kindLabel+'</span><em>'+esc(v.list_summary||(v.changes.length?v.changes.length+' 处调整':'保存完整草稿'))+'</em></span><span class="version-row-end">'+(currentLabel?'<span class="current-version">'+currentLabel+'</span>':'')+'<span class="version-arrow">›</span></span></button>';});
   list.innerHTML=html;
+  $$("#history-list .version-thumb img").forEach(function(img){img.onerror=function(){var thumb=img.closest(".version-thumb");if(thumb)thumb.classList.remove("has-image");img.remove();}});
   $$("#history-list .version-row").forEach(function(b){b.onclick=function(){openHistoryDetail(b.dataset.version)}});
 }
 
@@ -620,6 +831,12 @@ function abandonPromptUi(){
 function bindEditables(){
   $$("#resume-document [data-resume-editable=true]").forEach(function(el){
     el.onclick=function(e){
+      if(manualEditMode){
+        manualEditTarget=el;selectedText=el;
+        $$("#resume-document [data-resume-editable=true]").forEach(function(x){x.classList.remove("selected")});
+        el.classList.add("selected");$("#selection-tools").classList.remove("show");
+        e.stopPropagation();return;
+      }
       $$("#resume-document [data-resume-editable=true]").forEach(function(x){x.classList.remove("selected")});
       el.classList.add("editable","selected");selectedText=el;
       var activeId=activeContext&&activeContext.scopeType==="RESUME_BLOCK"?activeContext.scopeId:null;
@@ -694,6 +911,10 @@ $("#selection-label").addEventListener("keydown",function(e){
 
 /* ---------------- 发送消息：范围在发送时冻结（P0-17） ---------------- */
 function sendPrompt(){
+  if(manualEditMode){
+    finishDirectEditing().then(sendPrompt);
+    return;
+  }
   var input=$("#prompt"),value=input.value.trim(),requestContext=activeContext;
   if(!value||promptBusy)return;
   var scope=requestContext?(requestContext.scopeType||'RESUME_DOCUMENT'):'RESUME_DOCUMENT';
@@ -776,31 +997,24 @@ $("#undo-action").onclick=function(){
   }else{toast('这次修改没有可撤销记录');}
   lastChange=null;};
 
-/* ---------------- 模板 ---------------- */
-function pickTemplate(btn){
-  var previous=(WS.template||{}).name,changed=btn.dataset.name!==previous;
-  api('/projects/'+PROJECT_ID+'/template',{method:'PUT',body:{template_version_id:btn.dataset.version,mutation_id:uid()}})
-    .then(function(){return refresh()})
-    .then(function(){
-      $("#template-modal").classList.remove("show");
-      toast(changed?('已应用'+btn.dataset.name+'模板'):('当前已使用'+btn.dataset.name+'模板'));})
-    .catch(function(e){toast(e.message)});}
-$("#template-button").onclick=function(){openModal("#template-modal")};
-
 /* ---------------- 历史版本浏览器 ---------------- */
 function setHistoryView(view){
   $$(".history-view").forEach(function(x){x.classList.toggle("active",x.id==="history-"+view)});
   $("#history-back").classList.toggle("show",view!=="list");
-  if(view==="list"){$("#history-title").textContent="历史版本";$("#history-subtitle").textContent="生成或主动保存的版本都会保存在这里";}
-  else if(view==="compare"){$("#history-title").textContent="与当前草稿比较";$("#history-subtitle").textContent="高亮展示整份简历的内容、结构和排版变化";}}
-function openHistoryList(){setHistoryView("list");$(".history-browser").scrollTop=0;openModal("#history-modal")}
+  if(view==="list"){$("#history-title").textContent="历史版本";$("#history-subtitle").textContent="导入、生成或主动保存的版本都会保存在这里";}
+  else if(view==="compare"){$("#history-title").textContent="与当前草稿比较";$("#history-subtitle").textContent="高亮展示整份简历的内容、结构和显示变化";}}
+function openHistoryList(){
+  setHistoryView("list");$(".history-browser").scrollTop=0;openModal("#history-modal");
+  api('/projects/'+PROJECT_ID+'/versions').then(function(result){
+    WS.versions=result.items||[];
+    renderHistory();updateHistoryCount();
+  }).catch(function(e){toast('历史版本更新失败：'+e.message)});
+}
 var snapshotRenderer=null,compareOldRenderer=null,compareCurrentRenderer=null,activeHistoryDetail=null;
-function historyLayout(resume,template){
-  return ((resume||{}).layout_hints||{}).layout||(((template||{}).schema||{}).layout)||'classic';}
-function renderHistoryResume(containerId,resume,template,side){
-  var container=$(containerId),layout=historyLayout(resume,template);
+function renderHistoryResume(containerId,resume,side){
+  var container=$(containerId);
   var base=containerId==="#snapshot-resume"?"snapshot-paper resume":"compare-copy resume";
-  container.className=base+" template-"+layout;
+  container.className=base;
   var renderer=side==="snapshot"?snapshotRenderer:(side==="old"?compareOldRenderer:compareCurrentRenderer);
   if(!renderer){
     renderer=new ResumeDom.Renderer(container);
@@ -808,6 +1022,8 @@ function renderHistoryResume(containerId,resume,template,side){
     else if(side==="old")compareOldRenderer=renderer;
     else compareCurrentRenderer=renderer;}
   renderer.render(ResumeDom.ensureDocument(resume||{}));
+  hydrateImportedScene(container);
+  fitImportedPages(container);
   return renderer;}
 function openHistoryDetail(id){
   activeHistoryId=id;
@@ -816,9 +1032,9 @@ function openHistoryDetail(id){
     $("#history-title").textContent=d.name;
     var state=d.matches_current_draft?'与当前草稿一致':((d.is_base_version||d.is_current)?'当前草稿基于此版':'历史版本');
     $("#history-subtitle").textContent=fmtTime(d.created_at)+' · '+state;
-    renderHistoryResume("#snapshot-resume",d.resume,d.template_payload,"snapshot");
+    renderHistoryResume("#snapshot-resume",d.resume,"snapshot");
     $("#snapshot-job").textContent=(d.job_payload&&d.job_payload.title)?(d.job_payload.title+(d.job_payload.company?' · '+d.job_payload.company:'')):'未设置岗位';
-    $("#snapshot-template").textContent=(d.template_payload||{}).name||'';
+    $("#snapshot-pages").textContent=((d.resume&&d.resume.page_setup&&d.resume.page_setup.max_pages)||'自动')+' 页';
     $("#snapshot-time").textContent=fmtTime(d.created_at);
     var changes=(d.summary.changes||[]);
     $("#snapshot-change-list").innerHTML=changes.length
@@ -826,7 +1042,6 @@ function openHistoryDetail(id){
       :'<div class="snapshot-change">保存了当时的完整简历</div>';
     $("#snapshot-profile-data").textContent=d.summary.profile_data||'';
     $("#snapshot-job-data").textContent=d.summary.job_data||'';
-    $("#snapshot-template-data").textContent=d.summary.template_data||'';
     $("#snapshot-data").classList.remove("show");$("#snapshot-data-toggle").textContent="查看当时的资料";
     $("#compare-version").disabled=d.matches_current_draft;
     $("#compare-version").textContent=d.matches_current_draft?"与当前草稿一致":"与当前草稿比较";
@@ -852,8 +1067,8 @@ $("#compare-version").onclick=function(){
     $("#compare-old-title").textContent=d.old.title;$("#compare-old-time").textContent=fmtTime(d.old.created_at);
     $("#compare-current-title").textContent=d.current.title+(d.current.has_unsnapshotted_changes?' · 有新修改':'');
     $("#compare-current-time").textContent=fmtTime(d.current.created_at);
-    var oldRenderer=renderHistoryResume("#compare-old-copy",d.old.resume,activeHistoryDetail&&activeHistoryDetail.template_payload,"old");
-    var currentRenderer=renderHistoryResume("#compare-current-copy",d.current.resume,WS.template||{},"current");
+    var oldRenderer=renderHistoryResume("#compare-old-copy",d.old.resume,"old");
+    var currentRenderer=renderHistoryResume("#compare-current-copy",d.current.resume,"current");
     highlightCompare(oldRenderer,"old",d.diff.changes);highlightCompare(currentRenderer,"current",d.diff.changes);
     $("#compare-note").textContent=d.note;
     var seen={};
@@ -862,7 +1077,7 @@ $("#compare-version").onclick=function(){
     }).slice(0,12).map(function(c){return '<div class="compare-change">'+esc(diffAction(c.type)+'「'+c.label+'」')+'</div>';});
     (d.context_changes||[]).filter(function(c){return c.changed}).forEach(function(c){
       rows.push('<div class="compare-change">'+esc(c.label+'：'+c.before+' → '+c.after)+'</div>');});
-    $("#compare-change-list").innerHTML=rows.length?rows.join(''):'<div class="compare-change">正文、岗位和模板均一致</div>';
+    $("#compare-change-list").innerHTML=rows.length?rows.join(''):'<div class="compare-change">简历文档和岗位均一致</div>';
     setHistoryView("compare");$(".history-browser").scrollTop=0;}).catch(function(e){toast(e.message)});};
 $("#download-version").onclick=function(){
   $("#download-menu").classList.toggle("show");};
@@ -877,8 +1092,6 @@ function downloadHistoryArtifact(type){
     .then(function(d){window.location.href=toApiUrl(d.url);toast('已开始下载');})
     .catch(function(e){toast(e.message)});}
 $$("#download-menu button").forEach(function(button){button.onclick=function(){downloadHistoryArtifact(button.dataset.type)}});
-function restoreContextSelected(){
-  var selected=$('input[name="restore-scope"]:checked');return selected&&selected.value==="context";}
 function openRestoreVersion(){
   var dirty=Boolean(WS.draft.has_unsnapshotted_changes);
   $("#restore-warning").classList.toggle("clean",!dirty);
@@ -891,11 +1104,10 @@ function openRestoreVersion(){
   openModal("#restore-version-modal");}
 function cloneHistoryVersion(discard){
   return api('/versions/'+activeHistoryId+'/clone',{method:'POST',idemKey:'clone-'+activeHistoryId+'-'+uid(),body:{
-    draft_revision:WS.draft.revision,discard_unsaved:Boolean(discard),restore_context:restoreContextSelected()}})
-    .then(function(result){
+    draft_revision:WS.draft.revision,discard_unsaved:Boolean(discard)}})
+    .then(function(){
       $("#restore-version-modal").classList.remove("show");$("#history-modal").classList.remove("show");
-      var unavailable=(result.restored_context&&result.restored_context.unavailable)||[];
-      toast(unavailable.length?'已恢复简历；'+unavailable.join('、')+'不可用，已保留当前选择':'已从历史版本创建当前草稿');
+      toast('已复制完整简历，当前岗位和个人资料保持不变');
       return refresh();});}
 $("#copy-version").onclick=function(){
   openRestoreVersion();};
@@ -910,10 +1122,10 @@ $("#save-and-restore").onclick=function(){
 function suggestedVersionName(){
   var text=pendingChanges.join(' ');
   if(/转化|商业化/.test(text))return '突出商业化成果';
-  if(/模板/.test(text)&&pendingChanges.length===1)return '调整简历风格';
   if(/项目覆盖/.test(text))return '补充项目规模';
   return '完善简历内容';}
 function openSaveVersion(){
+  if(manualEditMode){finishDirectEditing().then(openSaveVersion);return;}
   if(!pendingChanges.length){toast('当前没有需要保存的修改');return;}
   $("#version-name-input").value=suggestedVersionName();
   $("#save-change-title").textContent='本次包含 '+pendingChanges.length+' 处修改';
@@ -925,8 +1137,7 @@ $("#cancel-save-version").onclick=function(){$("#save-version-modal").classList.
 function saveCurrentVersion(name){
   return api('/projects/'+PROJECT_ID+'/versions',{method:'POST',idemKey:'save-'+uid(),body:{
     name:name,draft_revision:WS.draft.revision,profile_revision:WS.profile.revision,
-    job_revision:WS.job?WS.job.revision:undefined,
-    template_version_id:(WS.template||{}).template_version_id}})
+    job_revision:WS.job?WS.job.revision:undefined}})
     .then(function(){return refresh()});}
 $("#confirm-save-version").onclick=function(){
   var name=$("#version-name-input").value.trim();
@@ -939,6 +1150,7 @@ $("#version-name-input").addEventListener("keydown",function(e){if(e.key==="Ente
 /* ---------------- 一键生成 ---------------- */
 $$(".generate").forEach(function(b){b.onclick=startRun});
 function startRun(){
+  if(manualEditMode){finishDirectEditing().then(startRun);return;}
   openModal("#run-modal");
   var steps=$$(".run-step"),i=0;
   steps.forEach(function(s,n){s.className="run-step"+(n===0?" active":"");s.querySelector("i").textContent=String(n+1);});
@@ -950,7 +1162,7 @@ function startRun(){
   advance(1);
   api('/projects/'+PROJECT_ID+'/generations',{method:'POST',idemKey:'gen-'+uid(),body:{
     client_request_id:uid(),project_revision:WS.project.revision,profile_revision:WS.profile.revision,
-    job_revision:WS.job?WS.job.revision:undefined,template_version_id:(WS.template||{}).template_version_id}})
+    job_revision:WS.job?WS.job.revision:undefined,draft_revision:WS.draft.revision}})
     .then(function(res){
       var es=new EventSource(toApiUrl(res.events_url));
       es.addEventListener('progress',function(ev){
@@ -981,6 +1193,290 @@ function uploadFiles(files){
         .then(function(up){return api('/uploads/'+up.id+'/complete',{method:'POST'}).then(function(){return up})})
         .then(function(up){ids.push(up.id);return ids;})});},Promise.resolve([]));
 }
+
+/* ---------------- 从文件导入：上传 → 识别 → 预览 → 确认应用 ---------------- */
+var documentImportState={
+  id:null,item:null,file:null,entryContext:'workspace',eventSource:null,pollTimer:null,
+  renderer:null,previewRequest:0
+};
+var DOCUMENT_IMPORT_PROGRESS={
+  uploading:{value:8,label:'正在上传文件'},
+  uploaded:{value:16,label:'文件已上传，准备识别'},
+  scanning:{value:25,label:'正在检查文件'},
+  normalizing:{value:38,label:'正在还原页面'},
+  extracting:{value:58,label:'正在识别文字与结构'},
+  analyzing:{value:76,label:'正在理解阅读顺序与排版'},
+  validating:{value:92,label:'正在核对识别结果'},
+  needs_review:{value:100,label:'识别完成'},
+  ready:{value:100,label:'已确认识别结果'},
+  applied:{value:100,label:'已经应用'},
+  failed:{value:100,label:'识别没有完成'}
+};
+function documentImportStage(name){
+  $$(".document-import-stage").forEach(function(stage){
+    stage.classList.toggle("active",stage.id==="document-import-"+name+"-stage");});
+}
+function documentImportFileName(item){
+  return (item&&item.file&&item.file.name)||(documentImportState.file&&documentImportState.file.name)||'待识别文件';
+}
+function formatFileSize(size){
+  size=Number(size||0);
+  if(size>=1024*1024)return (size/1024/1024).toFixed(size>=10*1024*1024?0:1)+' MB';
+  if(size>=1024)return Math.round(size/1024)+' KB';
+  return size?size+' B':'';
+}
+function stopDocumentImportWatch(){
+  if(documentImportState.eventSource){documentImportState.eventSource.close();documentImportState.eventSource=null;}
+  if(documentImportState.pollTimer){clearTimeout(documentImportState.pollTimer);documentImportState.pollTimer=null;}
+}
+function resetDocumentImport(){
+  stopDocumentImportWatch();
+  documentImportState.id=null;documentImportState.item=null;documentImportState.file=null;
+  documentImportState.previewRequest++;
+  $("#document-import-file").value='';
+  $("#document-import-error").classList.remove("show");
+  $("#document-import-apply").disabled=false;
+  $("#document-import-title").textContent='从文件导入';
+  $("#document-import-subtitle").textContent='上传简历，确认识别结果后直接应用';
+  documentImportStage("upload");
+}
+function setDocumentImportFile(item,status){
+  var file=item&&item.file||(documentImportState.item&&documentImportState.item.file)||documentImportState.file||{};
+  var name=file.name||'待识别文件';
+  var extension=(name.split('.').pop()||'FILE').toUpperCase();
+  $("#document-import-file-type").textContent=extension.slice(0,5);
+  $("#document-import-file-name").textContent=name;
+  $("#document-import-file-meta").textContent=[formatFileSize(file.size),status].filter(Boolean).join(' · ');
+}
+function updateDocumentImportProgress(status,item){
+  var state=DOCUMENT_IMPORT_PROGRESS[status]||{value:12,label:'正在处理文件'};
+  setDocumentImportFile(item,state.label);
+  $("#document-import-status-text").textContent=state.label;
+  $("#document-import-progress-label").textContent=state.label;
+  $("#document-import-progress-value").textContent=state.value+'%';
+  $("#document-import-progress-bar").style.width=state.value+'%';
+}
+function documentImportWarningText(codes){
+  var labels={
+    OCR_USED:'部分页面通过图片识别',
+    OCR_LOW_CONFIDENCE:'部分文字可能需要修正',
+    READING_ORDER_UNCERTAIN:'部分内容顺序需要确认',
+    TEXT_LAYER_MISSING:'原文件缺少可读取文字',
+    LEGACY_DOC_CONVERTED:'旧版 Word 已转换后识别',
+    PAGE_COUNT_RECOMMENDED_EXCEEDED:'文件页数较多，请重点检查',
+    MODEL_ANALYSIS_FALLBACK:'已使用基础版面分析',
+    AI_ANALYSIS_NOT_CONFIGURED:'未启用 AI 结构理解，已使用基础识别',
+    AI_ANALYSIS_UNAVAILABLE:'AI 结构理解暂不可用，已使用基础识别',
+    OCR_BACKGROUND_CLEANED:'图片文字已转为可编辑图层，请检查字体效果',
+    PAGE_SCENE_EXTRACTION_FAILED:'页面样式还原已降级',
+    PAGE_SCENE_INVALID:'页面样式结果不完整，已使用基础排版'
+  };
+  return (codes||[]).map(function(code){return labels[code]}).filter(Boolean);
+}
+function artifactPreviewUrl(id){
+  return api('/artifacts/'+id+'/download-url',{method:'POST'}).then(function(result){
+    var url=toApiUrl(result.url);
+    return url+(url.indexOf('?')>-1?'&':'?')+'view=inline';});
+}
+function renderDocumentImportPreviews(item){
+  var container=$("#document-import-preview-pages"),ids=item.preview_artifact_ids||[];
+  var request=++documentImportState.previewRequest;
+  container.innerHTML=ids.length
+    ?'<div class="document-import-source-empty">正在加载原文件预览…</div>'
+    :'<div class="document-import-source-empty">这个文件没有页面图片预览<br>请以右侧识别文字为准</div>';
+  if(!ids.length)return;
+  Promise.all(ids.map(function(id){return artifactPreviewUrl(id)})).then(function(urls){
+    if(request!==documentImportState.previewRequest)return;
+    container.innerHTML='';
+    urls.forEach(function(url,index){
+      var image=document.createElement('img');
+      image.className='document-import-page';image.src=url;
+      image.alt='原文件第 '+(index+1)+' 页';image.loading='lazy';
+      container.appendChild(image);});
+  }).catch(function(e){
+    if(request!==documentImportState.previewRequest)return;
+    container.innerHTML='<div class="document-import-source-empty">页面预览加载失败<br>'+esc(e.message)+'</div>';});
+}
+function renderDocumentImportResume(item){
+  var container=$("#document-import-resume");
+  var resume=item.document_candidate&&item.document_candidate.resume_json;
+  container.className='resume';
+  if(!resume){
+    container.innerHTML='<p style="color:#8e8e93;text-align:center">没有识别到可使用的正文</p>';
+    return;
+  }
+  if(!documentImportState.renderer)documentImportState.renderer=new ResumeDom.Renderer(container);
+  documentImportState.renderer.render(ResumeDom.ensureDocument(resume));
+  hydrateImportedScene(container);
+  fitImportedPages(container);
+  $$("#document-import-resume [data-resume-editable=true]").forEach(function(element){
+    element.setAttribute('contenteditable','true');element.spellcheck=true;
+    element.setAttribute('aria-label','可修正的识别文字');});
+}
+function editedDocumentImportResume(){
+  var item=documentImportState.item;
+  var original=item&&item.document_candidate&&item.document_candidate.resume_json;
+  if(!original)return null;
+  var resume=JSON.parse(JSON.stringify(original));
+  var documentValue=ResumeDom.ensureDocument(resume);
+  var operations=$$("#document-import-resume [data-resume-editable=true]").map(function(element){
+    var node=ResumeDom.findNode(documentValue,element.dataset.nodeId);
+    var before=node?ResumeDom.exportNodeText(node.node).trim():'';
+    var after=String(element.textContent||'').trim();
+    return before===after?null:{op:'replace_text',node_id:element.dataset.nodeId,replace_children:true,text:after};}).filter(Boolean);
+  documentValue=ResumeDom.applyOperations(documentValue,operations);
+  return ResumeDom.toResumeDocument({...resume,root:documentValue.root});
+}
+function renderDocumentImportReview(item){
+  stopDocumentImportWatch();
+  documentImportState.item=item;documentImportState.id=item.id;
+  documentImportStage("review");
+  var name=documentImportFileName(item);
+  $("#document-import-title").textContent='确认识别结果';
+  $("#document-import-subtitle").textContent=name+' · 应用前可以检查和修正文字';
+  $("#document-import-source-meta").textContent=(item.page_count||1)+' 页 · '+String(item.detected_format||'').toUpperCase();
+  renderDocumentImportPreviews(item);renderDocumentImportResume(item);
+  var quality=item.quality_report||{},warnings=documentImportWarningText(item.warning_codes||quality.warning_codes);
+  var coverage=Math.round(Number(quality.text_coverage||0)*100);
+  var qualityBox=$("#document-import-quality");
+  qualityBox.classList.toggle("warn",warnings.length>0);
+  $("#document-import-quality-title").textContent=warnings.length?'识别完成，请重点检查':'识别完成，可以预览确认';
+  $("#document-import-quality-detail").textContent=[
+    coverage?'文字覆盖 '+coverage+'%':'',
+    warnings.join('；')
+  ].filter(Boolean).join(' · ');
+  $("#document-import-apply").disabled=quality.safe_to_review===false||(!item.can_review&&!item.can_apply);
+}
+function showDocumentImportFailure(item){
+  documentImportState.item=item;documentImportState.id=item.id;
+  documentImportStage("processing");updateDocumentImportProgress("failed",item);
+  $("#document-import-error-message").textContent=item.error_message||'文档识别失败，请重新识别或更换文件';
+  $("#document-import-error").classList.add("show");
+}
+function loadDocumentImport(id){
+  return api('/document-imports/'+id).then(function(item){
+    documentImportState.item=item;
+    if(item.status==='needs_review'||item.status==='ready')renderDocumentImportReview(item);
+    else if(item.status==='failed')showDocumentImportFailure(item);
+    else if(item.status==='applied'){stopDocumentImportWatch();$("#document-import-modal").classList.remove("show");return refresh();}
+    else{documentImportStage("processing");updateDocumentImportProgress(item.status,item);}
+    return item;});
+}
+function pollDocumentImport(){
+  if(!documentImportState.id)return;
+  loadDocumentImport(documentImportState.id).then(function(item){
+    if(item&&!['needs_review','ready','failed','applied'].includes(item.status)){
+      documentImportState.pollTimer=setTimeout(pollDocumentImport,1000);}})
+    .catch(function(e){
+      $("#document-import-status-text").textContent='任务仍在后台运行，正在重新连接…';
+      documentImportState.pollTimer=setTimeout(pollDocumentImport,1800);});
+}
+function watchDocumentImport(){
+  stopDocumentImportWatch();
+  if(!documentImportState.id)return;
+  var stream;
+  try{stream=new EventSource(toApiUrl('/api/v1/document-imports/'+documentImportState.id+'/events'));}
+  catch(_){pollDocumentImport();return;}
+  documentImportState.eventSource=stream;
+  stream.addEventListener('progress',function(event){
+    var payload={};try{payload=JSON.parse(event.data||'{}')}catch(_){}
+    updateDocumentImportProgress(payload.status,payload);
+    if(['needs_review','ready','failed','applied'].includes(payload.status)){
+      stopDocumentImportWatch();loadDocumentImport(documentImportState.id).catch(function(e){toast(e.message)});}});
+  stream.onerror=function(){
+    stopDocumentImportWatch();pollDocumentImport();};
+}
+function beginDocumentRecognition(file){
+  if(!file)return;
+  var extension=(file.name.split('.').pop()||'').toLowerCase();
+  if(['pdf','doc','docx','png','jpg','jpeg','webp'].indexOf(extension)<0){toast('请选择 PDF、Word 或图片文件');return;}
+  if(file.size>20*1024*1024){toast('文件不能超过 20 MB');return;}
+  documentImportState.previewRequest++;
+  documentImportState.file=file;documentImportState.id=null;documentImportState.item=null;
+  documentImportStage("processing");
+  $("#document-import-error").classList.remove("show");
+  updateDocumentImportProgress("uploading",{file:{name:file.name,size:file.size}});
+  api('/uploads',{method:'POST',body:{original_name:file.name,mime_type:file.type,size:file.size}})
+    .then(function(upload){
+      return fetch(API+'/uploads/'+upload.id+'/content',{method:'POST',body:file})
+        .then(function(response){
+          if(!response.ok)return response.text().then(function(text){throw new Error(text||file.name+' 上传失败')});
+          updateDocumentImportProgress("uploaded",{file:{name:file.name,size:file.size}});
+          return api('/uploads/'+upload.id+'/complete',{method:'POST'}).then(function(){return upload;});});})
+    .then(function(upload){
+      return api('/projects/'+PROJECT_ID+'/document-imports',{
+        method:'POST',idemKey:'document-import-'+uid(),
+        body:{upload_id:upload.id,entry_context:documentImportState.entryContext}});})
+    .then(function(item){
+      documentImportState.id=item.id;documentImportState.item=item;
+      updateDocumentImportProgress(item.status,item);watchDocumentImport();})
+    .catch(function(e){
+      showDocumentImportFailure({
+        id:documentImportState.id,error_message:e.message,
+        file:{name:file.name,size:file.size},status:'failed'});});
+}
+function openDocumentImporter(){
+  if(manualEditMode){finishDirectEditing().then(openDocumentImporter);return;}
+  stopDocumentImportWatch();
+  documentImportState.id=null;documentImportState.item=null;documentImportState.file=null;
+  var lookupToken=++documentImportState.previewRequest;
+  documentImportState.entryContext='workspace';
+  $("#document-import-title").textContent='从文件导入';
+  $("#document-import-subtitle").textContent='上传简历，确认识别结果后直接应用';
+  openModal("#document-import-modal");
+  documentImportStage("upload");
+  api('/projects/'+PROJECT_ID+'/document-imports?limit=10').then(function(result){
+    if(lookupToken!==documentImportState.previewRequest||documentImportState.file)return;
+    var recent=(result.items||[]).find(function(item){
+      return item.entry_context===documentImportState.entryContext
+        && item.status!=='applied'
+        && Date.now()-new Date(item.created_at).getTime()<24*60*60*1000;});
+    if(!recent)return;
+    documentImportState.id=recent.id;documentImportState.item=recent;
+    if(['needs_review','ready'].includes(recent.status))renderDocumentImportReview(recent);
+    else if(recent.status==='failed')showDocumentImportFailure(recent);
+    else{documentImportStage("processing");updateDocumentImportProgress(recent.status,recent);watchDocumentImport();}
+  }).catch(function(){/* 新导入仍可继续，列表恢复失败不阻断入口 */});
+}
+$("#document-import-button").onclick=openDocumentImporter;
+$("#document-import-choose").onclick=function(){$("#document-import-file").click()};
+$("#document-import-file").onchange=function(){if(this.files.length)beginDocumentRecognition(this.files[0])};
+$("#document-import-replace-file").onclick=resetDocumentImport;
+$("#document-import-cancel").onclick=function(){$("#document-import-modal").classList.remove("show")};
+$("#document-import-retry").onclick=function(){
+  $("#document-import-error").classList.remove("show");
+  if(documentImportState.id){
+    api('/document-imports/'+documentImportState.id+'/retry',{method:'POST'})
+      .then(function(item){updateDocumentImportProgress(item.status,documentImportState.item);watchDocumentImport();})
+      .catch(function(e){showDocumentImportFailure({id:documentImportState.id,error_message:e.message,file:documentImportState.item&&documentImportState.item.file});});
+  }else if(documentImportState.file)beginDocumentRecognition(documentImportState.file);
+};
+$("#document-import-apply").onclick=function(){
+  var button=this,item=documentImportState.item;
+  if(!item)return;
+  button.disabled=true;button.textContent='正在应用…';
+  var reviewedResume;
+  try{reviewedResume=editedDocumentImportResume();}
+  catch(e){button.disabled=false;button.textContent='确认并应用';toast('预览内容无法保存：'+e.message);return;}
+  api('/document-imports/'+item.id+'/review',{method:'POST',body:{accepted:true,resume_json:reviewedResume}})
+    .then(function(ready){
+      documentImportState.item=ready;
+      return api('/document-imports/'+item.id+'/apply',{
+        method:'POST',idemKey:'document-import-apply-'+item.id+'-'+uid(),
+        body:{expected_draft_revision:WS.draft.revision,mutation_id:uid()}});})
+    .then(function(result){
+      documentImportState.item=null;stopDocumentImportWatch();
+      $("#document-import-modal").classList.remove("show");
+      showUndo(null,null,'已应用文件导入结果',{changeId:result.change_id});
+      return refresh().then(function(){
+        toast('已导入当前简历并保存历史版本，个人信息没有改变');});})
+    .catch(function(e){
+      button.disabled=false;button.textContent='确认并应用';
+      toast(e.message);
+      if(e.code==='REVISION_CONFLICT')refresh();});
+};
+bindDropZone($("#document-import-drop"),function(files){beginDocumentRecognition(files[0])});
+
 $("#profile-upload").onclick=function(){$("#profile-file").click()};
 $("#profile-file").onchange=function(){var f=this.files;if(!f.length)return;
   uploadFiles(f).then(function(ids){
@@ -1024,14 +1520,6 @@ $("#discard-job").onclick=function(){
   if(actionId)api('/ai/actions/'+actionId+'/reject',{method:'POST',idemKey:'job-reject-'+actionId,body:{reason:'用户暂不使用'}}).catch(function(){});
   else if(jobId)api('/jobs/'+jobId+'/discard',{method:'POST'}).catch(function(){});
   panel.removeAttribute('data-action');panel.removeAttribute('data-job');};
-$("#template-upload-button").onclick=function(){$("#template-file").click()};
-$("#template-file").onchange=function(){var f=this.files;if(!f.length)return;
-  uploadFiles(f).then(function(ids){
-    return api('/templates/custom',{method:'POST',body:{upload_id:ids[0]}});})
-    .then(function(t){
-      return api('/projects/'+PROJECT_ID+'/template',{method:'PUT',body:{template_version_id:t.template_version_id,mutation_id:uid()}});})
-    .then(function(){$("#template-modal").classList.remove('show');toast('已载入自定义模板');return refresh()})
-    .catch(function(e){toast(e.message)});};
 $(".attach").onclick=function(){$("#file-input").click()};
 $("#file-input").onchange=function(){var f=this.files;if(!f.length)return;
   uploadFiles(f).then(function(ids){
