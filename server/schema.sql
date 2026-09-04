@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS ai_tasks (
   goal               TEXT NOT NULL DEFAULT '',
   state_json         TEXT NOT NULL DEFAULT '{}',
   active_proposal_id TEXT,
-  status             TEXT NOT NULL DEFAULT 'active', -- active|waiting_fact|waiting_apply|completed|canceled
+  status             TEXT NOT NULL DEFAULT 'understanding', -- understanding|clarifying|confirming_plan|planning|validated|waiting_apply|completed|failed|canceled
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL
 );
@@ -252,6 +252,8 @@ CREATE TABLE IF NOT EXISTS resume_change_events (
   mutation_id    TEXT NOT NULL,
   snapshot_version_id TEXT REFERENCES resume_versions(id), -- 成版后回填，为空表示尚未成版
   reverted_at    TEXT,
+  undo_expired_at TEXT, -- 超出最近 5 步后不再进入撤销栈，但仍保留审计记录
+  redo_invalidated_at TEXT, -- 撤销后产生新修改时清空重做分支
   created_at     TEXT NOT NULL,
   UNIQUE (project_id, mutation_id)
 );
@@ -305,7 +307,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   progress           INTEGER NOT NULL DEFAULT 0,
   model_provider     TEXT NOT NULL DEFAULT 'local-rule-engine',
   model_name         TEXT NOT NULL DEFAULT 'resume-rule-v1',
-  prompt_version     TEXT NOT NULL DEFAULT 'resume-harness-v4-dom',
+  prompt_version     TEXT NOT NULL DEFAULT 'resume-harness-v14-confirm-and-editing-nodes',
   attempt_count      INTEGER NOT NULL DEFAULT 0,
   started_at         TEXT,
   finished_at        TEXT,
@@ -419,6 +421,8 @@ CREATE INDEX IF NOT EXISTS ai_messages_conv ON ai_messages(conversation_id, crea
 CREATE INDEX IF NOT EXISTS ix_ai_tasks_scope ON ai_tasks(conversation_id, scope_type, scope_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS ix_actions_owner_status ON ai_action_requests(owner_id, status);
 CREATE INDEX IF NOT EXISTS ix_change_events_project ON resume_change_events(project_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_change_events_retention
+  ON resume_change_events(snapshot_version_id, reverted_at, created_at);
 CREATE INDEX IF NOT EXISTS ix_versions_project ON resume_versions(project_id, version_no);
 CREATE INDEX IF NOT EXISTS ix_snapshots_project ON generation_snapshots(project_id, generation_no);
 CREATE INDEX IF NOT EXISTS ix_artifacts_version ON artifacts(version_id, type);

@@ -38,6 +38,7 @@ function buildHarnessInput(options) {
     scope,
     current_text: String((focus && focus.current_text) || ''),
     editing_base: String((focus && focus.editing_base) || ''),
+    scope_region: (focus && focus.scope_region) || null,
     location: (focus && focus.location) || null,
     neighboring_content: (focus && focus.neighboring_content) || [],
   };

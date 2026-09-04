@@ -2,13 +2,23 @@
 /**
  * 简历草稿与变更事件（TECH §4.3、§9.6、PRD §6.5）。
  *
- * 直接编辑事务或已应用的 AI 修改写入同一份完整文档并追加可撤销 change event；
+ * 画布文字事务或已应用的 AI 修改写入同一份完整文档并追加可撤销 change event；
  * 不得因此自动创建历史版本。撤销应同时回滚草稿并标记对应事件 reverted。
  */
 const db = require('../lib/db');
-const { uuidv7, nowIso, problem } = require('../lib/util');
+const { uuidv7, nowIso, problem, hashJson } = require('../lib/util');
 const audit = require('../lib/audit');
+const {
+  createNodeDeltaPair,
+  isArchivedPayload,
+  isNodeDelta,
+  isStructureDelta,
+  restoreNodeDelta,
+  restoreStructureDelta,
+} = require('../lib/resume-change');
+const { refreshResumeProposalStaleness } = require('../lib/resume-proposals');
 const ResumeDom = require('../../resume-dom');
+const HISTORY_DEPTH = 5;
 
 /** 定位并更新某条 bullet 的文本。 */
 function applyBulletText(resume, bulletId, text) {
@@ -39,7 +49,31 @@ function findBullet(resume, bulletId) {
 
 /** 把变更应用到草稿（正向与撤销共用）。 */
 function applyChangePatch(resume, event, direction) {
-  const payload = direction === 'forward' ? JSON.parse(event.after_json) : JSON.parse(event.before_json);
+  const before = JSON.parse(event.before_json || '{}');
+  const after = JSON.parse(event.after_json || '{}');
+  const payload = direction === 'forward' ? after : before;
+  const expected = direction === 'forward' ? before : after;
+  if (isArchivedPayload(payload)) {
+    const error = new Error('这条较早的操作记录已归档，不能再单独撤销');
+    error.code = 'CHANGE_ARCHIVED';
+    throw error;
+  }
+  if (isNodeDelta(payload)) {
+    return restoreNodeDelta(resume, payload, expected);
+  }
+  if (isStructureDelta(payload)) {
+    return restoreStructureDelta(resume, payload, expected);
+  }
+  if (
+    payload.resume_json
+    && expected.resume_json
+    && hashJson(ResumeDom.toResumeDocument(resume))
+      !== hashJson(ResumeDom.toResumeDocument(expected.resume_json))
+  ) {
+    const error = new Error('整份简历在此后又发生了变化');
+    error.code = 'CHANGE_DOCUMENT_MODIFIED';
+    throw error;
+  }
   switch (event.change_type) {
     case 'bullet_text':
       applyBulletText(resume, event.scope_id, payload.text);
@@ -78,18 +112,140 @@ function loadDraft(projectId, user) {
   return draft;
 }
 
-function markResumeActionsStale(projectId, userId) {
+function changeEventLabel(event) {
+  const after = JSON.parse(event.after_json || '{}');
+  const before = JSON.parse(event.before_json || '{}');
+  return String(
+    after.label
+    || before.label
+    || {
+      document_transaction: '修改简历文字',
+      dom_operations: 'AI 修改简历',
+      document_import: '导入简历',
+      full_document: '修改整份简历',
+    }[event.change_type]
+    || '修改简历',
+  ).slice(0, 120);
+}
+
+function historyEventView(event) {
+  return {
+    id: event.id,
+    label: changeEventLabel(event),
+    change_type: event.change_type,
+    scope_type: event.scope_type,
+    scope_id: event.scope_id,
+    actor_type: event.actor_type,
+    created_at: event.created_at,
+    reverted_at: event.reverted_at,
+  };
+}
+
+function loadHistoryStacks(projectId, ownerId) {
+  const undo = db.all(
+    `SELECT * FROM resume_change_events
+     WHERE project_id = ? AND owner_id = ?
+       AND snapshot_version_id IS NULL
+       AND reverted_at IS NULL
+       AND undo_expired_at IS NULL
+     ORDER BY draft_revision DESC, id DESC
+     LIMIT ?`,
+    [projectId, ownerId, HISTORY_DEPTH],
+  ).map(historyEventView);
+  const redo = db.all(
+    `SELECT * FROM resume_change_events
+     WHERE project_id = ? AND owner_id = ?
+       AND snapshot_version_id IS NULL
+       AND reverted_at IS NOT NULL
+       AND undo_expired_at IS NULL
+       AND redo_invalidated_at IS NULL
+     ORDER BY reverted_at DESC, draft_revision ASC, id DESC
+     LIMIT ?`,
+    [projectId, ownerId, HISTORY_DEPTH],
+  ).map(historyEventView);
+  return { depth: HISTORY_DEPTH, undo, redo };
+}
+
+function applyHistoryStep({ draft, event, direction, user, requestId, ipHash }) {
+  if (direction === 'backward') {
+    if (event.reverted_at) {
+      throw problem.conflict('CHANGE_ALREADY_REVERTED', '这一步已经撤销');
+    }
+    if (event.undo_expired_at) {
+      throw problem.conflict('UNDO_LIMIT_REACHED', '只能撤销最近 5 步修改');
+    }
+  } else {
+    if (!event.reverted_at) {
+      throw problem.conflict('CHANGE_NOT_REVERTED', '这一步尚未撤销');
+    }
+    if (event.redo_invalidated_at) {
+      throw problem.conflict('REDO_BRANCH_INVALIDATED', '撤销后已有新的修改，不能再重做这一步');
+    }
+  }
+  const resume = JSON.parse(draft.resume_json || '{}');
+  let restored;
+  try {
+    restored = ResumeDom.toResumeDocument(applyChangePatch(resume, event, direction));
+  } catch (error) {
+    if (error.code === 'CHANGE_ARCHIVED') {
+      throw problem.conflict('CHANGE_ARCHIVED', error.message);
+    }
+    if (
+      error.code === 'CHANGE_TARGET_MISSING'
+      || error.code === 'CHANGE_TARGET_MODIFIED'
+      || error.code === 'CHANGE_DOCUMENT_MODIFIED'
+    ) {
+      throw problem.conflict(
+        'CHANGE_CONFLICT',
+        direction === 'backward'
+          ? '相关内容后来又被修改过，不能直接撤销这一步'
+          : '当前内容与撤销后的状态不一致，不能直接重做这一步',
+      );
+    }
+    throw error;
+  }
+  const changedAt = nowIso();
+  const revision = draft.revision + 1;
   db.run(
-    `UPDATE ai_action_requests
-     SET status = 'stale'
-     WHERE owner_id = ?
-       AND action_type = 'RESUME_REWRITE_PROPOSAL'
-       AND status IN ('proposed','awaiting_confirmation')
-       AND conversation_id IN (
-         SELECT id FROM ai_conversations WHERE project_id = ? AND owner_id = ?
-       )`,
-    [userId, projectId, userId],
+    'UPDATE resume_drafts SET resume_json = ?, revision = ?, updated_at = ? WHERE id = ?',
+    [JSON.stringify(restored), revision, changedAt, draft.id],
   );
+  if (direction === 'backward') {
+    db.run('UPDATE resume_change_events SET reverted_at = ? WHERE id = ?', [changedAt, event.id]);
+  } else {
+    db.run('UPDATE resume_change_events SET reverted_at = NULL WHERE id = ?', [event.id]);
+  }
+  refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+    resume: restored,
+    revision,
+  });
+  const remaining = db.get(
+    `SELECT COUNT(*) AS total FROM resume_change_events
+     WHERE project_id = ? AND owner_id = ?
+       AND reverted_at IS NULL AND snapshot_version_id IS NULL`,
+    [draft.project_id, user.id],
+  ).total;
+  db.run('UPDATE resume_drafts SET has_unsnapshotted_changes = ? WHERE id = ?', [
+    remaining ? 1 : 0,
+    draft.id,
+  ]);
+  audit.log({
+    ownerId: user.id,
+    action: direction === 'backward' ? 'resume_change_undone' : 'resume_change_redone',
+    resourceType: 'resume_change_event',
+    resourceId: event.id,
+    requestId,
+    ipHash,
+    metadata: { change_type: event.change_type, scope_id: event.scope_id },
+  });
+  return {
+    id: event.id,
+    status: direction === 'backward' ? 'reverted' : 'restored',
+    revision,
+    has_unsnapshotted_changes: Boolean(remaining),
+    resume_json: restored,
+    history: loadHistoryStacks(draft.project_id, user.id),
+  };
 }
 
 const routes = [
@@ -127,7 +283,11 @@ const routes = [
           `UPDATE resume_drafts SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ? WHERE id = ?`,
           [JSON.stringify(resume), revision, nowIso(), draft.id],
         );
-        markResumeActionsStale(draft.project_id, user.id);
+        refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+          resume,
+          revision,
+          forceAll: true,
+        });
 
         let changeEvent = null;
         if (body.change) {
@@ -219,10 +379,25 @@ const routes = [
           throw problem.badRequest('文档事务至少需要一个操作');
         }
         const beforeResume = ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}'));
+        body.operations.forEach((operation) => {
+          if (!operation || operation.op !== 'replace_text') {
+            throw problem.unprocessable(
+              'DIRECT_EDIT_TEXT_ONLY',
+              '画布只支持修改现有文字；增删模块、结构和样式调整请通过 AI 建议完成',
+            );
+          }
+          const found = ResumeDom.findNode(beforeResume, operation.node_id);
+          if (!found || found.node.editable !== true) {
+            throw problem.unprocessable(
+              'DIRECT_EDIT_TARGET_INVALID',
+              '这处内容不能直接修改，请通过 AI 调整',
+            );
+          }
+        });
         let nextResume;
         try {
           nextResume = ResumeDom.applyDocumentOperations(beforeResume, body.operations, {
-            allowStructure: true,
+            allowStructure: false,
           });
         } catch (error) {
           throw problem.unprocessable('DOCUMENT_TRANSACTION_INVALID', error.message);
@@ -230,6 +405,13 @@ const routes = [
         const revision = draft.revision + 1;
         const changedAt = nowIso();
         const changeId = uuidv7();
+        const changedNodeIds = Array.from(
+          new Set(body.operations.map((operation) => String(operation.node_id))),
+        );
+        const delta = createNodeDeltaPair(beforeResume, nextResume, changedNodeIds, {
+          label: String(body.label || '修改简历文字').slice(0, 120),
+          input_type: String(body.input_type || 'inline_text').slice(0, 40),
+        });
         db.run(
           `UPDATE resume_drafts
            SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ?
@@ -247,17 +429,16 @@ const routes = [
             user.id,
             revision,
             body.scope_id || null,
-            JSON.stringify({ resume_json: beforeResume }),
-            JSON.stringify({
-              resume_json: nextResume,
-              label: String(body.label || '直接编辑简历').slice(0, 120),
-              input_type: String(body.input_type || 'direct_edit').slice(0, 40),
-            }),
+            JSON.stringify(delta.before),
+            JSON.stringify(delta.after),
             mutationId,
             changedAt,
           ],
         );
-        markResumeActionsStale(draft.project_id, user.id);
+        refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+          resume: nextResume,
+          revision,
+        });
         audit.log({
           ownerId: user.id,
           action: 'resume_document_transaction_applied',
@@ -268,7 +449,7 @@ const routes = [
           metadata: {
             revision,
             operations: body.operations.length,
-            input_type: body.input_type || 'direct_edit',
+            input_type: body.input_type || 'inline_text',
           },
         });
         return {
@@ -279,6 +460,69 @@ const routes = [
           has_unsnapshotted_changes: true,
           version_created: false,
         };
+      }),
+  },
+  {
+    method: 'GET',
+    pattern: '/projects/:id/resume-draft/history',
+    handler: ({ params, user }) => {
+      const draft = loadDraft(params.id, user);
+      return loadHistoryStacks(draft.project_id, user.id);
+    },
+  },
+  {
+    method: 'POST',
+    pattern: '/projects/:id/resume-draft/undo',
+    handler: ({ params, user, requestId, ipHash }) =>
+      db.tx(() => {
+        const draft = loadDraft(params.id, user);
+        const event = db.get(
+          `SELECT * FROM resume_change_events
+           WHERE project_id = ? AND owner_id = ?
+             AND snapshot_version_id IS NULL
+             AND reverted_at IS NULL
+             AND undo_expired_at IS NULL
+           ORDER BY draft_revision DESC, id DESC
+           LIMIT 1`,
+          [draft.project_id, user.id],
+        );
+        if (!event) throw problem.conflict('NOTHING_TO_UNDO', '没有可撤销的修改');
+        return applyHistoryStep({
+          draft,
+          event,
+          direction: 'backward',
+          user,
+          requestId,
+          ipHash,
+        });
+      }),
+  },
+  {
+    method: 'POST',
+    pattern: '/projects/:id/resume-draft/redo',
+    handler: ({ params, user, requestId, ipHash }) =>
+      db.tx(() => {
+        const draft = loadDraft(params.id, user);
+        const event = db.get(
+          `SELECT * FROM resume_change_events
+           WHERE project_id = ? AND owner_id = ?
+             AND snapshot_version_id IS NULL
+             AND reverted_at IS NOT NULL
+             AND undo_expired_at IS NULL
+             AND redo_invalidated_at IS NULL
+           ORDER BY reverted_at DESC, draft_revision ASC, id DESC
+           LIMIT 1`,
+          [draft.project_id, user.id],
+        );
+        if (!event) throw problem.conflict('NOTHING_TO_REDO', '没有可重做的修改');
+        return applyHistoryStep({
+          draft,
+          event,
+          direction: 'forward',
+          user,
+          requestId,
+          ipHash,
+        });
       }),
   },
   {
@@ -320,11 +564,32 @@ const routes = [
           [params.changeId, draft.project_id, user.id],
         );
         if (!event) throw problem.notFound('变更不存在');
+        if (event.undo_expired_at) {
+          throw problem.conflict('UNDO_LIMIT_REACHED', '只能撤销最近 5 步修改');
+        }
         if (event.reverted_at) {
           return { id: event.id, status: 'already_reverted', idempotent_replay: true };
         }
         const resume = JSON.parse(draft.resume_json || '{}');
-        const restored = ResumeDom.toResumeDocument(applyChangePatch(resume, event, 'backward'));
+        let restored;
+        try {
+          restored = ResumeDom.toResumeDocument(applyChangePatch(resume, event, 'backward'));
+        } catch (error) {
+          if (error.code === 'CHANGE_ARCHIVED') {
+            throw problem.conflict('CHANGE_ARCHIVED', error.message);
+          }
+          if (
+            error.code === 'CHANGE_TARGET_MISSING'
+            || error.code === 'CHANGE_TARGET_MODIFIED'
+            || error.code === 'CHANGE_DOCUMENT_MODIFIED'
+          ) {
+            throw problem.conflict(
+              'CHANGE_CONFLICT',
+              '相关内容后来又被修改过，不能直接撤销这一步',
+            );
+          }
+          throw error;
+        }
         const revision = draft.revision + 1;
         db.run('UPDATE resume_drafts SET resume_json = ?, revision = ?, updated_at = ? WHERE id = ?', [
           JSON.stringify(restored),
@@ -334,6 +599,10 @@ const routes = [
         ]);
         const revertedAt = nowIso();
         db.run('UPDATE resume_change_events SET reverted_at = ? WHERE id = ?', [revertedAt, event.id]);
+        refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+          resume: restored,
+          revision,
+        });
         if (event.change_type === 'document_import' || event.change_type === 'template') {
           const before = JSON.parse(event.before_json || '{}');
           if (Object.hasOwn(before, 'template_version_id')) {
@@ -351,12 +620,14 @@ const routes = [
             `INSERT INTO resume_change_events
              (id, project_id, owner_id, draft_revision, change_type, scope_type, scope_id,
               before_json, after_json, actor_type, mutation_id, created_at)
-             VALUES (?, ?, ?, ?, 'full_document', 'RESUME_DOCUMENT', ?, ?, ?, 'user', ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?)`,
             [
               uuidv7(),
               draft.project_id,
               user.id,
               revision,
+              event.change_type,
+              event.scope_type,
               event.scope_id,
               event.after_json,
               event.before_json,
@@ -395,4 +666,10 @@ const routes = [
   },
 ];
 
-module.exports = { routes, applyChangePatch, findBullet };
+module.exports = {
+  routes,
+  applyChangePatch,
+  findBullet,
+  loadHistoryStacks,
+  HISTORY_DEPTH,
+};

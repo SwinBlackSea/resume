@@ -197,15 +197,16 @@ test('预览文字修正后，单次确认应用完整可编辑简历', async ()
   dom.window.close();
 });
 
-test('直接编辑自动提交文档事务，切换回 AI 时不再次识别文档', async () => {
+test('现有文字可直接修改并自动提交，不提供 Word 编辑模式', async () => {
   const { dom, calls } = loadApp();
   const document = dom.window.document;
   await waitFor(() => dom.window.WS);
 
   assert.strictEqual(document.querySelector('#template-button'), null);
   assert.strictEqual(document.querySelector('#template-modal'), null);
-  document.querySelector('#edit-document-button').click();
-  const target = document.querySelector('#resume-document [contenteditable="true"]');
+  assert.strictEqual(document.querySelector('#edit-document-button'), null);
+  assert.strictEqual(document.querySelector('#manual-edit-toolbar'), null);
+  const target = document.querySelector('#resume-document [contenteditable="plaintext-only"]');
   assert.ok(target);
   target.textContent = '用户直接修改后的文字';
   target.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
@@ -217,6 +218,7 @@ test('直接编辑自动提交文档事务，切换回 AI 时不再次识别文�
   assert.strictEqual(calls.transaction.operations[0].text, '用户直接修改后的文字');
   assert.strictEqual(calls.transaction.input_type, 'typing');
   assert.ok(document.querySelector('#undo-bar').classList.contains('show'));
+  assert.match(document.querySelector('#inline-edit-hint').textContent, /已自动保存/);
   assert.strictEqual(
     document.querySelector('#document-import-review-stage').classList.contains('active'),
     false,

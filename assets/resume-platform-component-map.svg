@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1800" viewBox="0 0 2200 1800" role="img" aria-labelledby="title desc">
   <title id="title">简历星球核心技术组件分解图</title>
-  <desc id="desc">展开 Web 渲染、Resume DOM、Application Server、Resume Harness、DeepSeek Client、文档识别、渲染和基础设施适配模块。</desc>
+  <desc id="desc">展开 Resume Harness、请求分流、语义操作编译、Resume Change Policy、Resume DOM 和 Renderer 的主关系，并标明复杂请求确认、五级撤销重做、单一编辑节点、文档识别与导出。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64748b"/></marker>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".1"/></filter>
@@ -10,32 +10,44 @@
   </defs>
   <rect width="2200" height="1800" fill="#f8fafc"/>
   <text x="60" y="58" class="title">简历星球 · 核心技术组件分解</text>
-  <text x="60" y="90" class="subtitle">在纵向服务架构之下展开可独立评估、替换、测试和优化的局部核心组件</text>
+  <text x="60" y="90" class="subtitle">AI 修改主链：Resume Harness → Operation Compiler → Change Policy → Resume DOM → Renderer</text>
 
   <rect x="50" y="120" width="1580" height="232" rx="18" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
   <text x="78" y="157" class="zone">Web Application</text>
   <rect x="80" y="182" width="330" height="126" rx="13" fill="#fff" stroke="#93c5fd" filter="url(#shadow)"/>
   <text x="102" y="216" class="card-title">Workspace Shell</text><text x="102" y="245" class="body">三栏布局 · Dialog · 响应式工作区</text><text x="102" y="278" class="path">index.html</text>
   <rect x="445" y="182" width="330" height="126" rx="13" fill="#fff" stroke="#93c5fd" filter="url(#shadow)"/>
-  <text x="467" y="216" class="card-title">State / API Client</text><text x="467" y="245" class="body">自动保存 · revision · SSE 恢复</text><text x="467" y="278" class="path">index.html · IndexedDB</text>
+  <text x="467" y="216" class="card-title">State / API Client</text><text x="467" y="245" class="body">自动保存 · 五级撤销/重做 · SSE 恢复</text><text x="467" y="278" class="path">index.html · IndexedDB</text>
   <rect x="810" y="172" width="790" height="146" rx="13" fill="#fff" stroke="#60a5fa" stroke-width="2" filter="url(#shadow)"/>
   <text x="835" y="207" class="card-title">Web Rendering Core</text>
-  <text x="835" y="236" class="body">ResumeDom.Renderer · 可编辑节点控制 · Template/Layout View</text>
+  <text x="835" y="236" class="body">ResumeDom.Renderer · 现有文字直改 · 当前完整文档视图</text>
   <text x="835" y="263" class="body">Document Import Preview · Version Detail · Compare Highlight</text>
   <text x="835" y="294" class="path">index.html → resume-dom.js</text>
 
-  <path d="M840 352V390" class="arrow"/>
+  <path d="M1205 318V370H1395V442" class="arrow"/>
   <rect x="50" y="392" width="1580" height="238" rx="18" fill="#ecfdf5" stroke="#86efac" stroke-width="2"/>
-  <text x="78" y="429" class="zone">Shared Document Core</text>
-  <rect x="80" y="454" width="690" height="140" rx="13" fill="#fff" stroke="#4ade80" stroke-width="2" filter="url(#shadow)"/>
-  <text x="103" y="488" class="card-title">Resume DOM Engine</text>
-  <text x="103" y="517" class="body">Document Normalizer · Safe Node/Style/Attribute Policy · Tree Walker</text>
-  <text x="103" y="544" class="body">Controlled Operations · Legacy Binding · Compare Engine · Renderer</text>
-  <text x="103" y="571" class="path">resume-dom.js</text>
-  <rect x="805" y="454" width="380" height="140" rx="13" fill="#fff" stroke="#86efac" filter="url(#shadow)"/>
-  <text x="828" y="488" class="card-title">Resume Schema / Safety</text><text x="828" y="517" class="body">Schema 校验 · 内容一致性</text><text x="828" y="544" class="body">完整度与生成前置条件</text><text x="828" y="571" class="path">server/lib/resume-schema.js</text>
-  <rect x="1220" y="454" width="380" height="140" rx="13" fill="#fff" stroke="#86efac" filter="url(#shadow)"/>
-  <text x="1243" y="488" class="card-title">Template Schema / Engine</text><text x="1243" y="517" class="body">页面 · 区域 · 字体 · 约束</text><text x="1243" y="544" class="body">系统模板与导入模板</text><text x="1243" y="571" class="path">server/lib/templates.js</text>
+  <text x="78" y="429" class="zone">AI Change &amp; Shared Document Core</text>
+  <path d="M420 524H448" class="arrow"/><path d="M790 524H818" class="arrow"/><path d="M1160 524H1188" class="arrow"/>
+  <rect x="80" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#4ade80" stroke-width="2" filter="url(#shadow)"/>
+  <text x="103" y="478" class="card-title">Resume Harness</text>
+  <text x="103" y="507" class="body">回答 · 澄清 · 计划确认 · 建议</text>
+  <text x="103" y="534" class="body">简单直出 · 复杂确认 · 同任务续答</text>
+  <text x="103" y="571" class="path">server/lib/resume-harness/*</text>
+  <rect x="450" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
+  <text x="473" y="478" class="card-title">Operation Compiler / Policy</text>
+  <text x="473" y="507" class="body">语义操作 · 顺序模拟 · 区域边界</text>
+  <text x="473" y="534" class="body">内容守恒 · 实际差异 · 应用授权</text>
+  <text x="473" y="571" class="path">resume-operation-compiler · change-policy</text>
+  <rect x="820" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
+  <text x="843" y="478" class="card-title">Resume DOM Engine</text>
+  <text x="843" y="507" class="body">执行受控与原子语义 operations</text>
+  <text x="843" y="534" class="body">merge/split 编辑节点 · 禁止 editable 嵌套</text>
+  <text x="843" y="571" class="path">resume-dom.js</text>
+  <rect x="1190" y="444" width="410" height="150" rx="13" fill="#fff" stroke="#16a34a" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1213" y="478" class="card-title">Renderer / Projection</text>
+  <text x="1213" y="507" class="body">当前画布 · 历史详情 · 导入预览</text>
+  <text x="1213" y="534" class="body">HTML · PDF · DOCX</text>
+  <text x="1213" y="571" class="path">resume-dom.js · server/lib/render/*</text>
 
   <path d="M840 630V668" class="arrow"/>
   <rect x="50" y="670" width="1580" height="286" rx="18" fill="#f5f3ff" stroke="#c4b5fd" stroke-width="2"/>
@@ -44,12 +56,12 @@
   <text x="103" y="766" class="card-title">API Transport</text><text x="103" y="795" class="body">HTTP Router · REST · SSE</text><text x="103" y="822" class="body">请求解析 · Problem Details</text><text x="103" y="849" class="body">静态资源与签名下载</text><text x="103" y="882" class="path">server/index.js · server/lib/util.js</text>
   <rect x="485" y="722" width="690" height="198" rx="13" fill="#fff" stroke="#a78bfa" stroke-width="2" filter="url(#shadow)"/>
   <text x="508" y="756" class="card-title">Route / Domain Modules</text>
-  <text x="508" y="786" class="body">Workspace · Profile · Jobs · Templates · Uploads</text>
+  <text x="508" y="786" class="body">Workspace · Profile · Jobs · Uploads</text>
   <text x="508" y="813" class="body">Document Imports · Draft · AI · Versions</text>
   <text x="508" y="840" class="body">Generations · Artifacts</text>
   <text x="508" y="873" class="path">server/modules/*.js</text>
   <rect x="1210" y="732" width="390" height="178" rx="13" fill="#fff" stroke="#c4b5fd" filter="url(#shadow)"/>
-  <text x="1233" y="766" class="card-title">Policies / Domain Libraries</text><text x="1233" y="795" class="body">Write Policy · Auth · Idempotency</text><text x="1233" y="822" class="body">Audit · Job Analyzer · Compose</text><text x="1233" y="849" class="body">Polish · Templates · Resume Schema</text><text x="1233" y="882" class="path">server/lib/*.js</text>
+  <text x="1233" y="766" class="card-title">Policies / Domain Libraries</text><text x="1233" y="795" class="body">Write Policy · Auth · Idempotency</text><text x="1233" y="822" class="body">Operation Preconditions · Audit</text><text x="1233" y="849" class="body">Job Analyzer · Resume Schema</text><text x="1233" y="882" class="path">server/lib/*.js</text>
 
   <path d="M840 956V994" class="arrow"/>
   <rect x="50" y="996" width="1580" height="146" rx="18" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
@@ -64,13 +76,13 @@
   <text x="78" y="1219" class="zone">Execution Pipelines</text>
   <rect x="80" y="1244" width="470" height="292" rx="14" fill="#fff7ed" stroke="#fdba74" filter="url(#shadow)"/>
   <text x="103" y="1278" class="card-title">AI Pipeline</text>
-  <text x="103" y="1310" class="body">AI Module</text><text x="215" y="1310" class="body">→ Resume Harness</text>
-  <text x="123" y="1342" class="body">Context Builder · Memory Manager</text>
-  <text x="123" y="1369" class="body">Prompt Registry · Output Schema</text>
-  <text x="123" y="1396" class="body">Harness Orchestrator</text>
-  <text x="103" y="1432" class="body">Model Client Interface → DeepSeek Client</text>
-  <text x="123" y="1459" class="body">HTTP/Timeout/Abort · SSE Decoder</text>
-  <text x="123" y="1486" class="body">JSON Extractor · Error Mapping</text>
+  <text x="103" y="1310" class="body">AI Module · Context / Memory / Prompt</text>
+  <text x="123" y="1342" class="body">完整 ResumeDocument · 焦点节点 · 可恢复任务</text>
+  <text x="123" y="1369" class="body">四态 Output Schema · Model Client Interface</text>
+  <text x="103" y="1405" class="body">DeepSeek Client → DeepSeek LLM</text>
+  <text x="123" y="1437" class="body">HTTP/Timeout/Abort · SSE Decoder</text>
+  <text x="123" y="1464" class="body">JSON Extractor · Error Mapping</text>
+  <text x="103" y="1496" class="body">模型结果进入上方 AI 修改主链</text>
   <text x="103" y="1518" class="path">server/lib/resume-harness · deepseek-client</text>
   <rect x="585" y="1244" width="570" height="292" rx="14" fill="#fff7ed" stroke="#fdba74" filter="url(#shadow)"/>
   <text x="608" y="1278" class="card-title">Document Recognition Pipeline</text>
@@ -83,7 +95,7 @@
   <text x="608" y="1518" class="path">server/lib/document-recognition/*</text>
   <rect x="1190" y="1244" width="410" height="292" rx="14" fill="#fff7ed" stroke="#fdba74" filter="url(#shadow)"/>
   <text x="1213" y="1278" class="card-title">Render Pipeline</text>
-  <text x="1213" y="1310" class="body">Resume DOM Projection</text>
+  <text x="1213" y="1310" class="body">输入：完整 ResumeDocument</text>
   <text x="1233" y="1342" class="body">HTML Renderer</text>
   <text x="1233" y="1369" class="body">PDF Renderer · TTF Engine</text>
   <text x="1233" y="1396" class="body">DOCX Renderer · ZIP Writer</text>
@@ -111,7 +123,7 @@
   <path d="M1630 524H1678" class="support"/><path d="M1630 820H1678" class="support"/><path d="M1630 1086H1678" class="support"/><path d="M1630 1390H1678" class="support"/>
 
   <path d="M315 1584V1620" class="arrow"/><path d="M870 1584V1620" class="arrow"/><path d="M1395 1584V1620" class="arrow"/>
-  <path d="M315 1244V610H425" class="dash"/><text x="335" y="1168" class="small">AI 操作使用共享文档协议</text>
-  <path d="M870 1244V610H425" class="dash"/><text x="890" y="1168" class="small">候选构建复用 Resume DOM</text>
-  <path d="M1395 1244V610H425" class="dash"/><text x="1415" y="1168" class="small">导出渲染复用 Resume DOM</text>
+  <path d="M315 1244V650H250V596" class="dash"/><text x="335" y="1168" class="small">模型结果进入 Resume Harness</text>
+  <path d="M870 1244V650H990V596" class="dash"/><text x="890" y="1168" class="small">候选构建复用 Resume DOM</text>
+  <path d="M1395 1244V596" class="dash"/><text x="1415" y="1168" class="small">导出复用统一 Renderer</text>
 </svg>

@@ -5,7 +5,6 @@
  * 模型拥有完整工作区和当前会话上下文，但不能直接写业务数据。它只能提出三类动作：
  * 保存到资料、设置当前岗位、应用简历修改。三类动作互相独立，均需用户操作。
  */
-const { createHash } = require('node:crypto');
 const db = require('../lib/db');
 const { uuidv7, nowIso, problem, deepClone } = require('../lib/util');
 const audit = require('../lib/audit');
@@ -15,6 +14,23 @@ const { getObject } = require('../lib/storage');
 const { diffWords } = require('../lib/polish');
 const { keyTokens } = require('../lib/resume-schema');
 const { withIdempotency } = require('../lib/idempotency');
+const { createNodeDeltaPair, createStructureDeltaPair } = require('../lib/resume-change');
+const { buildChangePreview } = require('../lib/resume-change-preview');
+const {
+  normalizeChangeConstraints,
+  composeChangeConstraints,
+  authorizeChange,
+  validateAuthorizedChange,
+} = require('../lib/resume-change-policy');
+const { refreshResumeProposalStaleness } = require('../lib/resume-proposals');
+const {
+  buildOperationPreconditions,
+  validateOperationPreconditions,
+} = require('../lib/resume-operation-preconditions');
+const { compileResumeOperations } = require('../lib/resume-operation-compiler');
+const {
+  resolveResumeScope,
+} = require('../lib/resume-scope');
 const queue = require('../lib/queue');
 const { SCOPE_LABEL } = require('../lib/policy');
 const { toActionView, toMessageView } = require('./workspace');
@@ -28,10 +44,6 @@ function parseJson(raw, fallback = {}) {
   } catch (_) {
     return deepClone(fallback);
   }
-}
-
-function textHash(value) {
-  return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
 function loadContext(projectId, user) {
@@ -147,15 +159,21 @@ function validateLockedScope(ctx, scopeType, scopeId) {
   if (!policy.SCOPE_TYPES.has(scopeType)) throw problem.badRequest('未知的作用范围类型');
   if (scopeType === 'RESUME_BLOCK') {
     if (!scopeId) throw problem.badRequest('请选择具体的简历内容');
-    const found = findResumeNodeInDraft(
-      parseJson(ctx.draft && ctx.draft.resume_json, {}),
-      scopeId,
-    );
+    const resume = parseJson(ctx.draft && ctx.draft.resume_json, {});
+    const resolved = ResumeDom.resolveAiScopeNode(resume, scopeId);
+    const found = resolved
+      ? findResumeNodeInDraft(resume, resolved.node.id)
+      : null;
     if (!found) throw problem.badRequest('所选简历内容不存在，请重新选择');
     if (found.node.type !== 'text' && !found.node.editable) {
-      throw problem.badRequest('所选简历节点不可直接修改');
+      throw problem.badRequest('所选简历节点不能作为 AI 修改范围');
     }
-    return { scopeId, currentText: found.text, found };
+    return {
+      scopeId: String(found.node.id),
+      requestedScopeId: String(scopeId),
+      currentText: found.text,
+      found,
+    };
   }
   if (scopeType === 'DATA_PROFILE' && scopeId) {
     const owned = db.get(
@@ -187,13 +205,16 @@ function resolveTask({ ctx, user, body, scopeType, scopeId, content }) {
     if (task.scope_type !== scopeType || String(task.scope_id || '') !== String(scopeId || '')) {
       throw problem.conflict('SCOPE_CONFLICT', '当前对话目标已切换，请重新发送');
     }
+    if (['completed', 'failed', 'canceled'].includes(task.status)) {
+      throw problem.conflict('TASK_ENDED', '上一项 AI 任务已经结束，请重新发送本轮要求');
+    }
   }
   if (!task) {
     const id = uuidv7();
     db.run(
       `INSERT INTO ai_tasks
        (id, conversation_id, project_id, owner_id, scope_type, scope_id, goal, state_json, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'understanding', ?, ?)`,
       [
         id,
         ctx.conversation.id,
@@ -202,7 +223,11 @@ function resolveTask({ ctx, user, body, scopeType, scopeId, content }) {
         scopeType,
         scopeId,
         content.slice(0, 180),
-        JSON.stringify({ latest_instruction: content }),
+        JSON.stringify({
+          phase: 'understanding',
+          latest_instruction: content,
+          turns: [{ role: 'user', content: content.slice(0, 1000) }],
+        }),
         nowIso(),
         nowIso(),
       ],
@@ -210,8 +235,21 @@ function resolveTask({ ctx, user, body, scopeType, scopeId, content }) {
     task = db.get('SELECT * FROM ai_tasks WHERE id = ?', [id]);
   } else {
     const state = parseJson(task.state_json, {});
-    db.run('UPDATE ai_tasks SET state_json = ?, updated_at = ? WHERE id = ?', [
-      JSON.stringify({ ...state, latest_instruction: content }),
+    const turns = Array.isArray(state.turns) ? state.turns.slice(-11) : [];
+    turns.push({ role: 'user', content: content.slice(0, 1000) });
+    db.run('UPDATE ai_tasks SET state_json = ?, status = ?, updated_at = ? WHERE id = ?', [
+      JSON.stringify({
+        ...state,
+        phase: 'understanding',
+        latest_instruction: content,
+        turns,
+        answered_clarification: state.pending_clarification || state.answered_clarification || null,
+        confirmed_plan: state.pending_plan || state.confirmed_plan || null,
+        pending_clarification: null,
+        pending_plan: null,
+        last_error: null,
+      }),
+      'understanding',
       nowIso(),
       task.id,
     ]);
@@ -251,55 +289,174 @@ function unsupportedTokens(text, userProvidedTexts) {
   return Array.from(keyTokens(text)).filter((token) => !known.has(token));
 }
 
-function summarizeOperations(operations) {
-  const labels = {
-    replace_text: '修改内容',
-    insert_node: '新增模块或内容',
-    remove_node: '删除内容',
-    move_node: '调整内容位置',
-    set_attributes: '调整节点属性',
-    set_style: '调整节点样式',
-  };
-  return operations.map((operation) => labels[operation.op] || '调整简历结构').join('、');
-}
-
-function normalizeRewriteProposal({ action, currentText, editingBase, scopeType, scopeId, draft, task, userTexts }) {
+function normalizeRewriteProposal({
+  action,
+  currentText,
+  editingBase,
+  scopeType,
+  scopeId,
+  draft,
+  task,
+  userTexts,
+  proposalBaseResume,
+  parentProposal,
+}) {
   const raw = (action.payload && action.payload.proposal) || action.payload || {};
   const currentResume = ResumeDom.toResumeDocument(parseJson(draft.resume_json, {}));
-  let operations = Array.isArray(raw.operations) ? deepClone(raw.operations) : [];
+  const workingResume = proposalBaseResume
+    ? ResumeDom.toResumeDocument(proposalBaseResume)
+    : currentResume;
+  const previous = parentProposal || null;
+  const previousOperations = previous && Array.isArray(previous.operations)
+    ? deepClone(previous.operations)
+    : [];
+  let incrementalOperations = Array.isArray(raw.operations) ? deepClone(raw.operations) : [];
+  let operations = [];
   let replacementResume = null;
+  let proposalResume = null;
+  let incrementalResume = null;
   let suggestion = String(raw.suggestion || '').trim();
 
-  if (scopeType === 'RESUME_BLOCK') {
+  if (scopeType === 'RESUME_BLOCK' && !incrementalOperations.length) {
     if (!suggestion) throw problem.unprocessable('INVALID_MODEL_ACTION', '模型没有返回可应用的修改内容');
-    operations = [{ op: 'replace_text', node_id: scopeId, text: suggestion }];
+    incrementalOperations = [{ op: 'replace_text', node_id: scopeId, text: suggestion }];
+  }
+  if (incrementalOperations.length) {
     try {
-      ResumeDom.applyOperations(currentResume, operations, {
-        lockedNodeId: scopeId,
-        allowStructure: false,
-      });
+      const compiled = compileResumeOperations(workingResume, incrementalOperations);
+      incrementalOperations = compiled.operations;
+      incrementalResume = compiled.document;
     } catch (error) {
       throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
     }
-  } else if (operations.length) {
-    try {
-      ResumeDom.applyOperations(currentResume, operations, { allowStructure: true });
-    } catch (error) {
-      throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
-    }
-    if (!suggestion) suggestion = summarizeOperations(operations);
   } else if (raw.resume_dom && typeof raw.resume_dom === 'object') {
     try {
       replacementResume = ResumeDom.toResumeDocument(raw.resume_dom);
     } catch (error) {
       throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
     }
+    incrementalResume = replacementResume;
     if (!suggestion) suggestion = '更新整份简历的内容与结构';
   } else if (raw.resume_json && typeof raw.resume_json === 'object') {
     replacementResume = ResumeDom.toResumeDocument(raw.resume_json);
+    incrementalResume = replacementResume;
     if (!suggestion) suggestion = '更新整份简历的内容与结构';
   } else {
     throw problem.unprocessable('INVALID_MODEL_ACTION', '模型没有返回 DOM 操作或结构化简历');
+  }
+
+  const simpleFocusedTextRewrite = scopeType === 'RESUME_BLOCK'
+    && incrementalOperations.length === 1
+    && incrementalOperations[0].op === 'replace_text'
+    && String(incrementalOperations[0].node_id || '') === String(scopeId || '');
+  let latestConstraints;
+  try {
+    latestConstraints = normalizeChangeConstraints(
+      raw.change_constraints,
+      workingResume,
+      {
+        scopeType,
+        scopeId,
+        scopeRegion: scopeType === 'RESUME_BLOCK'
+          ? resolveResumeScope(workingResume, scopeId)
+          : null,
+        allowImplicitTextRewrite: simpleFocusedTextRewrite,
+      },
+    );
+    authorizeChange({
+      before: workingResume,
+      after: incrementalResume,
+      constraints: latestConstraints,
+      operations: incrementalOperations,
+      replacementResume: incrementalOperations.length ? null : replacementResume,
+      revision: draft.revision,
+    });
+  } catch (error) {
+    throw problem.unprocessable(
+      'RESUME_CHANGE_POLICY_VIOLATION',
+      error.message,
+      { policy_errors: error.policy_errors || [] },
+    );
+  }
+
+  if (previous) {
+    if (previousOperations.length && incrementalOperations.length) {
+      operations = previousOperations.concat(incrementalOperations);
+    } else if (previous.resume_json && incrementalOperations.length) {
+      replacementResume = ResumeDom.applyDocumentOperations(
+        ResumeDom.toResumeDocument(previous.resume_json),
+        incrementalOperations,
+        { allowStructure: true },
+      );
+    }
+  } else {
+    operations = incrementalOperations;
+  }
+
+  try {
+    if (operations.length) {
+      proposalResume = ResumeDom.applyDocumentOperations(
+        currentResume,
+        operations,
+        { allowStructure: true },
+      );
+    } else if (!replacementResume) {
+      throw new Error('建议没有形成可应用的文档变化');
+    } else {
+      proposalResume = replacementResume;
+    }
+  } catch (error) {
+    throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
+  }
+  const previousConstraints = previous
+    && previous.change_policy
+    && previous.change_policy.constraints;
+  const legacyParentConstraints = previous && !previousConstraints
+    ? {
+        format: 'resume-change-constraints-v1',
+        content: 'modify',
+        content_order: 'reorder',
+        structure: 'modify',
+        style: 'modify',
+        allowed_region_ids: [currentResume.root.id],
+        reason: '兼容升级前已生成的父建议',
+      }
+    : null;
+  const combinedConstraints = composeChangeConstraints(
+    previousConstraints || legacyParentConstraints,
+    latestConstraints,
+    currentResume,
+    {
+      scopeType,
+      scopeId,
+      scopeRegion: scopeType === 'RESUME_BLOCK'
+        ? resolveResumeScope(currentResume, scopeId)
+        : null,
+    },
+  );
+  let changePolicy;
+  try {
+    changePolicy = authorizeChange({
+      before: currentResume,
+      after: proposalResume,
+      constraints: combinedConstraints,
+      operations,
+      replacementResume,
+      revision: draft.revision,
+    });
+  } catch (error) {
+    throw problem.unprocessable(
+      'RESUME_CHANGE_POLICY_VIOLATION',
+      error.message,
+      { policy_errors: error.policy_errors || [] },
+    );
+  }
+  const changePreview = buildChangePreview(currentResume, proposalResume, {
+    revision: draft.revision,
+    constraints: combinedConstraints,
+  });
+  if (!suggestion) {
+    suggestion = changePreview.after.text || changePreview.summary;
   }
 
   const added = unsupportedTokens(
@@ -320,13 +477,22 @@ function normalizeRewriteProposal({ action, currentText, editingBase, scopeType,
     original: currentText,
     current_text: currentText,
     editing_base: editingBase || currentText,
+    has_parent_proposal: Boolean(previous),
     suggestion,
+    summary: changePreview.summary,
+    change_preview: changePreview,
     operations,
     resume_json: replacementResume,
-    diff: Array.isArray(raw.diff) ? raw.diff : diffWords(currentText, suggestion),
+    diff: Array.isArray(raw.diff)
+      ? raw.diff
+      : diffWords(changePreview.before.text, changePreview.after.text),
     note: String(raw.note || ''),
-    base_target_hash: textHash(currentText),
     base_draft_revision: draft.revision,
+    change_constraints: latestConstraints,
+    change_policy: changePolicy,
+    operation_preconditions: operations.length
+      ? buildOperationPreconditions(currentResume, operations)
+      : null,
   };
 }
 
@@ -357,7 +523,7 @@ function assembleInput({
   parentProposalId,
   attachments,
 }) {
-  const resume = ResumeDom.attachDocument(parseJson(ctx.draft && ctx.draft.resume_json, {}));
+  const resume = ResumeDom.toResumeDocument(parseJson(ctx.draft && ctx.draft.resume_json, {}));
   const experiences = db.all(
     'SELECT * FROM experiences WHERE profile_id = ? AND owner_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC',
     [ctx.profile.id, ctx.profile.owner_id],
@@ -369,27 +535,70 @@ function assembleInput({
   const locked = validateLockedScope(ctx, scopeType, scopeId);
   let editingBase = locked.currentText;
   let parentProposal = null;
+  let parentProposalPayload = null;
+  let proposalContent = null;
   if (parentProposalId) {
     parentProposal = db.get(
       `SELECT * FROM ai_action_requests
-       WHERE id = ? AND conversation_id = ? AND owner_id = ? AND action_type = 'RESUME_REWRITE_PROPOSAL'`,
+       WHERE id = ? AND conversation_id = ? AND owner_id = ?
+         AND action_type = 'RESUME_REWRITE_PROPOSAL'
+         AND status IN ('proposed','awaiting_confirmation')`,
       [parentProposalId, ctx.conversation.id, ctx.profile.owner_id],
     );
     if (!parentProposal) throw problem.badRequest('上一版建议不存在');
-    {
-      const previous = parseJson(parentProposal.payload_json, {});
-      editingBase = String(((previous.proposal || previous).suggestion) || locked.currentText);
+    if (task.active_proposal_id !== parentProposal.id) {
+      throw problem.conflict('PROPOSAL_SUPERSEDED', '这条建议已有新版，请基于最新建议继续调整');
     }
   } else if (task.active_proposal_id) {
     parentProposal = db.get(
-      "SELECT * FROM ai_action_requests WHERE id = ? AND owner_id = ? AND action_type = 'RESUME_REWRITE_PROPOSAL'",
+      `SELECT * FROM ai_action_requests
+       WHERE id = ? AND owner_id = ? AND action_type = 'RESUME_REWRITE_PROPOSAL'
+         AND status IN ('proposed','awaiting_confirmation')`,
       [task.active_proposal_id, user.id],
     );
-    if (parentProposal) {
-      const previous = parseJson(parentProposal.payload_json, {});
-      editingBase = String(((previous.proposal || previous).suggestion) || locked.currentText);
+  }
+  if (parentProposal) {
+    const previousStored = parseJson(parentProposal.payload_json, {});
+    parentProposalPayload = previousStored.proposal || previousStored;
+    editingBase = String(
+      parentProposalPayload.change_preview
+        && parentProposalPayload.change_preview.after
+        && parentProposalPayload.change_preview.after.text
+      || parentProposalPayload.suggestion
+      || locked.currentText,
+    );
+    if (Array.isArray(parentProposalPayload.operations) && parentProposalPayload.operations.length) {
+      if (parentProposalPayload.operation_preconditions) {
+        const validation = validateOperationPreconditions(
+          resume,
+          parentProposalPayload.operation_preconditions,
+        );
+        if (!validation.valid) {
+          throw problem.conflict(
+            'PROPOSAL_SUPERSEDED',
+            '上一版建议依赖的文档结构已不存在，请重新生成建议',
+          );
+        }
+      }
+      try {
+        proposalContent = ResumeDom.applyDocumentOperations(
+          resume,
+          parentProposalPayload.operations,
+          { allowStructure: true },
+        );
+      } catch (error) {
+        throw problem.conflict('PROPOSAL_SUPERSEDED', '上一版建议已无法基于当前草稿继续调整');
+      }
+    } else if (parentProposalPayload.resume_json) {
+      if (parentProposalPayload.base_draft_revision !== ctx.draft.revision) {
+        throw problem.conflict('PROPOSAL_SUPERSEDED', '当前草稿已经整体变化，请重新生成建议');
+      }
+      proposalContent = ResumeDom.toResumeDocument(parentProposalPayload.resume_json);
     }
   }
+  const scopeRegion = scopeType === 'RESUME_BLOCK'
+    ? resolveResumeScope(proposalContent || resume, scopeId)
+    : null;
   const profileView = {
     id: ctx.profile.id,
     revision: ctx.profile.revision,
@@ -411,9 +620,20 @@ function assembleInput({
     text: content,
     messageId: userMessageId,
     scope: { type: scopeType, id: scopeId, revision: scopeRevision },
-    task: { id: task.id, goal: task.goal },
+    task: {
+      id: task.id,
+      goal: task.goal,
+      status: task.status,
+      state: parseJson(task.state_json, {}),
+    },
     profile: profileView,
-    resume: { revision: ctx.draft.revision, content: resume },
+    resume: {
+      revision: ctx.draft.revision,
+      content: resume,
+      ...(proposalContent
+        ? { proposal_content: proposalContent, proposal_id: parentProposal.id }
+        : {}),
+    },
     job: ctx.job
       ? {
           id: ctx.job.id,
@@ -426,6 +646,7 @@ function assembleInput({
     focus: {
       current_text: locked.currentText,
       editing_base: editingBase,
+      scope_region: scopeRegion,
       location: locked.found
         ? {
             node_id: locked.found.node.id,
@@ -444,6 +665,8 @@ function assembleInput({
     llmInput,
     currentText: locked.currentText,
     editingBase,
+    proposalBaseResume: proposalContent,
+    parentProposal: parentProposalPayload,
     userTexts: collectWorkspaceText({
       profile: ctx.profile,
       experiences,
@@ -451,7 +674,7 @@ function assembleInput({
       job: ctx.job,
       messages: history,
       content,
-    }),
+    }).concat(proposalContent ? [JSON.stringify(proposalContent)] : []),
   };
 }
 
@@ -463,8 +686,34 @@ async function runModel(llmInput, userMessageId) {
       validation: policy.validateModelResponse(result.response, { userMessageId }),
     };
   } catch (error) {
-    console.error('[resume-harness] failed', error.message);
-    throw problem.unprocessable('MODEL_RESPONSE_INVALID', 'AI 本次没有返回可用结果，请重试');
+    console.error('[resume-harness] failed', error.code || 'UNKNOWN', error.message);
+    if (String(error.code || '').startsWith('DEEPSEEK_')) {
+      throw problem.unprocessable(
+        'MODEL_UNAVAILABLE',
+        String(error.code).includes('TIMEOUT')
+          ? '模型响应超时，请稍后重试'
+          : '模型服务暂时不可用，请稍后重试',
+      );
+    }
+    if (error.code === 'PROPOSAL_NOT_EXECUTABLE') {
+      const validationErrors = Array.isArray(error.validation_errors)
+        ? error.validation_errors
+        : [];
+      const detail = validationErrors.some((message) => message.includes('允许调整的简历区域'))
+        ? 'AI 建议涉及了本轮未授权的简历区域，系统已阻止。请明确要一起调整的内容后重试'
+        : validationErrors.some((message) => message.includes('保留全部原文字'))
+          ? 'AI 建议没有完整保留原文字，系统已阻止。请重试或明确是否允许改写内容'
+          : 'AI 返回的修改无法安全应用，请重试或换一种方式描述';
+      throw problem.unprocessable(
+        'PROPOSAL_NOT_EXECUTABLE',
+        detail,
+        { validation_errors: validationErrors },
+      );
+    }
+    throw problem.unprocessable(
+      'MODEL_RESPONSE_INVALID',
+      'AI 返回内容无法解析，请重试或换一种方式描述',
+    );
   }
 }
 
@@ -501,6 +750,157 @@ function insertAction({
   return db.get('SELECT * FROM ai_action_requests WHERE id = ?', [id]);
 }
 
+function updateTaskState(task, patch, status) {
+  const current = db.get('SELECT * FROM ai_tasks WHERE id = ?', [task.id]) || task;
+  const state = parseJson(current.state_json, {});
+  const turns = Array.isArray(state.turns) ? state.turns.slice(-11) : [];
+  if (patch && patch.assistant_turn) {
+    turns.push({
+      role: 'assistant',
+      content: String(patch.assistant_turn).slice(0, 1000),
+    });
+  }
+  const nextState = {
+    ...state,
+    ...(patch || {}),
+    turns,
+  };
+  delete nextState.assistant_turn;
+  db.run(
+    'UPDATE ai_tasks SET state_json = ?, status = ?, updated_at = ? WHERE id = ?',
+    [JSON.stringify(nextState), status, nowIso(), task.id],
+  );
+}
+
+function persistTaskFailure({
+  ctx,
+  user,
+  task,
+  scopeType,
+  scopeId,
+  scopeRevision,
+  userMessageId,
+  error,
+}) {
+  const liveTask = db.get('SELECT * FROM ai_tasks WHERE id = ? AND owner_id = ?', [
+    task.id,
+    user.id,
+  ]);
+  if (!liveTask || liveTask.status === 'canceled') return null;
+  const detail = String(error && (error.detail || error.message) || 'AI 请求未完成');
+  const content = `这次请求没有成功：${detail}`;
+  const assistantMessageId = uuidv7();
+  db.run(
+    `INSERT INTO ai_messages
+     (id, conversation_id, owner_id, role, content, scope_type, scope_id, scope_revision,
+      model_metadata_json, created_at)
+     VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?, ?, ?)`,
+    [
+      assistantMessageId,
+      ctx.conversation.id,
+      user.id,
+      content,
+      scopeType,
+      scopeId,
+      scopeRevision,
+      JSON.stringify({
+        task_id: task.id,
+        request_message_id: userMessageId,
+        result_type: 'ERROR',
+        error_code: error && error.code || 'UNKNOWN',
+      }),
+      nowIso(),
+    ],
+  );
+  updateTaskState(task, {
+    phase: 'failed',
+    pending_clarification: null,
+    last_error: {
+      code: error && error.code || 'UNKNOWN',
+      message: detail.slice(0, 500),
+      at: nowIso(),
+    },
+    assistant_turn: content,
+  }, liveTask.active_proposal_id ? 'waiting_apply' : 'failed');
+  return assistantMessageId;
+}
+
+function taskIdFromAction(action) {
+  const payload = parseJson(action && action.payload_json, {});
+  return payload.task_id || (payload.proposal && payload.proposal.task_id) || null;
+}
+
+function settleTaskAfterAction(action) {
+  const taskId = taskIdFromAction(action);
+  if (!taskId) return;
+  const task = db.get('SELECT * FROM ai_tasks WHERE id = ? AND owner_id = ?', [
+    taskId,
+    action.owner_id,
+  ]);
+  if (!task) return;
+  const pending = db
+    .all(
+      `SELECT payload_json FROM ai_action_requests
+       WHERE conversation_id = ? AND owner_id = ?
+         AND status IN ('awaiting_confirmation','proposed')`,
+      [action.conversation_id, action.owner_id],
+    )
+    .some((row) => {
+      const payload = parseJson(row.payload_json, {});
+      return String(payload.task_id || (payload.proposal && payload.proposal.task_id) || '') === String(taskId);
+    });
+  updateTaskState(
+    task,
+    {
+      phase: pending ? 'awaiting_confirmation' : 'completed',
+      pending_clarification: null,
+    },
+    pending ? 'waiting_apply' : 'completed',
+  );
+}
+
+function buildRecoveryClarification(rejected) {
+  const reasons = rejected.map((item) => String(item.reason || '')).join('；');
+  const needsFacts = /事实|数字|经历|资料|unsupported|未提供|缺少内容/i.test(reasons);
+  if (needsFacts) {
+    return {
+      question: '这次修改涉及尚未明确的信息。你希望我怎样继续？',
+      options: [
+        {
+          id: 'existing_only',
+          label: '只用现有内容',
+          description: '不新增事实，只重新组织和表达当前简历已有信息。',
+        },
+        {
+          id: 'provide_details',
+          label: '我来补充信息',
+          description: '你补充具体经历、数字或结果后，我再完成修改。',
+        },
+      ],
+    };
+  }
+  return {
+    question: '为了准确完成这次修改，请确认你更希望保留什么、改变什么：',
+    options: [
+      {
+        id: 'content_only',
+        label: '只改文字，保留结构',
+        description: '保留现有模块和段落数量，只调整表达。',
+      },
+      {
+        id: 'structure_only',
+        label: '只改结构，保留原文',
+        description: '调整合并、拆分或顺序，不删减原有文字。',
+      },
+      {
+        id: 'content_and_structure',
+        label: '文字和结构一起调整',
+        description: '按你的目标同时重写内容并重新组织结构。',
+      },
+    ],
+  };
+}
+
 function applyActions({
   ctx,
   user,
@@ -510,11 +910,14 @@ function applyActions({
   model,
   promptVersion,
   schemaVersion,
+  repairCount,
   scopeType,
   scopeId,
   scopeRevision,
   currentText,
   editingBase,
+  proposalBaseResume,
+  parentProposal,
   userTexts,
   task,
 }) {
@@ -526,6 +929,10 @@ function applyActions({
     schema_version: schemaVersion,
     policy_version: POLICY_VERSION,
     task_id: task.id,
+    repair_count: repairCount || 0,
+    result_type: response.result_type,
+    clarification: response.clarification || null,
+    plan: response.plan || null,
   };
   db.run(
     `INSERT INTO ai_messages
@@ -563,6 +970,8 @@ function applyActions({
           draft: ctx.draft,
           task,
           userTexts,
+          proposalBaseResume,
+          parentProposal,
         });
         row = insertAction({
           conversationId: ctx.conversation.id,
@@ -627,7 +1036,66 @@ function applyActions({
       rejected.push({ action_type: action.type, reason: error.detail || error.message });
     }
   });
-  return { assistantMessageId, executed, rejected, finalReply: response.reply };
+  let finalReply = response.reply;
+  if (!executed.length && rejected.length) {
+    const clarification = buildRecoveryClarification(rejected);
+    response.result_type = 'CLARIFICATION_REQUIRED';
+    response.clarification = clarification;
+    response.plan = null;
+    metadata.result_type = response.result_type;
+    metadata.clarification = clarification;
+    metadata.plan = null;
+    finalReply = clarification.question;
+    db.run(
+      'UPDATE ai_messages SET content = ?, model_metadata_json = ? WHERE id = ?',
+      [finalReply, JSON.stringify(metadata), assistantMessageId],
+    );
+  }
+  if (response.result_type === 'CLARIFICATION_REQUIRED') {
+    updateTaskState(task, {
+      phase: 'clarifying',
+      pending_clarification: response.clarification,
+      last_error: null,
+      assistant_turn: finalReply,
+    }, 'clarifying');
+  } else if (response.result_type === 'PLAN_CONFIRMATION_REQUIRED') {
+    updateTaskState(task, {
+      phase: 'confirming_plan',
+      pending_plan: response.plan,
+      pending_clarification: null,
+      last_error: null,
+      assistant_turn: finalReply,
+    }, 'confirming_plan');
+  } else if (executed.length) {
+    updateTaskState(task, {
+      phase: 'awaiting_confirmation',
+      pending_plan: null,
+      pending_clarification: null,
+      last_error: null,
+      assistant_turn: finalReply,
+    }, 'waiting_apply');
+  } else if (rejected.length) {
+    updateTaskState(task, {
+      phase: 'failed',
+      pending_plan: null,
+      pending_clarification: null,
+      last_error: {
+        code: 'ACTIONS_REJECTED',
+        message: rejected.map((item) => item.reason).join('；').slice(0, 500),
+        at: nowIso(),
+      },
+      assistant_turn: finalReply,
+    }, 'failed');
+  } else {
+    updateTaskState(task, {
+      phase: 'completed',
+      pending_plan: null,
+      pending_clarification: null,
+      last_error: null,
+      assistant_turn: finalReply,
+    }, 'completed');
+  }
+  return { assistantMessageId, executed, rejected, finalReply };
 }
 
 function applyRewriteProposal({ user, project, draft, action, requestId, ipHash }) {
@@ -635,33 +1103,176 @@ function applyRewriteProposal({ user, project, draft, action, requestId, ipHash 
     const stored = parseJson(action.payload_json, {});
     const payload = stored.proposal || stored;
     const resume = ResumeDom.toResumeDocument(parseJson(draft.resume_json, {}));
-    const before = { resume_json: deepClone(resume) };
+    let before;
+    let after;
     let nextResume;
+    const appliedOperations = Array.isArray(payload.operations) && payload.operations.length
+      ? payload.operations
+      : (
+          payload.scope_type === 'RESUME_BLOCK'
+            ? [{ op: 'replace_text', node_id: payload.scope_id, text: payload.suggestion }]
+            : []
+        );
     if (payload.scope_type === 'RESUME_BLOCK') {
-      const found = findResumeNodeInDraft(resume, payload.scope_id);
-      if (!found) throw problem.conflict('TARGET_MISSING', '原内容已不存在，请重新生成建议');
-      if (textHash(found.text) !== payload.base_target_hash) {
-        throw problem.conflict('REVISION_CONFLICT', '这段内容已经变化，请重新生成建议');
+      if (payload.operation_preconditions) {
+        const validation = validateOperationPreconditions(resume, payload.operation_preconditions);
+        if (!validation.valid) {
+          throw problem.conflict('OPERATION_NOT_EXECUTABLE', '当前文档结构已无法执行这项修改', {
+            conflicts: validation.errors,
+          });
+        }
+      } else {
+        try {
+          payload.operation_preconditions = buildOperationPreconditions(resume, appliedOperations);
+        } catch (error) {
+          throw problem.conflict('OPERATION_NOT_EXECUTABLE', '当前文档结构已无法执行这项修改', {
+            reason: error.message,
+          });
+        }
+        db.run('UPDATE ai_action_requests SET payload_json = ? WHERE id = ?', [
+          JSON.stringify(stored.proposal ? { ...stored, proposal: payload } : payload),
+          action.id,
+        ]);
       }
-      nextResume = ResumeDom.applyDocumentOperations(
-        resume,
-        payload.operations && payload.operations.length
-          ? payload.operations
-          : [{ op: 'replace_text', node_id: payload.scope_id, text: payload.suggestion }],
-        { lockedNodeId: payload.scope_id, allowStructure: false },
-      );
-    } else {
-      if (payload.operations && payload.operations.length) {
-        nextResume = ResumeDom.applyDocumentOperations(resume, payload.operations, {
-          allowStructure: true,
+      try {
+        nextResume = ResumeDom.applyDocumentOperations(
+          resume,
+          appliedOperations,
+          { allowStructure: true },
+        );
+      } catch (error) {
+        throw problem.conflict('OPERATION_NOT_EXECUTABLE', '当前文档结构已无法执行这项修改', {
+          reason: error.message,
         });
+      }
+      const simpleText = appliedOperations.length === 1
+        && appliedOperations[0].op === 'replace_text'
+        && String(appliedOperations[0].node_id) === String(payload.scope_id);
+      const delta = simpleText
+        ? createNodeDeltaPair(resume, nextResume, [payload.scope_id], {
+            label: String(payload.summary || payload.title || 'AI 修改简历内容').slice(0, 120),
+          })
+        : createStructureDeltaPair(resume, nextResume, appliedOperations, {
+            label: String(payload.summary || payload.title || 'AI 调整局部结构').slice(0, 120),
+          });
+      if (delta) {
+        before = delta.before;
+        after = delta.after;
+      } else {
+        before = { resume_json: deepClone(resume) };
+        after = { resume_json: deepClone(nextResume) };
+      }
+    } else {
+      if (appliedOperations.length) {
+        if (!payload.operation_preconditions) {
+          try {
+            payload.operation_preconditions = buildOperationPreconditions(resume, appliedOperations);
+          } catch (error) {
+            throw problem.conflict('OPERATION_NOT_EXECUTABLE', '当前文档结构已无法执行这项修改', {
+              reason: error.message,
+            });
+          }
+          db.run('UPDATE ai_action_requests SET payload_json = ? WHERE id = ?', [
+            JSON.stringify(stored.proposal ? { ...stored, proposal: payload } : payload),
+            action.id,
+          ]);
+        }
+        const validation = validateOperationPreconditions(resume, payload.operation_preconditions);
+        if (!validation.valid) {
+          throw problem.conflict('OPERATION_NOT_EXECUTABLE', '当前文档结构已无法执行这项修改', {
+            conflicts: validation.errors,
+          });
+        }
+        try {
+          nextResume = ResumeDom.applyDocumentOperations(resume, appliedOperations, {
+            allowStructure: true,
+          });
+        } catch (error) {
+          throw problem.conflict('OPERATION_NOT_EXECUTABLE', '当前文档结构已无法执行这项修改', {
+            reason: error.message,
+          });
+        }
+        const delta = createStructureDeltaPair(resume, nextResume, appliedOperations, {
+          label: String(payload.summary || payload.title || 'AI 调整简历').slice(0, 120),
+        });
+        if (delta) {
+          before = delta.before;
+          after = delta.after;
+        }
       } else if (payload.resume_json && typeof payload.resume_json === 'object') {
         nextResume = ResumeDom.toResumeDocument(payload.resume_json);
       } else {
         throw problem.unprocessable('INVALID_PROPOSAL', '整份简历建议缺少 DOM 操作');
       }
+      if (!before || !after) {
+        before = { resume_json: deepClone(resume) };
+        after = { resume_json: deepClone(nextResume) };
+      }
     }
-    const after = { resume_json: deepClone(nextResume) };
+    const policyValidation = validateAuthorizedChange({
+      authorization: payload.change_policy,
+      before: resume,
+      after: nextResume,
+      operations: appliedOperations,
+      replacementResume: appliedOperations.length ? null : payload.resume_json,
+      revision: draft.revision,
+      allowUserContentOverride: true,
+    });
+    if (!policyValidation.valid) {
+      throw problem.conflict(
+        'RESUME_CHANGE_POLICY_VIOLATION',
+        '这项建议的实际修改超出了你本轮允许的范围，请重新生成',
+        { policy_errors: policyValidation.errors },
+      );
+    }
+    if (payload.change_policy && !policyValidation.legacy) {
+      payload.change_policy.applied_on_revision = draft.revision;
+      payload.change_policy.content_override = Boolean(policyValidation.content_override);
+    }
+    payload.change_preview = buildChangePreview(resume, nextResume, {
+      revision: draft.revision,
+      constraints: payload.change_policy && payload.change_policy.constraints
+        || payload.change_constraints,
+    });
+    payload.summary = payload.change_preview.summary;
+    const taskId = stored.task_id || payload.task_id;
+    if (!payload.change_preview.changes.length) {
+      payload.change_preview.already_satisfied = true;
+      payload.change_preview.summary = '当前内容已符合建议';
+      payload.summary = payload.change_preview.summary;
+      db.run("UPDATE ai_action_requests SET payload_json = ?, status = 'applied', applied_at = ? WHERE id = ?", [
+        JSON.stringify(stored.proposal ? { ...stored, proposal: payload } : payload),
+        nowIso(),
+        action.id,
+      ]);
+      if (taskId) {
+        db.run(
+          "UPDATE ai_tasks SET active_proposal_id = NULL, status = 'completed', updated_at = ? WHERE id = ?",
+          [nowIso(), taskId],
+        );
+      }
+      audit.log({
+        ownerId: user.id,
+        action: 'resume_rewrite_already_satisfied',
+        resourceType: 'resume_draft',
+        resourceId: draft.id,
+        requestId,
+        ipHash,
+        metadata: {
+          scope_type: payload.scope_type,
+          scope_id: payload.scope_id,
+          revision: draft.revision,
+        },
+      });
+      return {
+        revision: draft.revision,
+        change_event_id: null,
+        mutation_id: null,
+        resume_json: resume,
+        no_change: true,
+        version_created: false,
+      };
+    }
     const changeType = 'dom_operations';
     const revision = draft.revision + 1;
     db.run(
@@ -691,11 +1302,21 @@ function applyRewriteProposal({ user, project, draft, action, requestId, ipHash 
         nowIso(),
       ],
     );
-    db.run("UPDATE ai_action_requests SET status = 'applied', applied_at = ? WHERE id = ?", [
+    db.run("UPDATE ai_action_requests SET payload_json = ?, status = 'applied', applied_at = ? WHERE id = ?", [
+      JSON.stringify(stored.proposal ? { ...stored, proposal: payload } : payload),
       nowIso(),
       action.id,
     ]);
-    const taskId = stored.task_id || payload.task_id;
+    refreshResumeProposalStaleness(
+      db,
+      project.id,
+      user.id,
+      {
+        resume: nextResume,
+        revision,
+        excludeActionId: action.id,
+      },
+    );
     if (taskId) {
       db.run(
         "UPDATE ai_tasks SET active_proposal_id = NULL, status = 'completed', updated_at = ? WHERE id = ?",
@@ -794,14 +1415,18 @@ const routes = [
     method: 'GET',
     pattern: '/projects/:id/ai/messages',
     handler: ({ params, user }) => {
-      const { conversation } = loadContext(params.id, user);
+      const { conversation, draft } = loadContext(params.id, user);
+      const resume = ResumeDom.toResumeDocument(parseJson(draft.resume_json, {}));
       return {
         conversation_id: conversation.id,
         items: db
           .all('SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC', [
             conversation.id,
           ])
-          .map(toMessageView),
+          .map((row) => toMessageView(row, {
+            resume,
+            draftRevision: draft.revision,
+          })),
       };
     },
   },
@@ -809,7 +1434,8 @@ const routes = [
     method: 'GET',
     pattern: '/projects/:id/ai/actions',
     handler: ({ params, user, query }) => {
-      const { conversation } = loadContext(params.id, user);
+      const { conversation, draft } = loadContext(params.id, user);
+      const resume = ResumeDom.toResumeDocument(parseJson(draft.resume_json, {}));
       const status = query.get('status') || 'pending';
       const statuses = status === 'pending' ? ['awaiting_confirmation', 'proposed'] : null;
       const rows = status === 'all'
@@ -823,7 +1449,12 @@ const routes = [
              ORDER BY created_at ASC`,
             [conversation.id, user.id, ...(statuses || [status])],
           );
-      return { items: rows.map(toActionView) };
+      return {
+        items: rows.map((row) => toActionView(row, {
+          resume,
+          draftRevision: draft.revision,
+        })),
+      };
     },
   },
   {
@@ -866,18 +1497,43 @@ const routes = [
         'UPDATE ai_conversations SET active_scope_type = ?, active_scope_id = ?, updated_at = ? WHERE id = ?',
         [scopeType, scopeId, nowIso(), ctx.conversation.id],
       );
-      const assembled = assembleInput({
-        ctx,
-        userMessageId,
-        content,
-        scopeType,
-        scopeId,
-        scopeRevision,
-        task,
-        parentProposalId: body.parent_proposal_id || null,
-        attachments,
-      });
-      const result = await runModel(assembled.llmInput, userMessageId);
+      let assembled;
+      let result;
+      try {
+        assembled = assembleInput({
+          ctx,
+          userMessageId,
+          content,
+          scopeType,
+          scopeId,
+          scopeRevision,
+          task,
+          parentProposalId: body.parent_proposal_id || null,
+          attachments,
+        });
+        updateTaskState(task, { phase: 'planning' }, 'planning');
+        result = await runModel(assembled.llmInput, userMessageId);
+        updateTaskState(task, { phase: 'validated' }, 'validated');
+      } catch (error) {
+        const failureMessageId = persistTaskFailure({
+          ctx,
+          user,
+          task,
+          scopeType,
+          scopeId,
+          scopeRevision,
+          userMessageId,
+          error,
+        });
+        if (error && typeof error === 'object') {
+          error.extra = {
+            ...(error.extra || {}),
+            task_id: task.id,
+            persisted_message_id: failureMessageId,
+          };
+        }
+        throw error;
+      }
       const liveConversation = db.get(
         "SELECT id FROM ai_conversations WHERE id = ? AND owner_id = ? AND status = 'active'",
         [ctx.conversation.id, user.id],
@@ -894,11 +1550,14 @@ const routes = [
         model: result.model,
         promptVersion: result.prompt_version,
         schemaVersion: result.schema_version,
+        repairCount: result.repair_count,
         scopeType,
         scopeId,
         scopeRevision,
         currentText: assembled.currentText,
         editingBase: assembled.editingBase,
+        proposalBaseResume: assembled.proposalBaseResume,
+        parentProposal: assembled.parentProposal,
         userTexts: assembled.userTexts,
         task,
       });
@@ -913,6 +1572,7 @@ const routes = [
           scope_type: scopeType,
           proposed: applied.executed.map((item) => item.action_type),
           rejected: applied.rejected.map((item) => item.reason),
+          repair_count: result.repair_count || 0,
         },
       });
       return {
@@ -926,6 +1586,9 @@ const routes = [
         prompt_version: result.prompt_version,
         engine: { provider: result.provider, model: result.model },
         task_id: task.id,
+        result_type: result.response.result_type,
+        clarification: result.response.clarification || null,
+        plan: result.response.plan || null,
         saved: false,
       };
     },
@@ -943,18 +1606,39 @@ const routes = [
         if (['applied', 'rejected', 'reverted'].includes(action.status)) {
           return { id: action.id, status: action.status, idempotent_replay: true };
         }
+        if (['stale', 'superseded'].includes(action.status)) {
+          throw problem.conflict(
+            'PROPOSAL_SUPERSEDED',
+            action.status === 'stale'
+              ? '这项建议已无法基于当前草稿应用，请重新生成'
+              : '这条建议已有新版，请应用最新建议',
+          );
+        }
         const conversation = db.get('SELECT * FROM ai_conversations WHERE id = ?', [action.conversation_id]);
         if (!conversation) throw problem.notFound('对话不存在');
         const ctx = loadContext(conversation.project_id, user);
-        if (action.expected_revision !== null && action.expected_revision !== undefined) {
+        const actionPayload = parseJson(action.payload_json, {});
+        const rewriteProposal = actionPayload.proposal || actionPayload;
+        const isBlockRewrite = action.action_type === 'RESUME_REWRITE_PROPOSAL'
+          && rewriteProposal.scope_type === 'RESUME_BLOCK';
+        const isDocumentOperationRewrite = action.action_type === 'RESUME_REWRITE_PROPOSAL'
+          && rewriteProposal.scope_type === 'RESUME_DOCUMENT'
+          && Array.isArray(rewriteProposal.operations)
+          && rewriteProposal.operations.length > 0;
+        if (
+          !isBlockRewrite
+          && !isDocumentOperationRewrite
+          && action.expected_revision !== null
+          && action.expected_revision !== undefined
+        ) {
           const currentRevision = action.action_type === 'RESUME_REWRITE_PROPOSAL'
             ? ctx.draft.revision
             : action.action_type === 'PROFILE_SAVE_PROPOSAL'
               ? ctx.profile.revision
               : ctx.project.revision;
-          if (body.expected_revision !== undefined && body.expected_revision !== currentRevision) {
+          if (action.expected_revision !== currentRevision) {
             throw problem.conflict('REVISION_CONFLICT', '内容已经变化，请重新确认', {
-              expected: body.expected_revision,
+              expected: action.expected_revision,
               current: currentRevision,
             });
           }
@@ -984,6 +1668,7 @@ const routes = [
         } else {
           throw problem.conflict('ACTION_NOT_CONFIRMABLE', '该动作不支持确认');
         }
+        settleTaskAfterAction(action);
         return { id: action.id, status: 'applied', ...result };
       }),
   },
@@ -1012,6 +1697,7 @@ const routes = [
             [nowIso(), payload.task_id, action.id],
           );
         }
+        settleTaskAfterAction(action);
         audit.log({
           ownerId: user.id,
           action: 'ai_action_rejected',

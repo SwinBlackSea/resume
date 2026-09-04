@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1540" viewBox="0 0 1800 1540" role="img" aria-labelledby="title desc">
   <title id="title">简历星球自上而下整体架构图</title>
-  <desc id="desc">主调用链从 Web、API Server、Application Server、任务编排、执行服务到 LLM 等底层能力，数据设施位于侧边。</desc>
+  <desc id="desc">主调用链从 Web、API Server、Application Server、任务编排、执行服务到 LLM；AI 请求按简单直出、复杂确认、歧义追问分流，文档修改支持五级撤销重做并强制单一编辑节点。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64748b"/></marker>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".10"/></filter>
@@ -17,7 +17,7 @@
   <text x="252" y="151" class="card-title">Web Application</text>
   <text x="252" y="181" class="card-body">三栏工作区：资料 ｜ 简历正文 ｜ AI 对话</text>
   <text x="780" y="151" class="card-title">Web Rendering Core</text>
-  <text x="780" y="181" class="card-body">ResumeDom.Renderer · 模板视图 · 导入预览 · 历史比较</text>
+  <text x="780" y="181" class="card-body">ResumeDom.Renderer · 当前画布 · 五级撤销/重做 · 历史比较</text>
 
   <path d="M720 224V272" class="arrow"/><text x="740" y="255" class="small">REST / SSE / WebSocket</text>
   <text x="70" y="313" class="layer">02 · API</text>
@@ -34,9 +34,9 @@
   <rect x="180" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
   <text x="202" y="546" class="card-title">工作区领域</text><text x="202" y="577" class="card-body">项目 · 资料 · 岗位</text><text x="202" y="604" class="card-body">平级维护，不自动同步</text>
   <rect x="555" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
-  <text x="577" y="546" class="card-title">简历领域 / Resume DOM Engine</text><text x="577" y="577" class="card-body">规范化 · 受控操作 · 比较 · 渲染投影</text><text x="577" y="604" class="card-body">草稿 · 模板 · 修改事件 · 不可变版本</text>
+  <text x="577" y="546" class="card-title">简历领域 / ResumeDocument</text><text x="577" y="577" class="card-body">完整文档 · 单一编辑节点 · 渲染投影</text><text x="577" y="604" class="card-body">草稿 · 双向修改事件 · 不可变版本</text>
   <rect x="930" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
-  <text x="952" y="546" class="card-title">智能与任务领域</text><text x="952" y="577" class="card-body">AI 对话 · 文档导入 · 生成</text><text x="952" y="604" class="card-body">候选结果经用户确认后应用</text>
+  <text x="952" y="546" class="card-title">智能与任务领域</text><text x="952" y="577" class="card-body">简单直出 / 复杂确认 / 歧义追问</text><text x="952" y="604" class="card-body">语义操作编译 · 顺序校验 · 确认后应用</text>
 
   <path d="M720 688V736" class="arrow"/><text x="740" y="719" class="small">事务 Outbox</text>
   <text x="70" y="777" class="layer">04 · ORCHESTRATION</text>
@@ -53,7 +53,7 @@
   <rect x="410" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
   <text x="432" y="1014" class="card-title">OCR / Speech Worker</text><text x="432" y="1045" class="card-body">岗位图片 · 语音转写</text><text x="432" y="1072" class="card-body">返回待确认文本</text>
   <rect x="710" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
-  <text x="732" y="1014" class="card-title">AI Worker → Resume Harness</text><text x="732" y="1045" class="card-body">Context · Memory · Prompt</text><text x="732" y="1072" class="card-body">Output Schema · Orchestrator</text>
+  <text x="732" y="1014" class="card-title">AI Worker → Resume Harness</text><text x="732" y="1045" class="card-body">Context · Memory · Request Routing</text><text x="732" y="1072" class="card-body">4-state Schema → Operation Compiler</text>
   <rect x="1010" y="978" width="280" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
   <text x="1032" y="1014" class="card-title">Render Worker</text><text x="1032" y="1045" class="card-body">HTML · PDF · DOCX</text><text x="1032" y="1072" class="card-body">分页 · 溢出 · 质量检查</text>
 

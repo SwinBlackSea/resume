@@ -9,6 +9,8 @@ const { computeReadiness, computeProfileCompleteness } = require('../lib/resume-
 const { splitBullets } = require('../lib/compose');
 const { SCOPE_LABEL } = require('../lib/policy');
 const { DEMO_EMAIL } = require('../lib/auth');
+const { previewProposalOnResume } = require('../lib/resume-change-preview');
+const { loadHistoryStacks } = require('./draft');
 const ResumeDom = require('../../resume-dom');
 
 function toExperienceView(row) {
@@ -100,7 +102,7 @@ function toVersionView(row, currentVersionId) {
   };
 }
 
-function toMessageView(row) {
+function toMessageView(row, options = {}) {
   let modelMetadata = {};
   try {
     modelMetadata = JSON.parse(row.model_metadata_json || '{}');
@@ -110,7 +112,10 @@ function toMessageView(row) {
   const actions = db.all(
     'SELECT * FROM ai_action_requests WHERE message_id = ? ORDER BY created_at ASC',
     [row.id],
-  ).map(toActionView);
+  ).map((action) => toActionView(action, options));
+  const task = modelMetadata.task_id
+    ? db.get('SELECT status FROM ai_tasks WHERE id = ?', [modelMetadata.task_id])
+    : null;
   return {
     id: row.id,
     role: row.role,
@@ -119,6 +124,11 @@ function toMessageView(row) {
     scope_label: row.scope_type ? SCOPE_LABEL[row.scope_type] || row.scope_type : '',
     scope_id: row.scope_id,
     task_id: modelMetadata.task_id || null,
+    task_status: task ? task.status : null,
+    result_type: modelMetadata.result_type || null,
+    clarification: modelMetadata.clarification || null,
+    plan: modelMetadata.plan || null,
+    error_code: modelMetadata.error_code || null,
     created_at: row.created_at,
     // 展示当前回答来自哪个引擎/模型，便于确认配置是否生效
     model: {
@@ -131,12 +141,32 @@ function toMessageView(row) {
   };
 }
 
-function toActionView(row) {
+function toActionView(row, options = {}) {
   let payload = {};
   try {
     payload = JSON.parse(row.payload_json || '{}');
   } catch (_) {
     payload = {};
+  }
+  if (
+    row.action_type === 'RESUME_REWRITE_PROPOSAL'
+    && ['proposed', 'awaiting_confirmation'].includes(row.status)
+    && options.resume
+  ) {
+    const proposal = payload.proposal || payload;
+    try {
+      const preview = previewProposalOnResume(
+        proposal,
+        options.resume,
+        options.draftRevision,
+      );
+      if (preview) {
+        proposal.change_preview = preview;
+        proposal.summary = preview.summary;
+      }
+    } catch (_) {
+      // 可执行性由领域服务统一判断；展示层无法模拟时保留生成时预览。
+    }
   }
   const receipt = db.get(
     'SELECT * FROM change_receipts WHERE action_request_id = ? ORDER BY created_at DESC LIMIT 1',
@@ -202,6 +232,12 @@ function buildWorkspace(projectId, user) {
     projectId,
     user.id,
   ]);
+  const rawDraft = draft ? JSON.parse(draft.resume_json || '{}') : {};
+  const resumeDocument = ResumeDom.toResumeDocument(
+    rawDraft.schema_version === ResumeDom.RESUME_DOCUMENT_VERSION
+      ? rawDraft
+      : ResumeDom.createResumeAggregate(rawDraft, currentTemplate),
+  );
   const pendingChanges = db
     .all(
       `SELECT * FROM resume_change_events
@@ -221,6 +257,9 @@ function buildWorkspace(projectId, user) {
       mutation_id: row.mutation_id,
       created_at: row.created_at,
     }));
+  const history = draft
+    ? loadHistoryStacks(projectId, user.id)
+    : { depth: 5, undo: [], redo: [] };
 
   const versionRows = db.all(
     'SELECT * FROM resume_versions WHERE project_id = ? AND owner_id = ? ORDER BY version_no DESC',
@@ -238,7 +277,10 @@ function buildWorkspace(projectId, user) {
         .all('SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC', [
           conversation.id,
         ])
-        .map(toMessageView)
+        .map((row) => toMessageView(row, {
+          resume: resumeDocument,
+          draftRevision: draft ? draft.revision : 1,
+        }))
     : [];
 
   const tasks = conversation
@@ -268,13 +310,6 @@ function buildWorkspace(projectId, user) {
     experiences: experienceRows,
     job: jobRow,
   });
-  const rawDraft = draft ? JSON.parse(draft.resume_json || '{}') : {};
-  const resumeDocument = ResumeDom.toResumeDocument(
-    rawDraft.schema_version === ResumeDom.RESUME_DOCUMENT_VERSION
-      ? rawDraft
-      : ResumeDom.createResumeAggregate(rawDraft, currentTemplate),
-  );
-
   return {
     user: { id: user.id, display_name: user.display_name, email: user.email },
     project: {
@@ -299,6 +334,9 @@ function buildWorkspace(projectId, user) {
       base_version_id: draft ? draft.base_version_id : null,
       has_unsnapshotted_changes: draft ? Boolean(draft.has_unsnapshotted_changes) : false,
       pending_changes: pendingChanges,
+      undo_stack: history.undo,
+      redo_stack: history.redo,
+      undo_depth: history.depth,
     },
     versions,
     conversation: conversation ? { id: conversation.id, messages, tasks } : null,

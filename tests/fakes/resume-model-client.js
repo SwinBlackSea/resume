@@ -8,6 +8,7 @@ const {
   requestedParagraphCount,
   splitIntoParagraphs,
 } = require('../../server/lib/polish');
+const ResumeDom = require('../../resume-dom');
 
 function proposal(input, suggestion, note = '') {
   const original = String(input.currentText || '');
@@ -74,6 +75,10 @@ function buildOutput(input) {
   if (input.scope.type === 'RESUME_DOCUMENT' && /新增|添加|增加/.test(text) && /海外经历/.test(text)) {
     const contentMatch = text.match(/内容[：:]\s*([\s\S]+)/);
     const content = contentMatch ? contentMatch[1].trim() : '请在这里填写海外经历';
+    const currentDocument = ResumeDom.toResumeDocument(input.workspace.resume.content);
+    const rootChildren = currentDocument.root.children || [];
+    const preferredAnchor = rootChildren.find((node) => node.id === 'section-education');
+    const fallbackAnchor = rootChildren[rootChildren.length - 1];
     actions.push({
       type: 'RESUME_REWRITE_PROPOSAL',
       target_type: input.scope.type,
@@ -84,11 +89,19 @@ function buildOutput(input) {
           original: '',
           suggestion: '新增“海外经历”模块',
           note: '模块和内容均作为动态简历节点写入。',
+          change_constraints: {
+            content: 'modify',
+            structure: 'modify',
+            style: 'preserve',
+            allowed_region_ids: ['resume-root'],
+          },
           operations: [
             {
               op: 'insert_node',
               parent_id: 'resume-root',
-              after_node_id: 'section-education',
+              ...(preferredAnchor || fallbackAnchor
+                ? { after_node_id: (preferredAnchor || fallbackAnchor).id }
+                : {}),
               node: {
                 id: 'section-overseas',
                 type: 'element',

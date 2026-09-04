@@ -22,6 +22,13 @@
     'svg', 'g', 'path', 'circle', 'ellipse', 'rect', 'line', 'polyline', 'polygon', 'text',
   ]);
   const VOID_TAGS = new Set(['img', 'br', 'hr']);
+  const TEXT_BLOCK_TAGS = new Set([
+    'article', 'section', 'header', 'footer', 'main', 'aside', 'div',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p',
+    'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+    'figure', 'figcaption',
+  ]);
   const SAFE_ATTRIBUTE = /^(?:id|class|title|role|type|href|src|alt|width|height|colspan|rowspan|viewBox|d|fill|stroke|stroke-width|x|y|x1|x2|y1|y2|cx|cy|r|rx|ry|points|transform|preserveAspectRatio|data-[\w-]+|aria-[\w-]+)$/;
   const SAFE_STYLE_NAME = /^(?:--[\w-]+|[a-z][a-z0-9-]*)$/i;
   const UNSAFE_CSS_VALUE = /(?:expression\s*\(|javascript\s*:|@import|behavior\s*:|url\s*\()/i;
@@ -31,6 +38,13 @@
 
   function clone(value) {
     return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+  }
+
+  function operationError(code, message, details) {
+    const error = new Error(message);
+    error.code = code;
+    if (details && typeof details === 'object') Object.assign(error, details);
+    return error;
   }
 
   function cleanId(value, fallback) {
@@ -449,6 +463,45 @@
     const root = upgradeImportedNativeUnits(
       normalizeNode(source.root || elementNode('resume-root', 'article'), 0),
     );
+
+    // v2.4.0 曾用 data-ai-scope=true 把“外层整体 AI 范围”和 editable
+    // 子节点叠在一起。读取旧文档时无损升级为一个真实 editable 节点：
+    // 子元素只保留段落与行内格式，不再拥有第二套编辑身份。
+    function removeDescendantEditingIdentity(node) {
+      (node.children || []).forEach((child) => {
+        if (child && child.type === 'element') {
+          delete child.editable;
+          removeDescendantEditingIdentity(child);
+        }
+      });
+    }
+    (function migrateLegacyAiScope(node) {
+      if (!node || node.type !== 'element') return;
+      (node.children || []).forEach(migrateLegacyAiScope);
+      if (String(node.attributes && node.attributes['data-ai-scope'] || '') === 'true') {
+        node.attributes = { ...(node.attributes || {}) };
+        delete node.attributes['data-ai-scope'];
+        node.editable = true;
+        removeDescendantEditingIdentity(node);
+      }
+    })(root);
+
+    // 强制不变量：一个可编辑节点内部不能再包含另一个可编辑节点。
+    // 内部仍可保留 p、span、strong 等格式元素，但它们不是独立编辑目标。
+    (function assertSingleEditingIdentity(node, editableAncestorId) {
+      if (!node || node.type !== 'element') return;
+      if (node.editable && editableAncestorId) {
+        throw operationError(
+          'NESTED_EDITABLE_NODE',
+          `可编辑节点不能嵌套：${editableAncestorId} → ${node.id}`,
+          { ancestor_node_id: editableAncestorId, node_id: node.id },
+        );
+      }
+      const nextAncestorId = node.editable ? node.id : editableAncestorId;
+      (node.children || []).forEach((child) =>
+        assertSingleEditingIdentity(child, nextAncestorId));
+    })(root, null);
+
     if (root.type !== 'element') throw new Error('DOM 文档根节点必须是元素');
     return { version: VERSION, root };
   }
@@ -879,11 +932,49 @@
     return found ? { ...found, document } : null;
   }
 
+  function isAiEditableNode(node) {
+    return Boolean(node && node.type === 'element' && node.editable === true);
+  }
+
+  /**
+   * AI 作用范围只认真实 editable 节点。
+   * 如果客户端传入一个节点内部的格式元素，则规范到唯一 editable 祖先；
+   * 不存在父子两套并列 AI 身份。
+   */
+  function resolveAiScopeNode(documentValue, nodeId) {
+    const requested = findNode(documentValue, nodeId);
+    if (!requested) return null;
+    const candidates = requested.ancestors.concat(requested.node).reverse();
+    const editable = candidates.find(isAiEditableNode);
+    if (!editable) return null;
+    const resolved = editable.id === requested.node.id
+      ? requested
+      : findNode(requested.document, editable.id);
+    return {
+      ...resolved,
+      requested_node_id: String(nodeId),
+      canonicalized: editable.id !== requested.node.id,
+    };
+  }
+
+  function childText(node, reader) {
+    const children = node && node.children || [];
+    const separator = node
+      && node.editable
+      && children.filter((child) => child && child.type === 'element').length > 1
+      && children.every((child) => (
+        child.type !== 'element' || TEXT_BLOCK_TAGS.has(String(child.tag || ''))
+      ))
+      ? '\n'
+      : '';
+    return children.map(reader).join(separator);
+  }
+
   function nodeText(node) {
     if (!node) return '';
     if (node.type === 'text') return String(node.value || '');
     if (node.text !== undefined) return String(node.text || '');
-    return (node.children || []).map(nodeText).join('');
+    return childText(node, nodeText);
   }
 
   function setPath(target, path, value) {
@@ -986,6 +1077,36 @@
         if (!found) throw new Error(`DOM 节点不存在：${targetId}`);
         if (found.node.type === 'text') found.node.value = String(operation.text == null ? '' : operation.text);
         else {
+          const blockChildren = found.node.editable
+            ? (found.node.children || []).filter((child) => (
+                child
+                && child.type === 'element'
+                && TEXT_BLOCK_TAGS.has(String(child.tag || ''))
+              ))
+            : [];
+          const text = String(operation.text == null ? '' : operation.text)
+            .replace(/\r\n?/g, '\n');
+          if (blockChildren.length > 1) {
+            const segments = text.split('\n');
+            if (segments.length !== blockChildren.length) {
+              throw operationError(
+                'EDITABLE_BLOCK_COUNT_MISMATCH',
+                `当前内容包含 ${blockChildren.length} 个段落；修改文字时必须保持段落数量，增删段落请使用结构操作`,
+                {
+                  node_id: targetId,
+                  expected_blocks: blockChildren.length,
+                  received_blocks: segments.length,
+                },
+              );
+            }
+            delete found.node.text;
+            blockChildren.forEach((child, index) => {
+              child.text = segments[index];
+              child.children = [];
+            });
+            document = normalizeDocument(found.document);
+            return;
+          }
           if (
             operation.replace_children === true
             || String(found.node.attributes && found.node.attributes['data-rich-text'] || '') === 'true'
@@ -1002,22 +1123,36 @@
               }
             }
           }
-          found.node.text = String(operation.text == null ? '' : operation.text);
+          found.node.text = text;
         }
         document = normalizeDocument(found.document);
         return;
       }
 
-      if (!allowStructure) throw new Error('当前作用范围只允许修改选中内容');
+      if (!allowStructure) throw new Error('当前操作只允许修改节点文字');
 
       if (op === 'insert_node') {
         const parent = findNode(document, operation.parent_id);
-        if (!parent || parent.node.type !== 'element') throw new Error(`父节点不存在：${operation.parent_id}`);
+        if (!parent || parent.node.type !== 'element') {
+          throw operationError('PARENT_NOT_FOUND', `父节点不存在：${operation.parent_id}`, {
+            parent_id: operation.parent_id,
+          });
+        }
         const children = parent.node.children || (parent.node.children = []);
         let index = Number.isInteger(operation.index) ? operation.index : children.length;
         if (operation.after_node_id) {
           const afterIndex = children.findIndex((child) => child.id === operation.after_node_id);
-          if (afterIndex >= 0) index = afterIndex + 1;
+          if (afterIndex < 0) {
+            throw operationError(
+              'ANCHOR_PARENT_MISMATCH',
+              `插入锚点不属于目标父节点：${operation.after_node_id}`,
+              {
+                parent_id: operation.parent_id,
+                anchor_node_id: operation.after_node_id,
+              },
+            );
+          }
+          index = afterIndex + 1;
         }
         index = Math.max(0, Math.min(index, children.length));
         children.splice(index, 0, clone(operation.node));
@@ -1037,24 +1172,181 @@
         const found = findNode(document, targetId);
         const parent = findNode(document, operation.parent_id);
         if (!found || !found.parent || !parent || parent.node.type !== 'element') {
-          throw new Error('移动节点或目标容器不存在');
+          throw operationError('MOVE_TARGET_NOT_FOUND', '移动节点或目标容器不存在', {
+            node_id: targetId,
+            parent_id: operation.parent_id,
+          });
         }
         if (
           parent.node.id === found.node.id
           || parent.ancestors.some((ancestor) => ancestor.id === found.node.id)
         ) {
-          throw new Error('不能把节点移动到自身或其子节点中');
+          throw operationError('MOVE_CYCLE', '不能把节点移动到自身或其子节点中');
         }
         const moving = clone(found.node);
         found.parent.children.splice(found.index, 1);
         document = normalizeDocument(found.document);
         const refreshedParent = findNode(document, operation.parent_id);
         const children = refreshedParent.node.children || (refreshedParent.node.children = []);
-        const index = Number.isInteger(operation.index)
-          ? Math.max(0, Math.min(operation.index, children.length))
+        let index = Number.isInteger(operation.index)
+          ? operation.index
           : children.length;
+        if (operation.after_node_id) {
+          const afterIndex = children.findIndex((child) => child.id === operation.after_node_id);
+          if (afterIndex < 0) {
+            throw operationError(
+              'ANCHOR_PARENT_MISMATCH',
+              `移动锚点不属于目标父节点：${operation.after_node_id}`,
+              {
+                parent_id: operation.parent_id,
+                anchor_node_id: operation.after_node_id,
+              },
+            );
+          }
+          index = afterIndex + 1;
+        }
+        index = Math.max(0, Math.min(index, children.length));
         children.splice(index, 0, moving);
         document = normalizeDocument(refreshedParent.document);
+        return;
+      }
+
+      if (op === 'wrap_nodes') {
+        const parent = findNode(document, operation.parent_id);
+        const nodeIds = Array.from(new Set(
+          (Array.isArray(operation.node_ids) ? operation.node_ids : []).map(String),
+        ));
+        if (!parent || parent.node.type !== 'element') {
+          throw operationError('PARENT_NOT_FOUND', `父节点不存在：${operation.parent_id}`, {
+            parent_id: operation.parent_id,
+          });
+        }
+        if (!nodeIds.length) {
+          throw operationError('WRAP_NODES_EMPTY', '包裹操作至少需要一个节点');
+        }
+        const children = parent.node.children || (parent.node.children = []);
+        const indexes = nodeIds.map((nodeId) =>
+          children.findIndex((child) => String(child.id) === nodeId));
+        if (indexes.some((index) => index < 0)) {
+          throw operationError('WRAP_NODE_PARENT_MISMATCH', '待包裹节点不属于同一目标父节点');
+        }
+        const ordered = indexes.slice().sort((left, right) => left - right);
+        if (ordered.some((index, offset) => index !== ordered[0] + offset)) {
+          throw operationError('WRAP_NODES_NOT_CONTIGUOUS', '待包裹节点必须在文档中连续相邻');
+        }
+        if (indexes.some((index, offset) => index !== ordered[offset])) {
+          throw operationError('WRAP_NODES_OUT_OF_ORDER', '待包裹节点顺序必须与文档一致');
+        }
+        const wrapper = clone(operation.node || {});
+        if (!wrapper.id || wrapper.type !== 'element') {
+          throw operationError('WRAPPER_INVALID', '包裹操作需要完整的容器节点');
+        }
+        if (
+          String(wrapper.text || '')
+          || (Array.isArray(wrapper.children) && wrapper.children.length)
+        ) {
+          throw operationError('WRAPPER_NOT_EMPTY', '包裹容器不能预先包含文字或子节点');
+        }
+        wrapper.children = children.slice(ordered[0], ordered[ordered.length - 1] + 1);
+        children.splice(ordered[0], ordered.length, wrapper);
+        document = normalizeDocument(parent.document);
+        return;
+      }
+
+      if (op === 'merge_editable_nodes') {
+        const parent = findNode(document, operation.parent_id);
+        const nodeIds = Array.from(new Set(
+          (Array.isArray(operation.node_ids) ? operation.node_ids : []).map(String),
+        ));
+        if (!parent || parent.node.type !== 'element') {
+          throw operationError('PARENT_NOT_FOUND', `父节点不存在：${operation.parent_id}`);
+        }
+        if (nodeIds.length < 2) {
+          throw operationError('MERGE_NODES_TOO_FEW', '合并编辑节点至少需要两个节点');
+        }
+        const children = parent.node.children || (parent.node.children = []);
+        const indexes = nodeIds.map((nodeId) =>
+          children.findIndex((child) => String(child.id) === nodeId));
+        if (indexes.some((index) => index < 0)) {
+          throw operationError('MERGE_NODE_PARENT_MISMATCH', '待合并节点不属于同一目标父节点');
+        }
+        const ordered = indexes.slice().sort((left, right) => left - right);
+        if (
+          ordered.some((index, offset) => index !== ordered[0] + offset)
+          || indexes.some((index, offset) => index !== ordered[offset])
+        ) {
+          throw operationError('MERGE_NODES_NOT_CONTIGUOUS', '待合并编辑节点必须连续且顺序一致');
+        }
+        const selected = children.slice(ordered[0], ordered[ordered.length - 1] + 1);
+        if (selected.some((node) => !isAiEditableNode(node))) {
+          throw operationError('MERGE_NODE_NOT_EDITABLE', '待合并内容必须都是独立编辑节点');
+        }
+        const wrapper = clone(operation.node || {});
+        if (!wrapper.id || wrapper.type !== 'element') {
+          throw operationError('MERGE_WRAPPER_INVALID', '合并操作需要完整的新编辑节点');
+        }
+        if (
+          String(wrapper.text || '')
+          || (Array.isArray(wrapper.children) && wrapper.children.length)
+        ) {
+          throw operationError('MERGE_WRAPPER_NOT_EMPTY', '新编辑节点不能预先包含文字或子节点');
+        }
+        wrapper.editable = true;
+        wrapper.attributes = { ...(wrapper.attributes || {}) };
+        delete wrapper.attributes['data-ai-scope'];
+        wrapper.children = selected.map((node) => {
+          const child = clone(node);
+          delete child.editable;
+          return child;
+        });
+        children.splice(ordered[0], ordered.length, wrapper);
+        document = normalizeDocument(parent.document);
+        return;
+      }
+
+      if (op === 'split_editable_node') {
+        const found = findNode(document, targetId);
+        if (!found || found.node.type !== 'element' || !found.node.editable) {
+          throw operationError(
+            'SPLIT_TARGET_NOT_EDITABLE',
+            `待拆分的编辑节点不存在：${targetId}`,
+          );
+        }
+        if (String(found.node.text || '')) {
+          throw operationError(
+            'SPLIT_TARGET_HAS_OWN_TEXT',
+            '当前编辑节点没有可直接提升为独立节点的段落结构',
+          );
+        }
+        const children = found.node.children || [];
+        if (
+          children.length < 2
+          || children.some((child) => child.type !== 'element')
+        ) {
+          throw operationError(
+            'SPLIT_BLOCKS_INVALID',
+            '拆分编辑节点至少需要两个完整的内部段落',
+          );
+        }
+        delete found.node.editable;
+        children.forEach((child) => {
+          child.editable = true;
+        });
+        document = normalizeDocument(found.document);
+        return;
+      }
+
+      if (op === 'unwrap_node') {
+        const found = findNode(document, targetId);
+        if (!found || !found.parent || found.node.type !== 'element') {
+          throw operationError('UNWRAP_TARGET_NOT_FOUND', `待拆分的内容组不存在：${targetId}`);
+        }
+        if (String(found.node.text || '')) {
+          throw operationError('UNWRAP_OWN_TEXT', '内容组自身包含文字，不能在不丢失内容的情况下拆分');
+        }
+        const children = (found.node.children || []).map(clone);
+        found.parent.children.splice(found.index, 1, ...children);
+        document = normalizeDocument(found.document);
         return;
       }
 
@@ -1062,6 +1354,12 @@
         const found = findNode(document, targetId);
         if (!found || found.node.type !== 'element') throw new Error(`DOM 节点不存在：${targetId}`);
         if (op === 'set_attributes') {
+          if (Object.hasOwn(operation.attributes || {}, 'data-ai-scope')) {
+            throw operationError(
+              'AI_SCOPE_ATTRIBUTE_FORBIDDEN',
+              'data-ai-scope 已停用；合并或拆分必须形成真实编辑节点',
+            );
+          }
           found.node.attributes = safeAttributes({ ...(found.node.attributes || {}), ...(operation.attributes || {}) });
         } else {
           found.node.style = safeStyle({ ...(found.node.style || {}), ...(operation.style || {}) });
@@ -1110,7 +1408,7 @@
     if (!node || isEditorOnly(node)) return '';
     if (node.type === 'text') return String(node.value || '');
     const own = node.text !== undefined ? String(node.text || '') : '';
-    return own + (node.children || []).map(exportNodeText).join('');
+    return own + childText(node, exportNodeText);
   }
 
   function stableObject(value) {
@@ -1146,6 +1444,7 @@
         node,
         parent_id: parent ? parent.id : null,
         index: visibleIndex >= 0 ? visibleIndex : index,
+        order: entries.size,
         sibling_ids: siblings.map((child) => child.id),
         ancestors,
       });
@@ -1196,6 +1495,16 @@
     const beforeIds = new Set(before.entries.keys());
     const afterIds = new Set(after.entries.keys());
     const sharedIds = new Set([...beforeIds].filter((id) => afterIds.has(id)));
+    const stableSiblingIdsByParent = new Map();
+    sharedIds.forEach((id) => {
+      const left = before.entries.get(id);
+      const right = after.entries.get(id);
+      if (left.parent_id !== right.parent_id) return;
+      const parentId = String(left.parent_id || '');
+      const ids = stableSiblingIdsByParent.get(parentId) || new Set();
+      ids.add(id);
+      stableSiblingIdsByParent.set(parentId, ids);
+    });
     const changes = [];
 
     before.entries.forEach((entry, id) => {
@@ -1209,6 +1518,12 @@
         after_text: '',
         before_parent_id: entry.parent_id,
         after_parent_id: null,
+        before_order: entry.order,
+        after_order: null,
+        before_node_type: entry.node.type === 'element'
+          ? `${entry.node.type}:${entry.node.tag}`
+          : entry.node.type,
+        after_node_type: null,
       });
     });
 
@@ -1223,6 +1538,12 @@
         after_text: exportNodeText(entry.node).trim(),
         before_parent_id: null,
         after_parent_id: entry.parent_id,
+        before_order: null,
+        after_order: entry.order,
+        before_node_type: null,
+        after_node_type: entry.node.type === 'element'
+          ? `${entry.node.type}:${entry.node.tag}`
+          : entry.node.type,
       });
     });
 
@@ -1236,6 +1557,14 @@
         after_text: exportNodeText(right.node).trim(),
         before_parent_id: left.parent_id,
         after_parent_id: right.parent_id,
+        before_order: left.order,
+        after_order: right.order,
+        before_node_type: left.node.type === 'element'
+          ? `${left.node.type}:${left.node.tag}`
+          : left.node.type,
+        after_node_type: right.node.type === 'element'
+          ? `${right.node.type}:${right.node.tag}`
+          : right.node.type,
       };
       const leftType = left.node.type === 'element' ? `${left.node.type}:${left.node.tag}` : left.node.type;
       const rightType = right.node.type === 'element' ? `${right.node.type}:${right.node.tag}` : right.node.type;
@@ -1243,12 +1572,21 @@
         changes.push({ ...base, type: 'structure' });
         return;
       }
+      if (Boolean(left.node.editable) !== Boolean(right.node.editable)) {
+        changes.push({ ...base, type: 'structure' });
+      }
       if (ownNodeText(left.node) !== ownNodeText(right.node)) {
         changes.push({ ...base, type: 'text' });
       }
       if (
         left.parent_id !== right.parent_id
-        || previousSharedSibling(left, sharedIds) !== previousSharedSibling(right, sharedIds)
+        || previousSharedSibling(
+          left,
+          stableSiblingIdsByParent.get(String(left.parent_id || '')) || new Set(),
+        ) !== previousSharedSibling(
+          right,
+          stableSiblingIdsByParent.get(String(right.parent_id || '')) || new Set(),
+        )
       ) {
         changes.push({ ...base, type: 'moved' });
       }
@@ -1551,6 +1889,8 @@
     composeAggregateDocument,
     legacyResumeToDom,
     findNode,
+    isAiEditableNode,
+    resolveAiScopeNode,
     nodeText,
     syncLegacyBindings,
     applyOperations,

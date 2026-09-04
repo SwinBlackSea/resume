@@ -1,8 +1,8 @@
 'use strict';
 /**
  * 原型结构一致性测试。
- * v2.1 已按最新 PRD 移除“来源/待确认事实/资料到正文使用关系”，
- * 当前简历改为一份可由用户直接编辑、也可由 AI 修改的完整文档，
+ * v2.2 已按最新 PRD 移除“来源/待确认事实/资料到正文使用关系”，
+ * 当前简历支持现有文字轻量直改，结构和样式调整交由 AI 提案，
  * 因此只比对仍然有效的布局、正文和稳定交互，不再要求旧业务文案逐字相同。
  * 做法：分别解析「原型静态 DOM」与「前端加载真实数据后渲染的 DOM」，
  * 对关键区域生成结构签名（标签 + id + class + 文本）并逐项比对。
@@ -179,12 +179,12 @@ test('岗位浮层：覆盖情况与要求条目一致', () => {
   );
 });
 
-test('直接编辑动作保持原型位置，历史版本入口一致', () => {
-  assert.deepStrictEqual(texts(app, '#edit-document-button'), ['直接编辑']);
-  assert.strictEqual(
-    signature(app.querySelector('#edit-document-button')),
-    signature(proto.querySelector('#edit-document-button')),
-    '直接编辑按钮必须保持原型位置和结构',
+test('简历画布无需编辑模式切换，历史版本入口保持一致', () => {
+  assert.strictEqual(app.querySelector('#edit-document-button'), null);
+  assert.strictEqual(app.querySelector('#manual-edit-toolbar'), null);
+  assert.match(
+    app.querySelector('#inline-edit-hint').textContent,
+    /点击文字可直接修改.*增删区块请告诉 AI/,
   );
   assert.deepStrictEqual(
     texts(app, '.top-actions .history-open'),

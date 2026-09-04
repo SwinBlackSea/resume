@@ -11,6 +11,7 @@ const {
   db,
 } = require('./helpers');
 const documentRecognition = require('../server/lib/document-recognition');
+const resumeHarness = require('../server/lib/resume-harness');
 const ResumeDom = require('../resume-dom');
 
 let ctx;
@@ -251,7 +252,7 @@ test('导入任务按用户隔离，且重复 Idempotency-Key 不重复应用', 
   assert.strictEqual(replay.body.version_id, item.applied_version_id);
 });
 
-test('直接编辑写入文档事务、使旧 AI 建议失效，并可整笔撤销', async () => {
+test('同一处文字直改后仍可明确应用 AI 建议，并可撤销回手改内容', async () => {
   const projectId = await defaultProject(ctx);
   const before = await call(ctx, 'GET', `/projects/${projectId}`);
   const versionsBefore = before.body.versions.length;
@@ -266,6 +267,8 @@ test('直接编辑写入文档事务、使旧 AI 建议失效，并可整笔撤�
     (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
   );
   assert.ok(action, JSON.stringify(proposed.body));
+  const suggestion = action.payload.proposal.suggestion;
+  const manuallyEditedText = '这是用户直接修改并自动保存的个人优势。';
 
   const changed = await call(ctx, 'POST', `/projects/${projectId}/resume-draft/transactions`, {
     body: {
@@ -277,7 +280,7 @@ test('直接编辑写入文档事务、使旧 AI 建议失效，并可整笔撤�
       operations: [{
         op: 'replace_text',
         node_id: 'summary',
-        text: '这是用户直接修改并自动保存的个人优势。',
+        text: manuallyEditedText,
         replace_children: true,
       }],
     },
@@ -302,7 +305,7 @@ test('直接编辑写入文档事务、使旧 AI 建议失效，并可整笔撤�
   assert.match(ResumeDom.plainText(replayed.body.resume_json), /直接修改并自动保存/);
   assert.strictEqual(
     db.get('SELECT status FROM ai_action_requests WHERE id = ?', [action.id]).status,
-    'stale',
+    'awaiting_confirmation',
   );
   const afterChange = await call(ctx, 'GET', `/projects/${projectId}`);
   assert.strictEqual(afterChange.body.versions.length, versionsBefore);
@@ -310,17 +313,438 @@ test('直接编辑写入文档事务、使旧 AI 建议失效，并可整笔撤�
     (item) => item.change_type === 'document_transaction',
   ));
 
+  const applied = await call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
+    idemKey: 'apply-ai-after-same-target-direct-edit',
+    body: { expected_revision: action.expected_revision },
+  });
+  assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+  assert.strictEqual(
+    ResumeDom.nodeText(ResumeDom.findNode(applied.body.resume_json, 'summary').node),
+    suggestion,
+  );
+  const aiEvent = db.get('SELECT before_json, after_json FROM resume_change_events WHERE id = ?', [
+    applied.body.change_event_id,
+  ]);
+  assert.strictEqual(
+    ResumeDom.nodeText(JSON.parse(aiEvent.before_json).nodes[0].node),
+    manuallyEditedText,
+  );
+
+  const revertedAi = await call(
+    ctx,
+    'POST',
+    `/projects/${projectId}/resume-draft/changes/${applied.body.change_event_id}/revert`,
+    { idemKey: 'undo-ai-after-same-target-direct-edit' },
+  );
+  assert.strictEqual(revertedAi.status, 200, JSON.stringify(revertedAi.body));
+  const afterUndo = await call(ctx, 'GET', `/projects/${projectId}`);
+  assert.strictEqual(
+    ResumeDom.nodeText(ResumeDom.findNode(afterUndo.body.draft.resume_json, 'summary').node),
+    manuallyEditedText,
+  );
+  assert.strictEqual(afterUndo.body.versions.length, versionsBefore);
+});
+
+test('AI 生成期间手改同一节点，返回后的建议仍可由用户明确应用', async () => {
+  const projectId = await defaultProject(ctx);
+  const before = await call(ctx, 'GET', `/projects/${projectId}`);
+  const manuallyEditedText = '用户在等待 AI 期间完成的手工版本。';
+  let modelStarted;
+  let releaseModel;
+  const started = new Promise((resolve) => {
+    modelStarted = resolve;
+  });
+  const release = new Promise((resolve) => {
+    releaseModel = resolve;
+  });
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'same-target-concurrency-test',
+    generate: async ({ input }) => {
+      modelStarted();
+      await release;
+      return {
+        output: {
+          reply: '已生成精炼建议，确认后即可应用。',
+          actions: [{
+            type: 'RESUME_REWRITE_PROPOSAL',
+            payload: {
+              proposal: {
+                suggestion: `${input.currentText}。`,
+              },
+            },
+          }],
+          uncertainty: [],
+        },
+      };
+    },
+  });
+  try {
+    const proposalRequest = call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
+      body: {
+        content: '把个人优势写得更精炼',
+        scope_type: 'RESUME_BLOCK',
+        scope_id: 'summary',
+      },
+    });
+    await started;
+    const direct = await call(ctx, 'POST', `/projects/${projectId}/resume-draft/transactions`, {
+      body: {
+        expected_revision: before.body.draft.revision,
+        mutation_id: 'same-target-edit-while-ai-running',
+        scope_id: 'summary',
+        operations: [{
+          op: 'replace_text',
+          node_id: 'summary',
+          text: manuallyEditedText,
+          replace_children: true,
+        }],
+      },
+    });
+    assert.strictEqual(direct.status, 200, JSON.stringify(direct.body));
+    releaseModel();
+
+    const proposed = await proposalRequest;
+    const action = proposed.body.actions.find(
+      (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+    );
+    assert.ok(action, JSON.stringify(proposed.body));
+    assert.strictEqual(
+      db.get('SELECT status FROM ai_action_requests WHERE id = ?', [action.id]).status,
+      'awaiting_confirmation',
+    );
+    const refreshed = await call(ctx, 'GET', `/projects/${projectId}`);
+    const refreshedAction = refreshed.body.conversation.messages
+      .flatMap((message) => message.actions || [])
+      .find((item) => item.id === action.id);
+    assert.ok(refreshedAction, JSON.stringify(refreshed.body));
+    assert.strictEqual(
+      refreshedAction.payload.proposal.change_preview.before.text,
+      manuallyEditedText,
+    );
+    assert.notStrictEqual(
+      refreshedAction.payload.proposal.change_preview.after.text,
+      manuallyEditedText,
+    );
+
+    const applied = await call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
+      idemKey: 'apply-ai-after-inflight-same-target-edit',
+      body: { expected_revision: action.expected_revision },
+    });
+    assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+    assert.notStrictEqual(
+      ResumeDom.nodeText(ResumeDom.findNode(applied.body.resume_json, 'summary').node),
+      manuallyEditedText,
+    );
+    const event = db.get('SELECT before_json FROM resume_change_events WHERE id = ?', [
+      applied.body.change_event_id,
+    ]);
+    assert.strictEqual(
+      ResumeDom.nodeText(JSON.parse(event.before_json).nodes[0].node),
+      manuallyEditedText,
+    );
+  } finally {
+    releaseModel();
+    restore();
+  }
+});
+
+test('其他区域的文字直改不阻断 AI 应用，局部变更只保存节点差量', async () => {
+  const projectId = await defaultProject(ctx);
+  const before = await call(ctx, 'GET', `/projects/${projectId}`);
+  const editableNodes = [];
+  (function collect(node) {
+    if (node && node.editable === true) editableNodes.push(node.id);
+    (node && node.children || []).forEach(collect);
+  }(before.body.draft.resume_json.root));
+  const otherNodeId = editableNodes.find((nodeId) => nodeId !== 'summary');
+  assert.ok(otherNodeId, '测试简历应至少有两个可编辑节点');
+  const summaryBefore = ResumeDom.nodeText(
+    ResumeDom.findNode(before.body.draft.resume_json, 'summary').node,
+  );
+  const proposed = await call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
+    body: {
+      content: '把个人优势改得更有说服力',
+      scope_type: 'RESUME_BLOCK',
+      scope_id: 'summary',
+    },
+  });
+  const action = proposed.body.actions.find(
+    (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+  );
+  assert.ok(action, JSON.stringify(proposed.body));
+
+  const direct = await call(ctx, 'POST', `/projects/${projectId}/resume-draft/transactions`, {
+    body: {
+      expected_revision: before.body.draft.revision,
+      mutation_id: 'direct-edit-other-node-while-ai-running',
+      scope_id: otherNodeId,
+      label: '直接修改其他区域',
+      input_type: 'typing',
+      operations: [{
+        op: 'replace_text',
+        node_id: otherNodeId,
+        text: '用户同步修改的其他区域',
+        replace_children: true,
+      }],
+    },
+  });
+  assert.strictEqual(direct.status, 200, JSON.stringify(direct.body));
+  assert.strictEqual(
+    db.get('SELECT status FROM ai_action_requests WHERE id = ?', [action.id]).status,
+    'awaiting_confirmation',
+  );
+
+  // 客户端仍携带建议生成时的旧 revision；DOM 操作只要仍可执行就应允许应用。
+  const applied = await call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
+    idemKey: 'apply-ai-after-unrelated-direct-edit',
+    body: { expected_revision: action.expected_revision },
+  });
+  assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+  const afterApply = await call(ctx, 'GET', `/projects/${projectId}`);
+  assert.match(ResumeDom.plainText(afterApply.body.draft.resume_json), /用户同步修改的其他区域/);
+  assert.notStrictEqual(
+    ResumeDom.nodeText(ResumeDom.findNode(afterApply.body.draft.resume_json, 'summary').node),
+    summaryBefore,
+  );
+
+  const directEvent = db.get('SELECT * FROM resume_change_events WHERE id = ?', [
+    direct.body.change_id,
+  ]);
+  const aiEvent = db.get('SELECT * FROM resume_change_events WHERE id = ?', [
+    applied.body.change_event_id,
+  ]);
+  [directEvent, aiEvent].forEach((event) => {
+    const beforePayload = JSON.parse(event.before_json);
+    const afterPayload = JSON.parse(event.after_json);
+    assert.strictEqual(beforePayload.format, 'resume-node-delta-v1');
+    assert.strictEqual(afterPayload.format, 'resume-node-delta-v1');
+    assert.strictEqual(Object.hasOwn(beforePayload, 'resume_json'), false);
+    assert.strictEqual(Object.hasOwn(afterPayload, 'resume_json'), false);
+  });
+
+  // 撤销较早发生的 headline 修改，只恢复 headline，不覆盖后来应用的 summary 修改。
   const reverted = await call(
     ctx,
     'POST',
-    `/projects/${projectId}/resume-draft/changes/${changed.body.change_id}/revert`,
-    { idemKey: 'undo-direct-edit-imported-resume' },
+    `/projects/${projectId}/resume-draft/changes/${direct.body.change_id}/revert`,
+    { idemKey: 'undo-unrelated-direct-edit-after-ai-apply' },
   );
   assert.strictEqual(reverted.status, 200, JSON.stringify(reverted.body));
   const afterUndo = await call(ctx, 'GET', `/projects/${projectId}`);
-  assert.doesNotMatch(
-    ResumeDom.plainText(afterUndo.body.draft.resume_json),
-    /直接修改并自动保存/,
+  assert.doesNotMatch(ResumeDom.plainText(afterUndo.body.draft.resume_json), /用户同步修改的其他区域/);
+  assert.notStrictEqual(
+    ResumeDom.nodeText(ResumeDom.findNode(afterUndo.body.draft.resume_json, 'summary').node),
+    summaryBefore,
   );
-  assert.strictEqual(afterUndo.body.versions.length, versionsBefore);
+});
+
+test('草稿已经达到 AI 建议结果时应用不产生空 revision 或空变更事件', async () => {
+  const projectId = await defaultProject(ctx);
+  const desiredText = '用户已经手工完成了与 AI 建议相同的内容。';
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'already-satisfied-proposal',
+    generate: async () => ({
+      output: {
+        reply: '已准备修改建议，确认后即可应用。',
+        actions: [{
+          type: 'RESUME_REWRITE_PROPOSAL',
+          payload: { proposal: { suggestion: desiredText } },
+        }],
+        uncertainty: [],
+      },
+    }),
+  });
+  try {
+    const before = await call(ctx, 'GET', `/projects/${projectId}`);
+    const proposed = await call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
+      body: {
+        content: '修改个人优势',
+        scope_type: 'RESUME_BLOCK',
+        scope_id: 'summary',
+      },
+    });
+    const action = proposed.body.actions.find(
+      (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+    );
+    assert.ok(action, JSON.stringify(proposed.body));
+
+    const direct = await call(ctx, 'POST', `/projects/${projectId}/resume-draft/transactions`, {
+      body: {
+        expected_revision: before.body.draft.revision,
+        mutation_id: 'manual-edit-matches-ai-proposal',
+        scope_id: 'summary',
+        operations: [{
+          op: 'replace_text',
+          node_id: 'summary',
+          text: desiredText,
+          replace_children: true,
+        }],
+      },
+    });
+    assert.strictEqual(direct.status, 200, JSON.stringify(direct.body));
+    const eventCount = db.get('SELECT COUNT(*) AS total FROM resume_change_events').total;
+
+    const refreshed = await call(ctx, 'GET', `/projects/${projectId}`);
+    const refreshedAction = refreshed.body.conversation.messages
+      .flatMap((message) => message.actions || [])
+      .find((item) => item.id === action.id);
+    assert.strictEqual(
+      refreshedAction.payload.proposal.change_preview.already_satisfied,
+      true,
+    );
+
+    const applied = await call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
+      idemKey: `apply-already-satisfied-${action.id}`,
+      body: { expected_revision: action.expected_revision },
+    });
+    assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+    assert.strictEqual(applied.body.no_change, true);
+    assert.strictEqual(applied.body.revision, direct.body.revision);
+    assert.strictEqual(
+      db.get('SELECT COUNT(*) AS total FROM resume_change_events').total,
+      eventCount,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('整份简历中的 DOM 操作允许无关正文并行变化后继续应用', async () => {
+  const projectId = await defaultProject(ctx);
+  const before = await call(ctx, 'GET', `/projects/${projectId}`);
+  const editableNodes = [];
+  (function collect(node) {
+    if (node && node.editable === true) editableNodes.push(node.id);
+    (node && node.children || []).forEach(collect);
+  }(before.body.draft.resume_json.root));
+  const targetNodeId = editableNodes[0];
+  const anchorNodeId = editableNodes[1];
+  assert.ok(targetNodeId && anchorNodeId);
+  const anchor = ResumeDom.findNode(before.body.draft.resume_json, anchorNodeId);
+  assert.ok(anchor && anchor.parent);
+  const insertedNodeId = 'parallel-safe-insert';
+  let modelStarted;
+  let releaseModel;
+  const started = new Promise((resolve) => {
+    modelStarted = resolve;
+  });
+  const release = new Promise((resolve) => {
+    releaseModel = resolve;
+  });
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'operation-concurrency-test',
+    generate: async () => {
+      modelStarted();
+      await release;
+      return {
+        output: {
+          reply: '已生成新增段落建议，确认后即可应用。',
+          actions: [{
+            type: 'RESUME_REWRITE_PROPOSAL',
+            payload: {
+              proposal: {
+                suggestion: '新增一个独立段落',
+                change_constraints: {
+                  content: 'preserve',
+                  structure: 'modify',
+                  style: 'preserve',
+                  allowed_region_ids: [anchor.parent.id],
+                },
+                operations: [{
+                  op: 'insert_node',
+                  parent_id: anchor.parent.id,
+                  after_node_id: anchorNodeId,
+                  node: {
+                    id: insertedNodeId,
+                    type: 'element',
+                    tag: 'p',
+                    text: '',
+                    editable: true,
+                    label: '新增段落',
+                  },
+                }],
+              },
+            },
+          }],
+          uncertainty: [],
+        },
+      };
+    },
+  });
+  try {
+    const proposalRequest = call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
+      body: {
+        content: '在指定位置增加一个段落',
+        scope_type: 'RESUME_DOCUMENT',
+        scope_id: null,
+      },
+    });
+    await started;
+    const changed = await call(ctx, 'POST', `/projects/${projectId}/resume-draft/transactions`, {
+      body: {
+        expected_revision: before.body.draft.revision,
+        mutation_id: 'direct-edit-before-document-proposal',
+        scope_id: targetNodeId,
+        operations: [{
+          op: 'replace_text',
+          node_id: targetNodeId,
+          text: '整份建议生成后发生的无关修改',
+          replace_children: true,
+        }],
+      },
+    });
+    assert.strictEqual(changed.status, 200, JSON.stringify(changed.body));
+    releaseModel();
+    const proposed = await proposalRequest;
+    const action = proposed.body.actions.find(
+      (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+    );
+    assert.ok(action, JSON.stringify(proposed.body));
+    assert.strictEqual(action.expected_revision, before.body.draft.revision);
+    assert.strictEqual(
+      db.get('SELECT status FROM ai_action_requests WHERE id = ?', [action.id]).status,
+      'awaiting_confirmation',
+    );
+    const applied = await call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
+      idemKey: 'apply-rebased-document-operation',
+      body: { expected_revision: action.expected_revision },
+    });
+    assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+    assert.ok(ResumeDom.findNode(applied.body.resume_json, insertedNodeId));
+    assert.match(ResumeDom.nodeText(
+      ResumeDom.findNode(applied.body.resume_json, targetNodeId).node,
+    ), /无关修改/);
+  } finally {
+    releaseModel();
+    restore();
+  }
+});
+
+test('画布事务拒绝结构与样式操作，复杂调整只能由 AI 提案', async () => {
+  const projectId = await defaultProject(ctx);
+  const before = await call(ctx, 'GET', `/projects/${projectId}`);
+  const rejected = await call(ctx, 'POST', `/projects/${projectId}/resume-draft/transactions`, {
+    body: {
+      expected_revision: before.body.draft.revision,
+      mutation_id: 'reject-manual-structure-edit',
+      operations: [{
+        op: 'insert_node',
+        parent_id: 'resume-root',
+        node: {
+          id: 'manual-section',
+          type: 'element',
+          tag: 'section',
+          children: [],
+        },
+      }],
+    },
+  });
+  assert.strictEqual(rejected.status, 422, JSON.stringify(rejected.body));
+  assert.strictEqual(rejected.body.title, 'DIRECT_EDIT_TEXT_ONLY');
+  const after = await call(ctx, 'GET', `/projects/${projectId}`);
+  assert.strictEqual(after.body.draft.revision, before.body.draft.revision);
+  assert.strictEqual(after.body.versions.length, before.body.versions.length);
 });

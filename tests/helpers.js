@@ -19,6 +19,11 @@ const resumeHarness = require('../server/lib/resume-harness');
 resumeHarness.setModelClientForTests(require('./fakes/resume-model-client'));
 
 const db = require('../server/lib/db');
+if (path.resolve(db.DB_PATH) !== path.resolve(process.env.RESUME_DB_PATH)) {
+  throw new Error(
+    '测试数据库初始化过晚：必须先加载 tests/helpers，再加载任何会引用 server/lib/db 的模块',
+  );
+}
 const { seedIfEmpty } = require('../server/lib/seed');
 const { createServer } = require('../server/index');
 const queue = require('../server/lib/queue');

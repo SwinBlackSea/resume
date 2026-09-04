@@ -2,11 +2,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
+// 必须先初始化隔离测试数据库；render/html 会间接加载数据库模块。
+const helpers = require('./helpers');
 const ResumeDom = require('../resume-dom');
 const { renderHtml } = require('../server/lib/render/html');
 const { buildDocumentXml } = require('../server/lib/render/docx');
 const { validateResumeJson } = require('../server/lib/resume-schema');
-const helpers = require('./helpers');
 
 const legacyResume = {
   basics: { name: '测试用户', city: '上海', phone: '13800000000', email: 'test@example.com' },
@@ -195,7 +196,7 @@ test('导入简历保存为单一完整文档，页面、样式与可编辑内�
   assert.strictEqual(Object.hasOwn(document, 'layout_bindings'), false);
 });
 
-test('直接编辑事务修改同一文档，并保留页面、样式和资源', () => {
+test('文档引擎可组合文字与 AI 样式操作，并保留页面、样式和资源', () => {
   const document = ResumeDom.toResumeDocument({
     ...legacyResume,
     page_setup: { size: 'A4', orientation: 'portrait', max_pages: 2 },
@@ -213,6 +214,105 @@ test('直接编辑事务修改同一文档，并保留页面、样式和资源',
   assert.deepStrictEqual(changed.page_setup, document.page_setup);
   assert.deepStrictEqual(changed.styles, document.styles);
   assert.deepStrictEqual(changed.assets, document.assets);
+});
+
+test('内容分组与 AI 编辑粒度使用可逆语义操作，子节点 ID 和文字保持稳定', () => {
+  const before = ResumeDom.toResumeDocument({
+    schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+    root: {
+      id: 'root',
+      type: 'element',
+      tag: 'article',
+      children: [{
+        id: 'section',
+        type: 'element',
+        tag: 'section',
+        children: [
+          { id: 'title', type: 'element', tag: 'h2', text: '职业概况', editable: true },
+          { id: 'item-1', type: 'element', tag: 'p', text: '第一段。', editable: true },
+          { id: 'item-2', type: 'element', tag: 'p', text: '第二段。', editable: true },
+          { id: 'item-3', type: 'element', tag: 'p', text: '第三段。', editable: true },
+        ],
+      }],
+    },
+  });
+  const grouped = ResumeDom.applyDocumentOperations(before, [{
+    op: 'merge_editable_nodes',
+    parent_id: 'section',
+    node_ids: ['item-1', 'item-2', 'item-3'],
+    node: {
+      id: 'summary-group',
+      type: 'element',
+      tag: 'div',
+      label: '职业概况',
+      children: [],
+    },
+  }], { allowStructure: true });
+  assert.strictEqual(ResumeDom.resolveAiScopeNode(grouped, 'item-2').node.id, 'summary-group');
+  assert.strictEqual(ResumeDom.findNode(grouped, 'summary-group').node.editable, true);
+  assert.strictEqual(
+    ResumeDom.findNode(grouped, 'summary-group').node.children.every((node) => !node.editable),
+    true,
+  );
+  assert.strictEqual(ResumeDom.nodeText(ResumeDom.findNode(grouped, 'summary-group').node), '第一段。\n第二段。\n第三段。');
+
+  const independent = ResumeDom.applyDocumentOperations(grouped, [{
+    op: 'split_editable_node',
+    node_id: 'summary-group',
+  }], { allowStructure: true });
+  assert.strictEqual(ResumeDom.resolveAiScopeNode(independent, 'item-2').node.id, 'item-2');
+  assert.strictEqual(ResumeDom.findNode(independent, 'summary-group').node.editable, undefined);
+  assert.strictEqual(
+    ResumeDom.findNode(independent, 'summary-group').node.children.every((node) => node.editable),
+    true,
+  );
+
+  const unwrapped = ResumeDom.applyDocumentOperations(independent, [{
+    op: 'unwrap_node',
+    node_id: 'summary-group',
+  }], { allowStructure: true });
+  assert.deepStrictEqual(
+    ResumeDom.findNode(unwrapped, 'section').node.children.map((node) => node.id),
+    ['title', 'item-1', 'item-2', 'item-3'],
+  );
+  assert.strictEqual(ResumeDom.plainText(unwrapped), ResumeDom.plainText(before));
+});
+
+test('旧版双重 AI 范围无损升级为一个编辑节点，新的嵌套编辑身份被强制拒绝', () => {
+  const legacy = ResumeDom.toResumeDocument({
+    schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+    root: {
+      id: 'root',
+      type: 'element',
+      tag: 'article',
+      children: [{
+        id: 'legacy-group',
+        type: 'element',
+        tag: 'div',
+        attributes: { 'data-ai-scope': 'true' },
+        children: [
+          { id: 'legacy-one', type: 'element', tag: 'p', text: '第一段。', editable: true },
+          { id: 'legacy-two', type: 'element', tag: 'p', text: '第二段。', editable: true },
+        ],
+      }],
+    },
+  });
+  const group = ResumeDom.findNode(legacy, 'legacy-group').node;
+  assert.strictEqual(group.editable, true);
+  assert.strictEqual(group.attributes['data-ai-scope'], undefined);
+  assert.strictEqual(group.children.every((node) => !node.editable), true);
+  assert.strictEqual(ResumeDom.nodeText(group), '第一段。\n第二段。');
+
+  assert.throws(() => ResumeDom.toResumeDocument({
+    schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+    root: {
+      id: 'root',
+      type: 'element',
+      tag: 'article',
+      editable: true,
+      children: [{ id: 'child', type: 'element', tag: 'p', text: '内容', editable: true }],
+    },
+  }), (error) => error.code === 'NESTED_EDITABLE_NODE');
 });
 
 test('整份简历可由 AI 新增动态模块，新增内容可继续选中改写并撤销', async (t) => {

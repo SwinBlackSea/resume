@@ -8,7 +8,7 @@ const audit = require('./audit');
 const { uuidv7, nowIso, deepClone, problem } = require('./util');
 const { findForbiddenKey } = require('./resume-harness/output-schema');
 
-const POLICY_VERSION = 'policy-v2';
+const POLICY_VERSION = 'policy-v6-semantic-operations';
 const ACTION_TYPES = new Set([
   'PROFILE_SAVE_PROPOSAL',
   'JOB_SET_CURRENT_PROPOSAL',

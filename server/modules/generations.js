@@ -195,9 +195,11 @@ const routes = [
             ],
           );
           db.run(
-            `INSERT INTO generation_jobs (id, snapshot_id, owner_id, status, current_step, progress, attempt_count, created_at, updated_at)
-             VALUES (?, ?, ?, 'queued', 'queued', 0, 0, ?, ?)`,
-            [jobId, snapshotId, user.id, nowIso(), nowIso()],
+            `INSERT INTO generation_jobs
+             (id, snapshot_id, owner_id, status, current_step, progress, prompt_version,
+              attempt_count, created_at, updated_at)
+             VALUES (?, ?, ?, 'queued', 'queued', 0, ?, 0, ?, ?)`,
+            [jobId, snapshotId, user.id, PROMPT_VERSION, nowIso(), nowIso()],
           );
           // 先提交数据库 outbox，再投递队列：避免「有快照无任务」
           queue.publish({

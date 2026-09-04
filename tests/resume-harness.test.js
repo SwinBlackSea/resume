@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const ResumeDom = require('../resume-dom');
 const {
   buildHarnessInput,
   buildMessages,
@@ -52,6 +53,54 @@ test('Harness 每轮携带完整工作区、会话和锁定焦点', () => {
     '先写得更专业',
     '这是上一版建议',
   ]);
+});
+
+test('Harness 继续调整时把完整建议态文档一并交给模型', () => {
+  const proposalContent = {
+    version: 'resume-dom-v1',
+    root: {
+      id: 'resume-root',
+      type: 'element',
+      tag: 'article',
+      children: [{
+        id: 'proposal-paragraph',
+        type: 'element',
+        tag: 'p',
+        text: '上一轮建议形成的完整内容',
+        editable: true,
+      }],
+    },
+  };
+  const built = input({
+    resume: {
+      revision: 7,
+      content: input().workspace.resume.content,
+      proposal_content: proposalContent,
+      proposal_id: 'proposal-previous',
+    },
+    focus: {
+      current_text: '原始内容',
+      editing_base: '上一轮建议',
+      scope_region: {
+        scope_id: 'bullet-1',
+        kind: 'node',
+        node_ids: ['bullet-1'],
+        text: '上一轮建议',
+      },
+    },
+  });
+  assert.strictEqual(
+    built.workspace.resume.proposal_content.root.children[0].text,
+    '上一轮建议形成的完整内容',
+  );
+  assert.strictEqual(built.workspace.resume.proposal_id, 'proposal-previous');
+  assert.strictEqual(built.focus.scope_region.kind, 'node');
+
+  const messages = buildMessages(built);
+  assert.match(
+    String(messages[1].content),
+    /上一轮建议形成的完整内容/,
+  );
 });
 
 test('Harness 将图片与本轮锁定焦点一起发送给视觉模型', () => {
@@ -125,6 +174,371 @@ test('Harness 拒绝模型返回来源、证据或依赖关系字段', async () 
   });
   try {
     await assert.rejects(() => complete(input()), /不允许的内容关系字段/);
+  } finally {
+    restore();
+  }
+});
+
+test('Harness 对不可执行的通用 DOM 动作自动修复一次', async () => {
+  let calls = 0;
+  let repairPrompt = '';
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'action-repair',
+    generate: async ({ messages }) => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          output: {
+            reply: '建议新增两个段落，确认后即可应用。',
+            actions: [{
+              type: 'RESUME_REWRITE_PROPOSAL',
+              payload: { proposal: { operations: [{ node: {} }] } },
+            }],
+            uncertainty: [],
+          },
+        };
+      }
+      repairPrompt = String(messages[messages.length - 1].content || '');
+      return {
+        output: {
+          reply: '已生成可执行的结构建议，确认后即可应用。',
+          actions: [{
+            type: 'RESUME_REWRITE_PROPOSAL',
+            payload: {
+              proposal: {
+                suggestion: '新增两个段落',
+                change_constraints: {
+                  content: 'modify',
+                  structure: 'modify',
+                  style: 'preserve',
+                  allowed_region_ids: ['resume-root'],
+                },
+                operations: [{
+                  op: 'insert_node',
+                  parent_id: 'resume-root',
+                  node: {
+                    id: 'new-paragraph-1',
+                    type: 'element',
+                    tag: 'p',
+                    text: '新增段落',
+                    editable: true,
+                  },
+                }],
+              },
+            },
+          }],
+          uncertainty: [],
+        },
+      };
+    },
+  });
+  try {
+    const result = await complete(input({
+      scope: { type: 'RESUME_DOCUMENT', id: null, revision: 7 },
+    }));
+    assert.strictEqual(calls, 2);
+    assert.strictEqual(result.repair_count, 1);
+    assert.strictEqual(
+      result.response.actions[0].payload.proposal.operations[0].op,
+      'insert_node',
+    );
+    assert.match(repairPrompt, /无法形成可执行动作/);
+    assert.match(repairPrompt, /空操作/);
+  } finally {
+    restore();
+  }
+});
+
+test('Harness 对只改结构却丢失原文的建议自动修复一次', async () => {
+  let calls = 0;
+  let repairPrompt = '';
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'content-preservation-repair',
+    generate: async ({ input: modelInput, messages }) => {
+      calls += 1;
+      const current = ResumeDom.toResumeDocument(modelInput.workspace.resume.content);
+      const found = ResumeDom.findNode(current, 'bullet-1');
+      const original = ResumeDom.nodeText(found.node);
+      if (calls === 1) {
+        return {
+          output: {
+            reply: '已拆成两个段落，确认后即可应用。',
+            actions: [{
+              type: 'RESUME_REWRITE_PROPOSAL',
+              payload: {
+                proposal: {
+                  change_constraints: {
+                    content: 'preserve',
+                    structure: 'modify',
+                    style: 'preserve',
+                    allowed_region_ids: [found.parent.id],
+                  },
+                  operations: [
+                    { op: 'remove_node', node_id: 'bullet-1' },
+                    {
+                      op: 'insert_node',
+                      parent_id: found.parent.id,
+                      index: found.index,
+                      node: {
+                        id: 'split-loss-1',
+                        type: 'element',
+                        tag: 'p',
+                        text: '完整正文',
+                        editable: true,
+                      },
+                    },
+                    {
+                      op: 'insert_node',
+                      parent_id: found.parent.id,
+                      after_node_id: 'split-loss-1',
+                      node: {
+                        id: 'split-loss-2',
+                        type: 'element',
+                        tag: 'p',
+                        text: '',
+                        editable: true,
+                      },
+                    },
+                  ],
+                },
+              },
+            }],
+            uncertainty: [],
+          },
+        };
+      }
+      repairPrompt = String(messages[messages.length - 1].content || '');
+      return {
+        output: {
+          reply: '已完整保留原文并拆成两个段落，确认后即可应用。',
+          actions: [{
+            type: 'RESUME_REWRITE_PROPOSAL',
+            payload: {
+              proposal: {
+                change_constraints: {
+                  content: 'preserve',
+                  structure: 'modify',
+                  style: 'preserve',
+                  allowed_region_ids: [found.parent.id],
+                },
+                operations: [
+                  { op: 'remove_node', node_id: 'bullet-1' },
+                  {
+                    op: 'insert_node',
+                    parent_id: found.parent.id,
+                    index: found.index,
+                    node: {
+                      id: 'split-safe-1',
+                      type: 'element',
+                      tag: 'p',
+                      text: original.slice(0, 4),
+                      editable: true,
+                    },
+                  },
+                  {
+                    op: 'insert_node',
+                    parent_id: found.parent.id,
+                    after_node_id: 'split-safe-1',
+                    node: {
+                      id: 'split-safe-2',
+                      type: 'element',
+                      tag: 'p',
+                      text: original.slice(4),
+                      editable: true,
+                    },
+                  },
+                ],
+              },
+            },
+          }],
+          uncertainty: [],
+        },
+      };
+    },
+  });
+  try {
+    const result = await complete(input());
+    assert.strictEqual(calls, 2);
+    assert.strictEqual(result.repair_count, 1);
+    assert.match(repairPrompt, /必须完整保留原文字/);
+    assert.strictEqual(
+      result.response.actions[0].payload.proposal.change_constraints.content,
+      'preserve',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('Harness 不允许 actions 为空却声称确认后可应用', async () => {
+  let calls = 0;
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'empty-action-repair',
+    generate: async () => {
+      calls += 1;
+      return calls === 1
+        ? {
+            output: {
+              reply: '建议调整简历结构，确认后即可应用。',
+              actions: [],
+              uncertainty: [],
+            },
+          }
+        : {
+            output: {
+              reply: '请告诉我希望新增段落的具体内容。',
+              actions: [],
+              uncertainty: ['缺少新增段落内容'],
+            },
+          };
+    },
+  });
+  try {
+    const result = await complete(input({
+      scope: { type: 'RESUME_DOCUMENT', id: null, revision: 7 },
+    }));
+    assert.strictEqual(calls, 2);
+    assert.strictEqual(result.repair_count, 1);
+    assert.deepStrictEqual(result.response.actions, []);
+    assert.doesNotMatch(result.response.reply, /确认后|即可应用/);
+  } finally {
+    restore();
+  }
+});
+
+test('Harness 将真实结果歧义规范为可继续同一任务的澄清结果', async () => {
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'structured-clarification',
+    generate: async () => ({
+      output: {
+        result_type: 'CLARIFICATION_REQUIRED',
+        reply: '你希望保留当前排版，只让三个段落分别使用 AI，还是把它们移出当前内容组？',
+        clarification: {
+          question: '你希望采用哪一种结果？',
+          options: [
+            { id: 'keep-layout', label: '保留排版，分别编辑' },
+            { id: 'physical-ungroup', label: '拆成三个独立区域' },
+          ],
+        },
+        actions: [],
+        uncertainty: ['物理结构是否需要拆除尚不明确'],
+      },
+    }),
+  });
+  try {
+    const result = await complete(input());
+    assert.strictEqual(result.response.result_type, 'CLARIFICATION_REQUIRED');
+    assert.strictEqual(result.response.actions.length, 0);
+    assert.deepStrictEqual(
+      result.response.clarification.options.map((option) => option.id),
+      ['keep-layout', 'physical-ungroup'],
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('Harness 对复杂且明确的请求返回极简处理思路，不提前生成动作', async () => {
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'plan-confirmation',
+    generate: async () => ({
+      output: {
+        result_type: 'PLAN_CONFIRMATION_REQUIRED',
+        reply: '我准备先结合整份简历梳理重点，再完成当前区域。',
+        plan: {
+          summary: '我准备这样修改：',
+          steps: [
+            '结合整份简历中的工作和项目经历',
+            '合并当前内容中的重复表达',
+            '强化管理经验并整理为三个段落',
+          ],
+          scope_note: '本次先只修改职业概况。',
+          affected_scope_ids: ['bullet-1'],
+        },
+        actions: [],
+        uncertainty: [],
+      },
+    }),
+  });
+  try {
+    const result = await complete(input());
+    assert.strictEqual(result.response.result_type, 'PLAN_CONFIRMATION_REQUIRED');
+    assert.deepStrictEqual(result.response.actions, []);
+    assert.strictEqual(result.response.plan.steps.length, 3);
+    assert.strictEqual(result.response.plan.confirm_label, '按这个思路修改');
+    assert.strictEqual(result.response.plan.adjust_label, '调整要求');
+  } finally {
+    restore();
+  }
+});
+
+test('Harness 不允许用澄清结果掩盖已经生成的待应用动作', async () => {
+  let calls = 0;
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'invalid-clarification-with-action',
+    generate: async () => {
+      calls += 1;
+      return calls === 1
+        ? {
+            output: {
+              result_type: 'CLARIFICATION_REQUIRED',
+              reply: '请确认。',
+              clarification: { question: '请确认。' },
+              actions: [{
+                type: 'RESUME_REWRITE_PROPOSAL',
+                payload: { proposal: { suggestion: '修改后内容' } },
+              }],
+              uncertainty: [],
+            },
+          }
+        : {
+            output: {
+              result_type: 'ANSWER',
+              reply: '请补充你希望得到的最终效果。',
+              actions: [],
+              uncertainty: [],
+            },
+          };
+    },
+  });
+  try {
+    const result = await complete(input());
+    assert.strictEqual(calls, 2);
+    assert.strictEqual(result.response.result_type, 'ANSWER');
+    assert.strictEqual(result.response.actions.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('Harness 连续两次无法形成可执行动作时明确失败', async () => {
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'invalid-action-twice',
+    generate: async () => ({
+      output: {
+        reply: '确认后即可应用。',
+        actions: [{
+          type: 'RESUME_REWRITE_PROPOSAL',
+          payload: { proposal: { operations: [{}] } },
+        }],
+        uncertainty: [],
+      },
+    }),
+  });
+  try {
+    await assert.rejects(
+      () => complete(input({
+        scope: { type: 'RESUME_DOCUMENT', id: null, revision: 7 },
+      })),
+      /模型没有生成可执行动作/,
+    );
   } finally {
     restore();
   }
