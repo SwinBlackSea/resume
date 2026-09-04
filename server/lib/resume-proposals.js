@@ -16,6 +16,15 @@ function parseJson(value) {
 function proposalIsStillValid(row, resume, revision) {
   const stored = parseJson(row.payload_json);
   const proposal = stored.proposal || stored;
+  if (
+    proposal.merge_strategy === 'three_way_target_document'
+    && proposal.base_resume_json
+    && proposal.target_resume_document
+  ) {
+    // 新协议在用户点击应用时基于 A/B/C 做三方合并。普通文字或无关区域变化
+    // 不应提前把建议标成 stale；真正无法合并时由应用阶段给出重新生成入口。
+    return true;
+  }
   if (Array.isArray(proposal.operations) && proposal.operations.length) {
     if (proposal.operation_preconditions) {
       return validateOperationPreconditions(resume, proposal.operation_preconditions).valid;

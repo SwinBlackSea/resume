@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1800" viewBox="0 0 2200 1800" role="img" aria-labelledby="title desc">
   <title id="title">简历星球核心技术组件分解图</title>
-  <desc id="desc">展开 Resume Harness、请求分流、语义操作编译、Resume Change Policy、Resume DOM 和 Renderer 的主关系，并标明复杂请求确认、五级撤销重做、单一编辑节点、文档识别与导出。</desc>
+  <desc id="desc">展开 Resume Harness、message/proposal 双结果协议、任务会话隔离、目标文档三方合并、Resume DOM 和 Renderer 的主关系。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64748b"/></marker>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".1"/></filter>
@@ -10,7 +10,7 @@
   </defs>
   <rect width="2200" height="1800" fill="#f8fafc"/>
   <text x="60" y="58" class="title">简历星球 · 核心技术组件分解</text>
-  <text x="60" y="90" class="subtitle">AI 修改主链：Resume Harness → Operation Compiler → Change Policy → Resume DOM → Renderer</text>
+  <text x="60" y="90" class="subtitle">AI 修改主链：Resume Harness → Target ResumeDocument → Three-way Merge / Policy → Resume DOM → Renderer</text>
 
   <rect x="50" y="120" width="1580" height="232" rx="18" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
   <text x="78" y="157" class="zone">Web Application</text>
@@ -30,17 +30,17 @@
   <path d="M420 524H448" class="arrow"/><path d="M790 524H818" class="arrow"/><path d="M1160 524H1188" class="arrow"/>
   <rect x="80" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#4ade80" stroke-width="2" filter="url(#shadow)"/>
   <text x="103" y="478" class="card-title">Resume Harness</text>
-  <text x="103" y="507" class="body">回答 · 澄清 · 计划确认 · 建议</text>
-  <text x="103" y="534" class="body">简单直出 · 复杂确认 · 同任务续答</text>
+  <text x="103" y="507" class="body">message 自然沟通 · proposal 最终建议</text>
+  <text x="103" y="534" class="body">用户 · 项目 · 会话 · 任务隔离</text>
   <text x="103" y="571" class="path">server/lib/resume-harness/*</text>
   <rect x="450" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
-  <text x="473" y="478" class="card-title">Operation Compiler / Policy</text>
-  <text x="473" y="507" class="body">语义操作 · 顺序模拟 · 区域边界</text>
+  <text x="473" y="478" class="card-title">Target Document / Merge / Policy</text>
+  <text x="473" y="507" class="body">完整目标文档 · A/B/C 三方合并</text>
   <text x="473" y="534" class="body">内容守恒 · 实际差异 · 应用授权</text>
-  <text x="473" y="571" class="path">resume-operation-compiler · change-policy</text>
+  <text x="473" y="571" class="path">resume-three-way-merge · change-policy</text>
   <rect x="820" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
   <text x="843" y="478" class="card-title">Resume DOM Engine</text>
-  <text x="843" y="507" class="body">执行受控与原子语义 operations</text>
+  <text x="843" y="507" class="body">规范化、校验并渲染完整 ResumeDocument</text>
   <text x="843" y="534" class="body">merge/split 编辑节点 · 禁止 editable 嵌套</text>
   <text x="843" y="571" class="path">resume-dom.js</text>
   <rect x="1190" y="444" width="410" height="150" rx="13" fill="#fff" stroke="#16a34a" stroke-width="2" filter="url(#shadow)"/>
@@ -61,7 +61,7 @@
   <text x="508" y="840" class="body">Generations · Artifacts</text>
   <text x="508" y="873" class="path">server/modules/*.js</text>
   <rect x="1210" y="732" width="390" height="178" rx="13" fill="#fff" stroke="#c4b5fd" filter="url(#shadow)"/>
-  <text x="1233" y="766" class="card-title">Policies / Domain Libraries</text><text x="1233" y="795" class="body">Write Policy · Auth · Idempotency</text><text x="1233" y="822" class="body">Operation Preconditions · Audit</text><text x="1233" y="849" class="body">Job Analyzer · Resume Schema</text><text x="1233" y="882" class="path">server/lib/*.js</text>
+  <text x="1233" y="766" class="card-title">Policies / Domain Libraries</text><text x="1233" y="795" class="body">Write Policy · Auth · Idempotency</text><text x="1233" y="822" class="body">Merge Conflicts · Audit</text><text x="1233" y="849" class="body">Job Analyzer · Resume Schema</text><text x="1233" y="882" class="path">server/lib/*.js</text>
 
   <path d="M840 956V994" class="arrow"/>
   <rect x="50" y="996" width="1580" height="146" rx="18" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
@@ -78,7 +78,7 @@
   <text x="103" y="1278" class="card-title">AI Pipeline</text>
   <text x="103" y="1310" class="body">AI Module · Context / Memory / Prompt</text>
   <text x="123" y="1342" class="body">完整 ResumeDocument · 焦点节点 · 可恢复任务</text>
-  <text x="123" y="1369" class="body">四态 Output Schema · Model Client Interface</text>
+  <text x="123" y="1369" class="body">双结果 Schema · 任务上下文重建</text>
   <text x="103" y="1405" class="body">DeepSeek Client → DeepSeek LLM</text>
   <text x="123" y="1437" class="body">HTTP/Timeout/Abort · SSE Decoder</text>
   <text x="123" y="1464" class="body">JSON Extractor · Error Mapping</text>

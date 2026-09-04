@@ -89,6 +89,7 @@ function applyChangePatch(resume, event, direction) {
       if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
       break;
     case 'dom_operations':
+    case 'resume_document_merge':
       if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
       break;
     case 'document_import':
@@ -121,6 +122,7 @@ function changeEventLabel(event) {
     || {
       document_transaction: '修改简历文字',
       dom_operations: 'AI 修改简历',
+      resume_document_merge: 'AI 修改简历',
       document_import: '导入简历',
       full_document: '修改整份简历',
     }[event.change_type]

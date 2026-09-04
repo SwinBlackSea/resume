@@ -35,6 +35,8 @@ test('数据模型不包含内容来源、证据映射或废弃文档编辑器�
   const actionColumns = db.all('PRAGMA table_info(ai_action_requests)').map((row) => row.name);
   assert.ok(!actionColumns.includes('evidence_json'));
   assert.ok(!actionColumns.includes('confidence'));
+  const messageColumns = db.all('PRAGMA table_info(ai_messages)').map((row) => row.name);
+  assert.ok(messageColumns.includes('task_id'));
   const retiredColumns = [
     ['resume_drafts', ['document_format', 'document_object_key', 'document_sha256', 'document_revision', 'semantic_index_status']],
     ['resume_versions', ['document_object_key', 'document_sha256', 'document_revision']],
@@ -221,7 +223,7 @@ test('无效结构动作会通用修复为可确认建议', async () => {
   }
 });
 
-test('动作最终被拒绝时不再展示虚假的确认承诺', async () => {
+test('最终建议未通过领域校验时不伪造用户意图追问', async () => {
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
     model: 'rejected-action-copy',
@@ -248,9 +250,9 @@ test('动作最终被拒绝时不再展示虚假的确认承诺', async () => {
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.deepStrictEqual(res.body.actions, []);
     assert.ok(res.body.rejected.length);
-    assert.strictEqual(res.body.result_type, 'CLARIFICATION_REQUIRED');
-    assert.match(res.body.reply_text, /保留什么、改变什么/);
-    assert.strictEqual(res.body.clarification.options.length, 3);
+    assert.strictEqual(res.body.result_type, 'ERROR');
+    assert.match(res.body.reply_text, /没有通过最终校验/);
+    assert.deepStrictEqual(res.body.quick_replies, []);
     assert.doesNotMatch(res.body.reply_text, /确认后|即可应用/);
     assert.strictEqual(res.body.reply.content, res.body.reply_text);
   } finally {
@@ -316,17 +318,13 @@ test('真实结果歧义先澄清，用户回答后在同一任务生成建议',
       if (calls === 1) {
         return {
           output: {
-            result_type: 'CLARIFICATION_REQUIRED',
-            reply: '你希望只保留一个整体段落，还是保留原文字并拆成多个段落？',
-            clarification: {
-              question: '你希望最终呈现哪一种结果？',
-              options: [
-                { id: 'single', label: '合并成一个段落' },
-                { id: 'split', label: '保留文字并拆段' },
-              ],
-            },
-            actions: [],
-            uncertainty: ['最终段落结构不明确'],
+            type: 'message',
+            content: '你希望只保留一个整体段落，还是保留原文字并拆成多个段落？',
+            awaiting_user: true,
+            quick_replies: [
+              { id: 'single', label: '合并成一个段落' },
+              { id: 'split', label: '保留文字并拆段' },
+            ],
           },
         };
       }
@@ -357,7 +355,8 @@ test('真实结果歧义先澄清，用户回答后在同一任务生成建议',
       { type: 'RESUME_BLOCK', id: 'target-bullet' },
     );
     assert.strictEqual(first.status, 200, JSON.stringify(first.body));
-    assert.strictEqual(first.body.result_type, 'CLARIFICATION_REQUIRED');
+    assert.strictEqual(first.body.result_type, 'MESSAGE');
+    assert.strictEqual(first.body.awaiting_user, true);
     assert.deepStrictEqual(first.body.actions, []);
     assert.strictEqual(
       db.get('SELECT status FROM ai_tasks WHERE id = ?', [first.body.task_id]).status,
@@ -375,8 +374,8 @@ test('真实结果歧义先澄清，用户回答后在同一任务生成建议',
     assert.ok(second.body.actions.some((action) =>
       action.action_type === 'RESUME_REWRITE_PROPOSAL'));
     assert.strictEqual(
-      resumedInput.request.task.state.answered_clarification.question,
-      '你希望最终呈现哪一种结果？',
+      resumedInput.request.task.state.answered_message.content,
+      '你希望只保留一个整体段落，还是保留原文字并拆成多个段落？',
     );
     assert.strictEqual(
       db.get('SELECT status FROM ai_tasks WHERE id = ?', [first.body.task_id]).status,
@@ -398,20 +397,10 @@ test('复杂请求先确认极简处理思路，确认后在同一任务直接�
       if (calls === 1) {
         return {
           output: {
-            result_type: 'PLAN_CONFIRMATION_REQUIRED',
-            reply: '我准备按以下思路处理。',
-            plan: {
-              summary: '我准备这样修改：',
-              steps: [
-                '结合整份简历中的相关经历',
-                '强化管理经验并去除重复表达',
-                '最终整理为三个清晰段落',
-              ],
-              scope_note: '本次先只修改当前内容。',
-              affected_scope_ids: [input.scope.id],
-            },
-            actions: [],
-            uncertainty: [],
+            type: 'message',
+            content: '我准备这样修改：\n1. 结合整份简历中的相关经历\n2. 强化管理经验并去除重复表达\n3. 最终整理为三个清晰段落\n本次先只修改当前内容。',
+            awaiting_user: true,
+            quick_replies: ['按这个思路修改', '调整要求'],
           },
         };
       }
@@ -439,12 +428,13 @@ test('复杂请求先确认极简处理思路，确认后在同一任务直接�
       { type: 'RESUME_BLOCK', id: 'target-bullet' },
     );
     assert.strictEqual(first.status, 200, JSON.stringify(first.body));
-    assert.strictEqual(first.body.result_type, 'PLAN_CONFIRMATION_REQUIRED');
+    assert.strictEqual(first.body.result_type, 'MESSAGE');
+    assert.strictEqual(first.body.awaiting_user, true);
     assert.strictEqual(first.body.actions.length, 0);
-    assert.strictEqual(first.body.plan.steps.length, 3);
+    assert.strictEqual(first.body.quick_replies.length, 2);
     assert.strictEqual(
       db.get('SELECT status FROM ai_tasks WHERE id = ?', [first.body.task_id]).status,
-      'confirming_plan',
+      'clarifying',
     );
 
     const second = await send(
@@ -458,18 +448,65 @@ test('复杂请求先确认极简处理思路，确认后在同一任务直接�
     assert.ok(second.body.actions.some((action) =>
       action.action_type === 'RESUME_REWRITE_PROPOSAL'));
     assert.strictEqual(
-      resumedInput.request.task.state.confirmed_plan.summary,
-      '我准备这样修改：',
+      resumedInput.request.task.state.answered_message.content,
+      first.body.reply_text,
     );
   } finally {
     restore();
   }
 });
 
-test('无法定位为 DOM 操作的整份替换仍使用全局 revision 保护', async () => {
+test('同一会话中的多个修改任务分别保存上下文，不会互相串线', async () => {
+  let continuedInput = null;
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
-    model: 'full-document-replacement',
+    model: 'task-isolated-conversation',
+    generate: async ({ input }) => {
+      if (input.request.text === '继续任务一') continuedInput = input;
+      return {
+        output: {
+          type: 'message',
+          content: input.request.text === '继续任务一'
+            ? '任务一已经沟通完成。'
+            : `正在处理：${input.request.text}`,
+          awaiting_user: input.request.text !== '继续任务一',
+        },
+      };
+    },
+  });
+  try {
+    const conversationId = (await workspace()).conversation.id;
+    const first = await send('任务一', {}, { conversation_id: conversationId });
+    const second = await send('任务二', {}, { conversation_id: conversationId });
+    assert.notStrictEqual(first.body.task_id, second.body.task_id);
+
+    const continued = await send('继续任务一', {}, {
+      conversation_id: conversationId,
+      task_id: first.body.task_id,
+    });
+    assert.strictEqual(continued.status, 200, JSON.stringify(continued.body));
+    assert.ok(continuedInput);
+    const remembered = continuedInput.conversation.recent_messages.map((item) => item.content);
+    assert.ok(remembered.includes('任务一'));
+    assert.ok(remembered.includes('正在处理：任务一'));
+    assert.ok(!remembered.includes('任务二'));
+    assert.ok(!remembered.includes('继续任务一'), '当前消息应只在 request 中出现一次');
+
+    const taskRows = db.all(
+      'SELECT DISTINCT task_id FROM ai_messages WHERE conversation_id = ? AND task_id IS NOT NULL',
+      [conversationId],
+    );
+    assert.ok(taskRows.some((row) => row.task_id === first.body.task_id));
+    assert.ok(taskRows.some((row) => row.task_id === second.body.task_id));
+  } finally {
+    restore();
+  }
+});
+
+test('完整目标文档可三方合并到最新草稿并支持撤销重做', async () => {
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'target-document-three-way-merge',
     generate: async ({ input }) => {
       const replacement = ResumeDom.toResumeDocument(input.workspace.resume.content);
       replacement.styles = {
@@ -490,7 +527,7 @@ test('无法定位为 DOM 操作的整份替换仍使用全局 revision 保护',
                   style: 'modify',
                   allowed_region_ids: [replacement.root.id],
                 },
-                resume_json: replacement,
+                target_resume_document: replacement,
               },
             },
           }],
@@ -529,16 +566,140 @@ test('无法定位为 DOM 操作的整份替换仍使用全局 revision 保护',
     assert.strictEqual(changed.status, 200, JSON.stringify(changed.body));
     assert.strictEqual(
       db.get('SELECT status FROM ai_action_requests WHERE id = ?', [action.id]).status,
-      'stale',
+      'awaiting_confirmation',
     );
     const applied = await helpers.call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
-      idemKey: `full-replacement-stale-${action.id}`,
+      idemKey: `target-document-rebase-${action.id}`,
       body: { expected_revision: action.expected_revision },
     });
-    assert.strictEqual(applied.status, 409, JSON.stringify(applied.body));
-    assert.strictEqual(applied.body.title, 'PROPOSAL_SUPERSEDED');
+    assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+    assert.strictEqual(applied.body.resume_json.styles['--replacement-test'], 'enabled');
+    assert.match(
+      ResumeDom.nodeText(
+        ResumeDom.findNode(applied.body.resume_json, 'target-bullet').node,
+      ),
+      /用户并行修改/,
+    );
+    const persisted = JSON.parse(
+      db.get('SELECT payload_json FROM ai_action_requests WHERE id = ?', [action.id]).payload_json,
+    ).proposal;
+    assert.strictEqual(persisted.merge_result.rebased, true);
+
+    const undone = await helpers.call(
+      ctx,
+      'POST',
+      `/projects/${projectId}/resume-draft/undo`,
+      { idemKey: `target-document-undo-${action.id}` },
+    );
+    assert.strictEqual(undone.status, 200, JSON.stringify(undone.body));
+    assert.strictEqual(undone.body.resume_json.styles['--replacement-test'], undefined);
+    assert.match(
+      ResumeDom.nodeText(
+        ResumeDom.findNode(undone.body.resume_json, 'target-bullet').node,
+      ),
+      /用户并行修改/,
+    );
+
+    const redone = await helpers.call(
+      ctx,
+      'POST',
+      `/projects/${projectId}/resume-draft/redo`,
+      { idemKey: `target-document-redo-${action.id}` },
+    );
+    assert.strictEqual(redone.status, 200, JSON.stringify(redone.body));
+    assert.strictEqual(redone.body.resume_json.styles['--replacement-test'], 'enabled');
   } finally {
     restore();
+  }
+});
+
+test('目标节点已被另一项结构修改删除时只返回可重新生成的客观冲突', async () => {
+  let originalAction = null;
+  let deleteAction = null;
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'target-document-objective-conflict',
+    generate: async ({ input }) => {
+      const current = ResumeDom.toResumeDocument(input.workspace.resume.content);
+      const deleting = /删除/.test(input.request.text);
+      const target = ResumeDom.applyDocumentOperations(
+        current,
+        deleting
+          ? [{ op: 'remove_node', node_id: 'target-bullet' }]
+          : [{ op: 'replace_text', node_id: 'target-bullet', text: 'AI 等待应用的改写' }],
+        { allowStructure: true },
+      );
+      return {
+        output: {
+          reply: deleting
+            ? '将删除这项内容，确认后即可应用。'
+            : '已生成改写建议，确认后即可应用。',
+          actions: [{
+            type: 'RESUME_REWRITE_PROPOSAL',
+            payload: {
+              proposal: {
+                suggestion: deleting ? '删除这项内容' : 'AI 等待应用的改写',
+                change_constraints: {
+                  content: 'modify',
+                  structure: deleting ? 'modify' : 'preserve',
+                  style: 'preserve',
+                  allowed_region_ids: deleting ? [current.root.id] : ['target-bullet'],
+                },
+                target_resume_document: target,
+              },
+            },
+          }],
+          uncertainty: [],
+        },
+      };
+    },
+  });
+  try {
+    const first = await send(
+      '改写当前内容',
+      { type: 'RESUME_BLOCK', id: 'target-bullet' },
+    );
+    originalAction = first.body.actions.find(
+      (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+    );
+    assert.ok(originalAction, JSON.stringify(first.body));
+
+    const second = await send('删除 target-bullet 这项内容');
+    deleteAction = second.body.actions.find(
+      (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+    );
+    assert.ok(deleteAction, JSON.stringify(second.body));
+    const deleted = await helpers.call(ctx, 'POST', `/ai/actions/${deleteAction.id}/apply`, {
+      idemKey: `delete-target-before-apply-${deleteAction.id}`,
+      body: { expected_revision: deleteAction.expected_revision },
+    });
+    assert.strictEqual(deleted.status, 200, JSON.stringify(deleted.body));
+    assert.strictEqual(ResumeDom.findNode(deleted.body.resume_json, 'target-bullet'), null);
+
+    const conflicted = await helpers.call(ctx, 'POST', `/ai/actions/${originalAction.id}/apply`, {
+      idemKey: `objective-merge-conflict-${originalAction.id}`,
+      body: { expected_revision: originalAction.expected_revision },
+    });
+    assert.strictEqual(conflicted.status, 409, JSON.stringify(conflicted.body));
+    assert.strictEqual(conflicted.body.title, 'PROPOSAL_REBASE_REQUIRED');
+    assert.strictEqual(conflicted.body.merge_errors[0].code, 'CHANGED_NODE_MISSING');
+    assert.match(conflicted.body.recovery_instruction, /最新简历重新生成/);
+  } finally {
+    restore();
+    if (originalAction) {
+      await helpers.call(ctx, 'POST', `/ai/actions/${originalAction.id}/reject`, {
+        idemKey: `cleanup-objective-conflict-${originalAction.id}`,
+        body: { reason: '测试清理' },
+      });
+    }
+    if (deleteAction) {
+      await helpers.call(
+        ctx,
+        'POST',
+        `/projects/${projectId}/resume-draft/undo`,
+        { idemKey: `cleanup-delete-target-${deleteAction.id}` },
+      );
+    }
   }
 });
 
@@ -792,9 +953,20 @@ test('结构建议继续调整时读取建议态 B，并把 B→C 组合为可�
 
       const proposalDocument = input.workspace.resume.proposal_content;
       assert.ok(proposalDocument, '继续调整必须携带上一建议形成的完整文档 B');
+      assert.deepStrictEqual(
+        input.workspace.resume.previous_target_document,
+        proposalDocument,
+      );
+      assert.ok(
+        ResumeDom.findNode(input.workspace.resume.task_base_content, 'summary'),
+        '继续调整必须保留首次建议依据的基准简历 A',
+      );
       assert.ok(ResumeDom.findNode(proposalDocument, combinedId));
       assert.strictEqual(ResumeDom.findNode(proposalDocument, 'summary'), null);
-      assert.ok(ResumeDom.findNode(input.workspace.resume.content, 'summary'));
+      assert.ok(
+        ResumeDom.findNode(input.workspace.resume.content, 'summary'),
+        '当前最新草稿 C 必须与上一版目标 B 分开传递',
+      );
       return {
         output: {
           reply: '已基于上一版建议拆成两个独立列表项，确认后即可应用。',
@@ -914,6 +1086,80 @@ test('结构建议继续调整时读取建议态 B，并把 B→C 组合为可�
     ]);
     assert.strictEqual(JSON.parse(event.before_json).format, 'resume-structure-delta-v1');
     assert.strictEqual(JSON.parse(event.after_json).format, 'resume-structure-delta-v1');
+  } finally {
+    restore();
+  }
+});
+
+test('继续调整进入沟通阶段后，上一版建议不可被并发应用', async () => {
+  let calls = 0;
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'proposal-refinement-lock',
+    generate: async ({ input }) => {
+      calls += 1;
+      if (calls === 2) {
+        return {
+          output: {
+            type: 'message',
+            content: '你希望第二段只突出团队管理，还是同时保留项目推进？',
+            awaiting_user: true,
+            quick_replies: ['只突出团队管理', '两者都保留'],
+          },
+        };
+      }
+      const current = ResumeDom.toResumeDocument(input.workspace.resume.content);
+      const before = ResumeDom.nodeText(ResumeDom.findNode(current, 'target-bullet').node);
+      const target = ResumeDom.applyDocumentOperations(current, [{
+        op: 'replace_text',
+        node_id: 'target-bullet',
+        text: `${before}，突出团队管理。`,
+      }], { allowStructure: true });
+      return {
+        output: {
+          type: 'proposal',
+          content: '已准备强化团队管理表达。',
+          proposal: {
+            target_resume_document: target,
+            change_constraints: {
+              content: 'modify',
+              content_order: 'preserve',
+              structure: 'preserve',
+              style: 'preserve',
+              allowed_region_ids: ['target-bullet'],
+            },
+          },
+        },
+      };
+    },
+  });
+  try {
+    const first = await send(
+      '突出团队管理',
+      { type: 'RESUME_BLOCK', id: 'target-bullet' },
+    );
+    const proposal = first.body.actions.find(
+      (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+    );
+    assert.ok(proposal);
+
+    const refinement = await send(
+      '继续调整一下重点',
+      { type: 'RESUME_BLOCK', id: 'target-bullet' },
+      {
+        conversation_id: first.body.conversation_id,
+        task_id: first.body.task_id,
+        parent_proposal_id: proposal.id,
+      },
+    );
+    assert.strictEqual(refinement.body.result_type, 'MESSAGE');
+    assert.strictEqual(refinement.body.awaiting_user, true);
+
+    const blocked = await helpers.call(ctx, 'POST', `/ai/actions/${proposal.id}/apply`, {
+      idemKey: `apply-refining-${proposal.id}`,
+    });
+    assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
+    assert.strictEqual(blocked.body.title, 'PROPOSAL_BEING_REFINED');
   } finally {
     restore();
   }

@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS ai_tasks (
   goal               TEXT NOT NULL DEFAULT '',
   state_json         TEXT NOT NULL DEFAULT '{}',
   active_proposal_id TEXT,
-  status             TEXT NOT NULL DEFAULT 'understanding', -- understanding|clarifying|confirming_plan|planning|validated|waiting_apply|completed|failed|canceled
+  status             TEXT NOT NULL DEFAULT 'understanding', -- understanding|clarifying|planning|validated|waiting_apply|completed|failed|canceled
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL
 );
@@ -182,6 +182,7 @@ CREATE TABLE IF NOT EXISTS ai_tasks (
 CREATE TABLE IF NOT EXISTS ai_messages (
   id                  TEXT PRIMARY KEY,
   conversation_id     TEXT NOT NULL REFERENCES ai_conversations(id),
+  task_id              TEXT REFERENCES ai_tasks(id),
   owner_id            TEXT NOT NULL REFERENCES users(id),
   role                TEXT NOT NULL,          -- user | assistant
   content             TEXT NOT NULL DEFAULT '',
@@ -307,7 +308,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   progress           INTEGER NOT NULL DEFAULT 0,
   model_provider     TEXT NOT NULL DEFAULT 'local-rule-engine',
   model_name         TEXT NOT NULL DEFAULT 'resume-rule-v1',
-  prompt_version     TEXT NOT NULL DEFAULT 'resume-harness-v14-confirm-and-editing-nodes',
+  prompt_version     TEXT NOT NULL DEFAULT 'resume-harness-v16-message-proposal',
   attempt_count      INTEGER NOT NULL DEFAULT 0,
   started_at         TEXT,
   finished_at        TEXT,
@@ -417,8 +418,12 @@ CREATE INDEX IF NOT EXISTS ix_jobs_project ON target_jobs(project_id);
 CREATE INDEX IF NOT EXISTS ix_job_files_job ON job_files(job_id);
 CREATE INDEX IF NOT EXISTS ix_document_imports_project ON document_imports(project_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_document_imports_upload ON document_imports(upload_id, status);
+CREATE INDEX IF NOT EXISTS ix_ai_conversations_owner_project
+  ON ai_conversations(owner_id, project_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS ai_messages_conv ON ai_messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_ai_tasks_scope ON ai_tasks(conversation_id, scope_type, scope_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS ix_ai_tasks_owner_conversation
+  ON ai_tasks(owner_id, conversation_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS ix_actions_owner_status ON ai_action_requests(owner_id, status);
 CREATE INDEX IF NOT EXISTS ix_change_events_project ON resume_change_events(project_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_change_events_retention

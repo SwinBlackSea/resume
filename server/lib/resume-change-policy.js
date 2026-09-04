@@ -415,6 +415,7 @@ function validateAuthorizedChange({
   after,
   operations,
   replacementResume,
+  targetResume,
   revision,
   allowUserContentOverride = false,
 }) {
@@ -428,10 +429,12 @@ function validateAuthorizedChange({
       errors: [],
     };
   }
-  if (
-    authorization.change_payload_hash
-    !== changePayloadHash(operations, replacementResume)
-  ) {
+  const targetMismatch = targetResume
+    ? authorization.proposed_document_hash
+      !== hashJson(ResumeDom.toResumeDocument(targetResume))
+    : authorization.change_payload_hash
+      !== changePayloadHash(operations, replacementResume);
+  if (targetMismatch) {
     return {
       valid: false,
       errors: [policyError(

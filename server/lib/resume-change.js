@@ -246,7 +246,10 @@ function compactLegacyEvent(row) {
       row.scope_id
       && (
         row.change_type === 'document_transaction'
-        || (row.change_type === 'dom_operations' && row.scope_type === 'RESUME_BLOCK')
+        || (
+          ['dom_operations', 'resume_document_merge'].includes(row.change_type)
+          && row.scope_type === 'RESUME_BLOCK'
+        )
       )
     ) {
       pair = createNodeDeltaPair(
@@ -259,7 +262,7 @@ function compactLegacyEvent(row) {
         },
       );
     } else if (
-      row.change_type === 'dom_operations'
+      ['dom_operations', 'resume_document_merge'].includes(row.change_type)
       || row.change_type === 'document_transaction'
     ) {
       const beforeResume = ResumeDom.toResumeDocument(beforePayload.resume_json);

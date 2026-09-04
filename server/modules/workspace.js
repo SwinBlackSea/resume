@@ -11,6 +11,7 @@ const { SCOPE_LABEL } = require('../lib/policy');
 const { DEMO_EMAIL } = require('../lib/auth');
 const { previewProposalOnResume } = require('../lib/resume-change-preview');
 const { loadHistoryStacks } = require('./draft');
+const { normalizeQuickReplies } = require('../lib/resume-harness/output-schema');
 const ResumeDom = require('../../resume-dom');
 
 function toExperienceView(row) {
@@ -113,9 +114,26 @@ function toMessageView(row, options = {}) {
     'SELECT * FROM ai_action_requests WHERE message_id = ? ORDER BY created_at ASC',
     [row.id],
   ).map((action) => toActionView(action, options));
-  const task = modelMetadata.task_id
-    ? db.get('SELECT status FROM ai_tasks WHERE id = ?', [modelMetadata.task_id])
+  const messageTaskId = row.task_id || modelMetadata.task_id || null;
+  const task = messageTaskId
+    ? db.get('SELECT status FROM ai_tasks WHERE id = ?', [messageTaskId])
     : null;
+  const legacyResultType = String(modelMetadata.result_type || '');
+  const resultType = ['ANSWER', 'CLARIFICATION_REQUIRED', 'PLAN_CONFIRMATION_REQUIRED'].includes(
+    legacyResultType,
+  )
+    ? 'MESSAGE'
+    : legacyResultType || null;
+  let quickReplies = normalizeQuickReplies(modelMetadata.quick_replies);
+  if (!quickReplies.length && modelMetadata.clarification) {
+    quickReplies = normalizeQuickReplies(modelMetadata.clarification.options);
+  }
+  if (!quickReplies.length && modelMetadata.plan) {
+    quickReplies = normalizeQuickReplies([
+      modelMetadata.plan.confirm_label || '按这个思路修改',
+      modelMetadata.plan.adjust_label || '调整要求',
+    ]);
+  }
   return {
     id: row.id,
     role: row.role,
@@ -123,9 +141,15 @@ function toMessageView(row, options = {}) {
     scope_type: row.scope_type,
     scope_label: row.scope_type ? SCOPE_LABEL[row.scope_type] || row.scope_type : '',
     scope_id: row.scope_id,
-    task_id: modelMetadata.task_id || null,
+    task_id: messageTaskId,
     task_status: task ? task.status : null,
-    result_type: modelMetadata.result_type || null,
+    type: modelMetadata.protocol_type
+      || (resultType ? resultType.toLowerCase() : null),
+    result_type: resultType,
+    awaiting_user: modelMetadata.awaiting_user !== undefined
+      ? Boolean(modelMetadata.awaiting_user)
+      : ['CLARIFICATION_REQUIRED', 'PLAN_CONFIRMATION_REQUIRED'].includes(legacyResultType),
+    quick_replies: quickReplies,
     clarification: modelMetadata.clarification || null,
     plan: modelMetadata.plan || null,
     error_code: modelMetadata.error_code || null,
@@ -200,7 +224,7 @@ function toActionView(row, options = {}) {
 }
 
 /** 构建工作区聚合视图。 */
-function buildWorkspace(projectId, user) {
+function buildWorkspace(projectId, user, options = {}) {
   const project = db.get('SELECT * FROM resume_projects WHERE id = ? AND owner_id = ?', [
     projectId,
     user.id,
@@ -267,11 +291,21 @@ function buildWorkspace(projectId, user) {
   );
   const versions = versionRows.map((row) => toVersionView(row, draft ? draft.base_version_id : null));
 
-  const conversation =
-    db.get("SELECT * FROM ai_conversations WHERE project_id = ? AND owner_id = ? AND status = 'active' ORDER BY created_at DESC, id DESC LIMIT 1", [
-      projectId,
-      user.id,
-    ]) || null;
+  let conversation = null;
+  if (options.conversationId) {
+    conversation = db.get(
+      `SELECT * FROM ai_conversations
+       WHERE id = ? AND project_id = ? AND owner_id = ?`,
+      [options.conversationId, projectId, user.id],
+    );
+    if (!conversation) throw problem.badRequest('当前 AI 对话不存在');
+  } else {
+    conversation =
+      db.get("SELECT * FROM ai_conversations WHERE project_id = ? AND owner_id = ? AND status = 'active' ORDER BY created_at DESC, id DESC LIMIT 1", [
+        projectId,
+        user.id,
+      ]) || null;
+  }
   const messages = conversation
     ? db
         .all('SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC', [
@@ -339,7 +373,9 @@ function buildWorkspace(projectId, user) {
       undo_depth: history.depth,
     },
     versions,
-    conversation: conversation ? { id: conversation.id, messages, tasks } : null,
+    conversation: conversation
+      ? { id: conversation.id, status: conversation.status, messages, tasks }
+      : null,
     pending_actions_count: pendingActionsCount,
     readiness,
   };
@@ -358,7 +394,9 @@ const routes = [
   {
     method: 'GET',
     pattern: '/projects/:id',
-    handler: ({ params, user }) => buildWorkspace(params.id, user),
+    handler: ({ params, user, query }) => buildWorkspace(params.id, user, {
+      conversationId: query.get('conversation_id') || null,
+    }),
   },
   {
     method: 'PATCH',

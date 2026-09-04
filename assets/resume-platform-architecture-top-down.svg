@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1540" viewBox="0 0 1800 1540" role="img" aria-labelledby="title desc">
   <title id="title">简历星球自上而下整体架构图</title>
-  <desc id="desc">主调用链从 Web、API Server、Application Server、任务编排、执行服务到 LLM；AI 请求按简单直出、复杂确认、歧义追问分流，文档修改支持五级撤销重做并强制单一编辑节点。</desc>
+  <desc id="desc">主调用链从 Web、API Server、Application Server、任务编排、执行服务到无状态 LLM；服务端按任务重建上下文，模型自然沟通或返回目标文档，再执行 A/B/C 三方合并。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64748b"/></marker>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".10"/></filter>
@@ -36,7 +36,7 @@
   <rect x="555" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
   <text x="577" y="546" class="card-title">简历领域 / ResumeDocument</text><text x="577" y="577" class="card-body">完整文档 · 单一编辑节点 · 渲染投影</text><text x="577" y="604" class="card-body">草稿 · 双向修改事件 · 不可变版本</text>
   <rect x="930" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
-  <text x="952" y="546" class="card-title">智能与任务领域</text><text x="952" y="577" class="card-body">简单直出 / 复杂确认 / 歧义追问</text><text x="952" y="604" class="card-body">语义操作编译 · 顺序校验 · 确认后应用</text>
+  <text x="952" y="546" class="card-title">智能与任务领域</text><text x="952" y="577" class="card-body">自然沟通 / 最终建议</text><text x="952" y="604" class="card-body">任务隔离 · 目标文档 · 三方合并</text>
 
   <path d="M720 688V736" class="arrow"/><text x="740" y="719" class="small">事务 Outbox</text>
   <text x="70" y="777" class="layer">04 · ORCHESTRATION</text>
@@ -53,14 +53,14 @@
   <rect x="410" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
   <text x="432" y="1014" class="card-title">OCR / Speech Worker</text><text x="432" y="1045" class="card-body">岗位图片 · 语音转写</text><text x="432" y="1072" class="card-body">返回待确认文本</text>
   <rect x="710" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
-  <text x="732" y="1014" class="card-title">AI Worker → Resume Harness</text><text x="732" y="1045" class="card-body">Context · Memory · Request Routing</text><text x="732" y="1072" class="card-body">4-state Schema → Operation Compiler</text>
+  <text x="732" y="1014" class="card-title">AI Worker → Resume Harness</text><text x="732" y="1045" class="card-body">Task Context · Memory · Isolation</text><text x="732" y="1072" class="card-body">message / proposal → Target Document</text>
   <rect x="1010" y="978" width="280" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
   <text x="1032" y="1014" class="card-title">Render Worker</text><text x="1032" y="1045" class="card-body">HTML · PDF · DOCX</text><text x="1032" y="1072" class="card-body">分页 · 溢出 · 质量检查</text>
 
   <path d="M700 1168V1216" class="arrow"/><text x="720" y="1199" class="small">模型与运行时调用</text>
   <text x="70" y="1257" class="layer">06 · ADAPTER / MODEL / RUNTIME</text>
   <rect x="220" y="1218" width="1000" height="136" rx="18" fill="#fdf2f8" stroke="#f9a8d4" stroke-width="2" filter="url(#shadow)"/>
-  <rect x="250" y="1248" width="280" height="76" rx="12" fill="#fff" stroke="#f9a8d4"/><text x="278" y="1280" class="card-title">DeepSeek Client → LLM</text><text x="278" y="1307" class="card-body">HTTP · SSE · JSON · 超时 · 错误映射</text>
+  <rect x="250" y="1248" width="280" height="76" rx="12" fill="#fff" stroke="#f9a8d4"/><text x="278" y="1280" class="card-title">DeepSeek Client → LLM</text><text x="278" y="1307" class="card-body">无状态调用 · SSE · JSON · 超时</text>
   <rect x="580" y="1248" width="280" height="76" rx="12" fill="#fff" stroke="#f9a8d4"/><text x="608" y="1280" class="card-title">OCR / Speech Provider</text><text x="608" y="1307" class="card-body">文字识别 · 语音转写</text>
   <rect x="910" y="1248" width="280" height="76" rx="12" fill="#fff" stroke="#f9a8d4"/><text x="938" y="1280" class="card-title">Chromium / LibreOffice</text><text x="938" y="1307" class="card-body">渲染 · 转换 · 视觉回归</text>
 

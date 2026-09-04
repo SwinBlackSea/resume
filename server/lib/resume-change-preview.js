@@ -3,10 +3,13 @@
 /**
  * AI 建议的通用展示层。
  *
- * operations / replacement document 是唯一执行依据；preview 只是根据执行前后两份
- * ResumeDocument 派生出的只读数据，不能反向生成操作，也不参与并发或权限判断。
+ * target_resume_document 是新协议的目标状态；operations / resume_json 只用于兼容
+ * 旧建议。preview 由当前草稿与可合并后的目标结果派生，不能反向生成写入动作，
+ * 也不参与并发或权限判断。
  */
 const ResumeDom = require('../../resume-dom');
+const { mergeResumeDocuments } = require('./resume-three-way-merge');
+const { hashJson } = require('./util');
 
 const FORMAT = 'resume-change-preview-v1';
 
@@ -280,7 +283,31 @@ function summarizeSemanticChange({
 function buildChangePreview(beforeValue, afterValue, options = {}) {
   const before = ResumeDom.toResumeDocument(beforeValue);
   const after = ResumeDom.toResumeDocument(afterValue);
-  const comparison = ResumeDom.compareDocuments(before, after);
+  const documentComparison = ResumeDom.compareDocuments(before, after);
+  const metadataChanges = [
+    ['page_setup', 'style', '页面设置'],
+    ['styles', 'style', '整体样式'],
+    ['assets', 'style', '文档资源'],
+    ['annotations', 'structure', '文档标记'],
+  ].filter(([key]) => hashJson(before[key]) !== hashJson(after[key]))
+    .map(([metadataKey, type, label]) => ({
+      type,
+      node_id: '',
+      label,
+      metadata_key: metadataKey,
+    }));
+  const comparison = {
+    ...documentComparison,
+    equal: documentComparison.equal && metadataChanges.length === 0,
+    changes: documentComparison.changes.concat(metadataChanges),
+    counts: {
+      ...(documentComparison.counts || {}),
+      style: count(documentComparison.counts, 'style')
+        + metadataChanges.filter((change) => change.type === 'style').length,
+      structure: count(documentComparison.counts, 'structure')
+        + metadataChanges.filter((change) => change.type === 'structure').length,
+    },
+  };
   const beforeItems = sideItems(comparison.changes, 'before', before);
   const afterItems = sideItems(comparison.changes, 'after', after);
   const beforeText = displayText(beforeItems, before);
@@ -325,7 +352,17 @@ function previewProposalOnResume(proposal, resume, revision) {
   if (!proposal || typeof proposal !== 'object') return null;
   const before = ResumeDom.toResumeDocument(resume);
   let after;
-  if (Array.isArray(proposal.operations) && proposal.operations.length) {
+  if (
+    proposal.merge_strategy === 'three_way_target_document'
+    && proposal.base_resume_json
+    && proposal.target_resume_document
+  ) {
+    after = mergeResumeDocuments({
+      base: proposal.base_resume_json,
+      target: proposal.target_resume_document,
+      current: before,
+    }).document;
+  } else if (Array.isArray(proposal.operations) && proposal.operations.length) {
     after = ResumeDom.applyDocumentOperations(before, proposal.operations, { allowStructure: true });
   } else if (proposal.resume_json && typeof proposal.resume_json === 'object') {
     after = ResumeDom.toResumeDocument(proposal.resume_json);

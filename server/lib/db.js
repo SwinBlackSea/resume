@@ -305,13 +305,14 @@ function reconcileAiTaskLifecycle(database) {
     }
     const messages = database
       .prepare(
-        `SELECT role, model_metadata_json
+        `SELECT task_id, role, model_metadata_json
          FROM ai_messages
          WHERE conversation_id = ?
          ORDER BY created_at ASC, id ASC`,
       )
       .all(task.conversation_id)
       .filter((message) => {
+        if (message.task_id) return message.task_id === task.id;
         try {
           return JSON.parse(message.model_metadata_json || '{}').task_id === task.id;
         } catch (_) {
@@ -332,13 +333,12 @@ function reconcileAiTaskLifecycle(database) {
       } catch (_) {
         metadata = {};
       }
-      const clarifying = metadata.result_type === 'CLARIFICATION_REQUIRED';
-      const confirmingPlan = metadata.result_type === 'PLAN_CONFIRMATION_REQUIRED';
-      const recoveredStatus = clarifying
-        ? 'clarifying'
-        : confirmingPlan
-          ? 'confirming_plan'
-          : 'completed';
+      const clarifying = (
+        metadata.result_type === 'MESSAGE'
+        && metadata.awaiting_user === true
+      ) || metadata.result_type === 'CLARIFICATION_REQUIRED'
+        || metadata.result_type === 'PLAN_CONFIRMATION_REQUIRED';
+      const recoveredStatus = clarifying ? 'clarifying' : 'completed';
       update.run(
         JSON.stringify({
           ...state,
@@ -490,6 +490,11 @@ function getDb() {
   if (!conversationColumns.some((column) => column.name === 'status')) {
     db.exec("ALTER TABLE ai_conversations ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
   }
+  const aiMessageColumns = db.prepare('PRAGMA table_info(ai_messages)').all();
+  if (!aiMessageColumns.some((column) => column.name === 'task_id')) {
+    db.exec('ALTER TABLE ai_messages ADD COLUMN task_id TEXT REFERENCES ai_tasks(id)');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS ix_ai_messages_task ON ai_messages(task_id, created_at)');
   const artifactColumns = db.prepare('PRAGMA table_info(artifacts)').all();
   if (!artifactColumns.some((column) => column.name === 'document_import_id')) {
     db.exec('ALTER TABLE artifacts ADD COLUMN document_import_id TEXT REFERENCES document_imports(id)');
