@@ -289,6 +289,14 @@ function compactResumeChangeEvents(database) {
 }
 
 function reconcileAiTaskLifecycle(database) {
+  // 局部 AI 的 processing 只代表当前进程内尚未返回的模型请求。服务重启后
+  // 这些请求不可能继续完成，必须收口为失败，避免形成永久悬挂记录。
+  database.prepare(
+    `UPDATE ai_action_requests
+     SET status = 'failed', requires_user_action = 0
+     WHERE action_type = 'RESUME_INLINE_REWRITE_PROPOSAL'
+       AND status = 'processing'`,
+  ).run();
   const tasks = database
     .prepare(
       `SELECT * FROM ai_tasks

@@ -1,5 +1,6 @@
 'use strict';
 
+const ResumeDom = require('../../../resume-dom');
 const { buildConversationMemory } = require('./memory-manager');
 const { SYSTEM_PROMPT } = require('./prompt');
 
@@ -87,10 +88,39 @@ function buildHarnessInput(options) {
   };
 }
 
+function compactResumeForModel(resumeValue) {
+  const resume = resumeValue && typeof resumeValue === 'object' ? resumeValue : {};
+  const result = {};
+  Object.entries(resume).forEach(([key, value]) => {
+    if ([
+      'content',
+      'task_base_content',
+      'previous_target_document',
+      'proposal_content',
+    ].includes(key) && value && typeof value === 'object') {
+      result[key] = ResumeDom.toAiContextDocument(value);
+      return;
+    }
+    result[key] = value;
+  });
+  return result;
+}
+
 function buildMessages(input) {
+  const modelWorkspace = {
+    ...input.workspace,
+    resume: compactResumeForModel(input.workspace && input.workspace.resume),
+  };
   const workspaceContext = {
-    workspace: input.workspace,
+    workspace: modelWorkspace,
     conversation_summary: input.conversation.summary,
+    resume_document_contract: {
+      context_format: ResumeDom.AI_CONTEXT_VERSION,
+      parent_child_relation: 'children',
+      presentation_fields_omitted: true,
+      existing_fragment_fields_omitted: 'inherit_from_base_document',
+      response_scope: 'minimum_changed_subtrees_only',
+    },
   };
   const focusContext = {
     request: input.request,
@@ -127,4 +157,4 @@ function buildMessages(input) {
   return messages;
 }
 
-module.exports = { buildHarnessInput, buildMessages };
+module.exports = { buildHarnessInput, buildMessages, compactResumeForModel };

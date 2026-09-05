@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1540" viewBox="0 0 1800 1540" role="img" aria-labelledby="title desc">
   <title id="title">简历星球自上而下整体架构图</title>
-  <desc id="desc">主调用链从 Web、API Server、Application Server、任务编排、执行服务到无状态 LLM；服务端按任务重建上下文，模型自然沟通或返回目标文档，再执行 A/B/C 三方合并。</desc>
+  <desc id="desc">完整 ResumeDocument 通过精简语义投影供全局与局部 AI 理解；全局 AI 返回稀疏目标变化与紧凑新增，服务端继承展示字段、装配完整目标文档并执行三方合并。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64748b"/></marker>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".10"/></filter>
@@ -15,7 +15,7 @@
   <text x="70" y="143" class="layer">01 · WEB</text>
   <rect x="220" y="112" width="1000" height="112" rx="18" fill="#eff6ff" stroke="#93c5fd" stroke-width="2" filter="url(#shadow)"/>
   <text x="252" y="151" class="card-title">Web Application</text>
-  <text x="252" y="181" class="card-body">三栏工作区：资料 ｜ 简历正文 ｜ AI 对话</text>
+  <text x="252" y="181" class="card-body">三栏工作区：资料 ｜ 简历正文（直改 / 就地 AI） ｜ AI 对话</text>
   <text x="780" y="151" class="card-title">Web Rendering Core</text>
   <text x="780" y="181" class="card-body">ResumeDom.Renderer · 当前画布 · 五级撤销/重做 · 历史比较</text>
 
@@ -34,9 +34,9 @@
   <rect x="180" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
   <text x="202" y="546" class="card-title">工作区领域</text><text x="202" y="577" class="card-body">项目 · 资料 · 岗位</text><text x="202" y="604" class="card-body">平级维护，不自动同步</text>
   <rect x="555" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
-  <text x="577" y="546" class="card-title">简历领域 / ResumeDocument</text><text x="577" y="577" class="card-body">完整文档 · 单一编辑节点 · 渲染投影</text><text x="577" y="604" class="card-body">草稿 · 双向修改事件 · 不可变版本</text>
+  <text x="577" y="546" class="card-title">简历领域 / ResumeDocument</text><text x="577" y="577" class="card-body">semantic kind · children 父子树 · 渲染</text><text x="577" y="604" class="card-body">完整草稿 · 修改事件 · 不可变版本</text>
   <rect x="930" y="510" width="330" height="132" rx="13" fill="#fff" stroke="#86efac"/>
-  <text x="952" y="546" class="card-title">智能与任务领域</text><text x="952" y="577" class="card-body">自然沟通 / 最终建议</text><text x="952" y="604" class="card-body">任务隔离 · 目标文档 · 三方合并</text>
+  <text x="952" y="546" class="card-title">智能与任务领域</text><text x="952" y="577" class="card-body">精简语义投影 · 稀疏变化 · 局部文字</text><text x="952" y="604" class="card-body">严格 JSON · 动态预算 · 三方合并</text>
 
   <path d="M720 688V736" class="arrow"/><text x="740" y="719" class="small">事务 Outbox</text>
   <text x="70" y="777" class="layer">04 · ORCHESTRATION</text>
@@ -49,11 +49,11 @@
   <rect x="80" y="900" width="1240" height="268" rx="18" fill="#fff" stroke="#fdba74" stroke-width="2"/>
   <text x="110" y="941" class="card-title">专用服务与 Worker</text>
   <rect x="110" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
-  <text x="132" y="1014" class="card-title">文档识别服务</text><text x="132" y="1045" class="card-body">PDF · DOCX · DOC · 图片</text><text x="132" y="1072" class="card-body">安全解析 · OCR · 排版候选</text><text x="132" y="1099" class="card-body">独立无网沙箱</text>
+  <text x="132" y="1014" class="card-title">文档识别服务</text><text x="132" y="1045" class="card-body">PDF · DOCX · DOC · 图片</text><text x="132" y="1072" class="card-body">统一 semantic kind + children 树</text><text x="132" y="1099" class="card-body">安全解析 · OCR · 排版候选</text>
   <rect x="410" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
   <text x="432" y="1014" class="card-title">OCR / Speech Worker</text><text x="432" y="1045" class="card-body">岗位图片 · 语音转写</text><text x="432" y="1072" class="card-body">返回待确认文本</text>
   <rect x="710" y="978" width="270" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
-  <text x="732" y="1014" class="card-title">AI Worker → Resume Harness</text><text x="732" y="1045" class="card-body">Task Context · Memory · Isolation</text><text x="732" y="1072" class="card-body">message / proposal → Target Document</text>
+  <text x="732" y="1014" class="card-title">AI Worker → Harnesses</text><text x="732" y="1045" class="card-body">全局：Fragments v2 / Compact Insertions</text><text x="732" y="1072" class="card-body">局部：Locked Text / Rebase / Apply</text>
   <rect x="1010" y="978" width="280" height="142" rx="13" fill="#fff7ed" stroke="#fdba74"/>
   <text x="1032" y="1014" class="card-title">Render Worker</text><text x="1032" y="1045" class="card-body">HTML · PDF · DOCX</text><text x="1032" y="1072" class="card-body">分页 · 溢出 · 质量检查</text>
 
@@ -80,5 +80,5 @@
 
   <rect x="80" y="1400" width="1650" height="92" rx="16" fill="#fff" stroke="#94a3b8" stroke-width="2"/>
   <text x="110" y="1435" class="note">关键边界</text>
-  <text x="110" y="1465" class="small">Web、模型和 Worker 都不能直接修改核心数据；用户确认后，由 Application Server 完成权限、revision、幂等和目标校验，再在事务中写入。</text>
+  <text x="110" y="1465" class="small">完整文档始终由服务端持有；AI 共享精简语义上下文但隔离状态，未经确认不能修改正文，确认后受控写入同一草稿。</text>
 </svg>

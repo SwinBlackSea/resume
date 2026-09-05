@@ -34,12 +34,15 @@ async function consumeChatStream(body, { idleMs = 30000, onActivity } = {}) {
   let content = '';
   let reasoningLength = 0;
   let usage = null;
+  let finishReason = null;
 
   const consumeLine = (line) => {
     const chunk = parseEventLine(line);
     if (!chunk) return;
     if (chunk.usage) usage = chunk.usage;
-    const delta = (chunk.choices && chunk.choices[0] && chunk.choices[0].delta) || {};
+    const choice = chunk.choices && chunk.choices[0] || {};
+    const delta = choice.delta || {};
+    if (choice.finish_reason) finishReason = String(choice.finish_reason);
     if (delta.reasoning_content) {
       reasoningLength += String(delta.reasoning_content).length;
       if (onActivity) onActivity({ type: 'thinking' });
@@ -61,7 +64,7 @@ async function consumeChatStream(body, { idleMs = 30000, onActivity } = {}) {
   buffer += decoder.decode();
   if (buffer.trim()) buffer.split(/\r?\n/).forEach(consumeLine);
 
-  return { content, reasoningLength, usage };
+  return { content, reasoningLength, usage, finishReason };
 }
 
 module.exports = { readWithIdleTimeout, parseEventLine, consumeChatStream };

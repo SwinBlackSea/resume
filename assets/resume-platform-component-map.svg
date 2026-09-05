@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1800" viewBox="0 0 2200 1800" role="img" aria-labelledby="title desc">
   <title id="title">简历星球核心技术组件分解图</title>
-  <desc id="desc">展开 Resume Harness、message/proposal 双结果协议、任务会话隔离、目标文档三方合并、Resume DOM 和 Renderer 的主关系。</desc>
+  <desc id="desc">展开统一 ResumeDocument 语义树、精简 AI 投影、全局稀疏变化与紧凑新增装配、局部文字 Harness、三方合并和 Renderer 的主关系。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#64748b"/></marker>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity=".1"/></filter>
@@ -10,17 +10,17 @@
   </defs>
   <rect width="2200" height="1800" fill="#f8fafc"/>
   <text x="60" y="58" class="title">简历星球 · 核心技术组件分解</text>
-  <text x="60" y="90" class="subtitle">AI 修改主链：Resume Harness → Target ResumeDocument → Three-way Merge / Policy → Resume DOM → Renderer</text>
+  <text x="60" y="90" class="subtitle">完整文档 → Semantic Projection ｜ 全局：Sparse Fragments → B → 三方合并 ｜ 局部：Locked Text</text>
 
   <rect x="50" y="120" width="1580" height="232" rx="18" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
   <text x="78" y="157" class="zone">Web Application</text>
   <rect x="80" y="182" width="330" height="126" rx="13" fill="#fff" stroke="#93c5fd" filter="url(#shadow)"/>
   <text x="102" y="216" class="card-title">Workspace Shell</text><text x="102" y="245" class="body">三栏布局 · Dialog · 响应式工作区</text><text x="102" y="278" class="path">index.html</text>
   <rect x="445" y="182" width="330" height="126" rx="13" fill="#fff" stroke="#93c5fd" filter="url(#shadow)"/>
-  <text x="467" y="216" class="card-title">State / API Client</text><text x="467" y="245" class="body">自动保存 · 五级撤销/重做 · SSE 恢复</text><text x="467" y="278" class="path">index.html · IndexedDB</text>
+  <text x="467" y="216" class="card-title">State / API Client</text><text x="467" y="245" class="body">自动保存 · 五级撤销/重做 · SSE 恢复</text><text x="467" y="278" class="path">index.html · REST / SSE Client</text>
   <rect x="810" y="172" width="790" height="146" rx="13" fill="#fff" stroke="#60a5fa" stroke-width="2" filter="url(#shadow)"/>
   <text x="835" y="207" class="card-title">Web Rendering Core</text>
-  <text x="835" y="236" class="body">ResumeDom.Renderer · 现有文字直改 · 当前完整文档视图</text>
+  <text x="835" y="236" class="body">ResumeDom.Renderer · 文字直改 · 就地 AI · 当前完整文档</text>
   <text x="835" y="263" class="body">Document Import Preview · Version Detail · Compare Highlight</text>
   <text x="835" y="294" class="path">index.html → resume-dom.js</text>
 
@@ -29,19 +29,19 @@
   <text x="78" y="429" class="zone">AI Change &amp; Shared Document Core</text>
   <path d="M420 524H448" class="arrow"/><path d="M790 524H818" class="arrow"/><path d="M1160 524H1188" class="arrow"/>
   <rect x="80" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#4ade80" stroke-width="2" filter="url(#shadow)"/>
-  <text x="103" y="478" class="card-title">Resume Harness</text>
-  <text x="103" y="507" class="body">message 自然沟通 · proposal 最终建议</text>
-  <text x="103" y="534" class="body">用户 · 项目 · 会话 · 任务隔离</text>
+  <text x="103" y="478" class="card-title">Global / Inline Harness</text>
+  <text x="103" y="507" class="body">共享：全文 + ID + kind + children 精简投影</text>
+  <text x="103" y="534" class="body">全局稀疏变化 / 局部锁定文字</text>
   <text x="103" y="571" class="path">server/lib/resume-harness/*</text>
   <rect x="450" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
-  <text x="473" y="478" class="card-title">Target Document / Merge / Policy</text>
-  <text x="473" y="507" class="body">完整目标文档 · A/B/C 三方合并</text>
-  <text x="473" y="534" class="body">内容守恒 · 实际差异 · 应用授权</text>
+  <text x="473" y="478" class="card-title">Merge / Rebase / Policy</text>
+  <text x="473" y="507" class="body">全局 A/B/C 合并 · 局部选区重放</text>
+  <text x="473" y="534" class="body">确认顺序 · 内容守恒 · 应用授权</text>
   <text x="473" y="571" class="path">resume-three-way-merge · change-policy</text>
   <rect x="820" y="444" width="340" height="150" rx="13" fill="#fff" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
   <text x="843" y="478" class="card-title">Resume DOM Engine</text>
-  <text x="843" y="507" class="body">规范化、校验并渲染完整 ResumeDocument</text>
-  <text x="843" y="534" class="body">merge/split 编辑节点 · 禁止 editable 嵌套</text>
+  <text x="843" y="507" class="body">完整文档 · semantic kind · children 父子树</text>
+  <text x="843" y="534" class="body">精简投影 · 字段继承 · 禁止 editable 嵌套</text>
   <text x="843" y="571" class="path">resume-dom.js</text>
   <rect x="1190" y="444" width="410" height="150" rx="13" fill="#fff" stroke="#16a34a" stroke-width="2" filter="url(#shadow)"/>
   <text x="1213" y="478" class="card-title">Renderer / Projection</text>
@@ -57,7 +57,7 @@
   <rect x="485" y="722" width="690" height="198" rx="13" fill="#fff" stroke="#a78bfa" stroke-width="2" filter="url(#shadow)"/>
   <text x="508" y="756" class="card-title">Route / Domain Modules</text>
   <text x="508" y="786" class="body">Workspace · Profile · Jobs · Uploads</text>
-  <text x="508" y="813" class="body">Document Imports · Draft · AI · Versions</text>
+  <text x="508" y="813" class="body">Document Imports · Draft · Global / Inline AI</text>
   <text x="508" y="840" class="body">Generations · Artifacts</text>
   <text x="508" y="873" class="path">server/modules/*.js</text>
   <rect x="1210" y="732" width="390" height="178" rx="13" fill="#fff" stroke="#c4b5fd" filter="url(#shadow)"/>
@@ -76,9 +76,9 @@
   <text x="78" y="1219" class="zone">Execution Pipelines</text>
   <rect x="80" y="1244" width="470" height="292" rx="14" fill="#fff7ed" stroke="#fdba74" filter="url(#shadow)"/>
   <text x="103" y="1278" class="card-title">AI Pipeline</text>
-  <text x="103" y="1310" class="body">AI Module · Context / Memory / Prompt</text>
-  <text x="123" y="1342" class="body">完整 ResumeDocument · 焦点节点 · 可恢复任务</text>
-  <text x="123" y="1369" class="body">双结果 Schema · 任务上下文重建</text>
+  <text x="103" y="1310" class="body">Semantic Projection · Sparse Fragments / Budget</text>
+  <text x="123" y="1342" class="body">Inline AI · Locked Text / Request Order / Rebase</text>
+  <text x="123" y="1369" class="body">共享精简语义上下文 · 隔离会话与状态</text>
   <text x="103" y="1405" class="body">DeepSeek Client → DeepSeek LLM</text>
   <text x="123" y="1437" class="body">HTTP/Timeout/Abort · SSE Decoder</text>
   <text x="123" y="1464" class="body">JSON Extractor · Error Mapping</text>
@@ -90,7 +90,7 @@
   <text x="628" y="1342" class="body">Input Validator · Command Sandbox</text>
   <text x="628" y="1369" class="body">PDF Parser · DOCX/DOC Parser · Image/OCR Adapter</text>
   <text x="628" y="1396" class="body">Semantic Analyzer（复用 DeepSeek Client）</text>
-  <text x="628" y="1423" class="body">Candidate Builder（复用 Resume DOM Engine）</text>
+  <text x="628" y="1423" class="body">统一 semantic kind + children Candidate</text>
   <text x="628" y="1450" class="body">Quality Gate · Constants · Safe Errors</text>
   <text x="608" y="1518" class="path">server/lib/document-recognition/*</text>
   <rect x="1190" y="1244" width="410" height="292" rx="14" fill="#fff7ed" stroke="#fdba74" filter="url(#shadow)"/>

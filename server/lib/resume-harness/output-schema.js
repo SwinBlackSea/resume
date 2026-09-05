@@ -17,6 +17,13 @@ const LEGACY_MESSAGE_TYPES = new Set([
   'PLAN_CONFIRMATION_REQUIRED',
 ]);
 
+function outputSchemaError(message, details = {}) {
+  const error = new Error(message);
+  error.code = 'MODEL_OUTPUT_SCHEMA_INVALID';
+  Object.assign(error, details);
+  return error;
+}
+
 function findForbiddenKey(value, path = '$') {
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
@@ -73,17 +80,21 @@ function directProposalAction(raw, lockedScope) {
 
 function normalizeModelOutput(raw, lockedScope) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('模型输出不是 JSON 对象');
+    throw outputSchemaError('模型输出不是 JSON 对象');
   }
   const forbidden = findForbiddenKey(raw);
-  if (forbidden) throw new Error(`模型输出包含不允许的内容关系字段：${forbidden}`);
+  if (forbidden) {
+    const error = new Error(`模型输出包含不允许的内容关系字段：${forbidden}`);
+    error.code = 'MODEL_OUTPUT_FORBIDDEN';
+    throw error;
+  }
 
   const explicitProtocolType = String(raw.type || '').trim().toLowerCase();
   const legacyResultType = String(raw.result_type || '').trim().toUpperCase();
   let resultType;
   if (explicitProtocolType) {
     if (!['message', 'proposal'].includes(explicitProtocolType)) {
-      throw new Error(`模型输出包含未知 type：${explicitProtocolType}`);
+      throw outputSchemaError(`模型输出包含未知 type：${explicitProtocolType}`);
     }
     resultType = explicitProtocolType.toUpperCase();
   } else if (legacyResultType === 'PROPOSAL') {
@@ -96,11 +107,11 @@ function normalizeModelOutput(raw, lockedScope) {
     resultType = hasActions || hasDirectProposal ? 'PROPOSAL' : 'MESSAGE';
   }
   if (!RESULT_TYPES.has(resultType)) {
-    throw new Error(`模型输出包含未知 result_type：${resultType}`);
+    throw outputSchemaError(`模型输出包含未知 result_type：${resultType}`);
   }
 
   const content = String(raw.content ?? raw.reply ?? '').trim();
-  if (!content) throw new Error('模型输出缺少 content');
+  if (!content) throw outputSchemaError('模型输出缺少 content');
 
   const rawClarification = raw.clarification && typeof raw.clarification === 'object'
     ? raw.clarification
@@ -158,4 +169,5 @@ module.exports = {
   normalizeQuickReplies,
   findForbiddenKey,
   FORBIDDEN_RELATION_KEYS,
+  outputSchemaError,
 };

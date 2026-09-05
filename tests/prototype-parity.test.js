@@ -289,11 +289,16 @@ test('生成进度浮层与引导浮层文案一致', () => {
   );
 });
 
-test('AI 助手面板：初始气泡与快捷指令一致', () => {
-  assert.deepStrictEqual(
-    texts(app, '#chat-messages .bubble'),
-    texts(proto, '#chat-messages .bubble'),
-    '初始欢迎气泡必须一致',
+test('AI 助手面板：保留全局入口并说明就地改写边界', () => {
+  assert.match(
+    texts(app, '#chat-messages .bubble').join(' '),
+    /直接询问整份简历/,
+    '全局 AI 的原有入口承诺必须保留',
+  );
+  assert.match(
+    texts(app, '#chat-messages .bubble').join(' '),
+    /就地改写.*调整结构或联动其他内容/,
+    '新增入口必须向新手说明局部与全局的分工',
   );
   assert.deepStrictEqual(
     texts(app, '.assistant-quick button'),

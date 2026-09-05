@@ -4,6 +4,17 @@ const { createDeepSeekClient } = require('../deepseek-client');
 const { buildHarnessInput, buildMessages } = require('./context-builder');
 const { buildConversationMemory, selectRecentMessages } = require('./memory-manager');
 const { runResumeHarness } = require('./orchestrator');
+const {
+  runInlineRewriteHarness,
+  INLINE_PROMPT_VERSION,
+  INLINE_SCHEMA_VERSION,
+} = require('./inline-rewrite');
+const {
+  TARGET_FRAGMENTS_FORMAT,
+  LEGACY_TARGET_FRAGMENTS_FORMAT,
+  materializeTargetFragments,
+} = require('./target-fragments');
+const { calculateOutputBudget } = require('./output-budget');
 const { PROMPT_VERSION, SCHEMA_VERSION, SYSTEM_PROMPT } = require('./prompt');
 
 let testModelClient = null;
@@ -24,6 +35,15 @@ async function complete(input, options = {}) {
   });
 }
 
+async function completeInlineRewrite(input, options = {}) {
+  return runInlineRewriteHarness({
+    input,
+    modelClient: options.modelClient || resolveModelClient(),
+    signal: options.signal,
+    onActivity: options.onActivity,
+  });
+}
+
 function setModelClientForTests(client) {
   if (process.env.NODE_ENV !== 'test') {
     throw new Error('测试模型只能在 NODE_ENV=test 时注入');
@@ -37,6 +57,7 @@ function setModelClientForTests(client) {
 
 module.exports = {
   complete,
+  completeInlineRewrite,
   buildHarnessInput,
   buildMessages,
   buildConversationMemory,
@@ -45,4 +66,10 @@ module.exports = {
   PROMPT_VERSION,
   SCHEMA_VERSION,
   SYSTEM_PROMPT,
+  INLINE_PROMPT_VERSION,
+  INLINE_SCHEMA_VERSION,
+  TARGET_FRAGMENTS_FORMAT,
+  LEGACY_TARGET_FRAGMENTS_FORMAT,
+  materializeTargetFragments,
+  calculateOutputBudget,
 };

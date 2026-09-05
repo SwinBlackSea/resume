@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS ai_action_requests (
   target_id            TEXT,
   payload_json         TEXT NOT NULL DEFAULT '{}',
   requires_user_action INTEGER NOT NULL DEFAULT 1,
-  status               TEXT NOT NULL DEFAULT 'proposed', -- proposed|awaiting_confirmation|superseded|stale|applied|rejected|failed|reverted
+  status               TEXT NOT NULL DEFAULT 'proposed', -- processing|proposed|awaiting_confirmation|superseded|stale|applied|rejected|failed|reverted
   expected_revision    INTEGER,
   policy_version       TEXT NOT NULL DEFAULT 'policy-v2',
   applied_at           TEXT,
@@ -308,7 +308,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   progress           INTEGER NOT NULL DEFAULT 0,
   model_provider     TEXT NOT NULL DEFAULT 'local-rule-engine',
   model_name         TEXT NOT NULL DEFAULT 'resume-rule-v1',
-  prompt_version     TEXT NOT NULL DEFAULT 'resume-harness-v16-message-proposal',
+  prompt_version     TEXT NOT NULL DEFAULT 'resume-harness-v19-strict-flow-and-fragments',
   attempt_count      INTEGER NOT NULL DEFAULT 0,
   started_at         TEXT,
   finished_at        TEXT,
@@ -425,6 +425,8 @@ CREATE INDEX IF NOT EXISTS ix_ai_tasks_scope ON ai_tasks(conversation_id, scope_
 CREATE INDEX IF NOT EXISTS ix_ai_tasks_owner_conversation
   ON ai_tasks(owner_id, conversation_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS ix_actions_owner_status ON ai_action_requests(owner_id, status);
+CREATE INDEX IF NOT EXISTS ix_actions_inline_target
+  ON ai_action_requests(owner_id, action_type, target_id, status);
 CREATE INDEX IF NOT EXISTS ix_change_events_project ON resume_change_events(project_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_change_events_retention
   ON resume_change_events(snapshot_version_id, reverted_at, created_at);

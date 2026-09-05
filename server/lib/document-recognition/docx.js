@@ -541,6 +541,7 @@ function flattenNativeBlocks(pages) {
         page: pageNumber,
         order: blocks.filter((entry) => entry.page === pageNumber).length,
         kind: child.kind === 'paragraph' ? 'paragraph' : 'heading',
+        semantic_kind: child.kind,
         text,
         confidence: 1,
         style: child.style_id,

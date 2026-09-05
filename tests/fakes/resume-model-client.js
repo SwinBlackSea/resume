@@ -43,6 +43,31 @@ function detectProfileSave(text) {
 }
 
 function buildOutput(input) {
+  if (input.target && input.request && input.request.instruction) {
+    const source = String(input.target.source_text || '');
+    const instruction = String(input.request.instruction || '');
+    if (/(?:新增|添加|增加|删除|移除).{0,12}(?:模块|段落|节点|区块)|移动|其他位置|整份简历/.test(instruction)) {
+      return {
+        type: 'message',
+        content: '这项要求会调整简历结构或其他位置，请在右侧 AI 对话中处理。',
+        handoff: true,
+      };
+    }
+    let suggestion = source;
+    if (/简洁|精简|精炼/.test(instruction)) {
+      suggestion = source.replace(/，并且/g, '，').replace(/非常/g, '').replace(/\s+/g, ' ').trim();
+    } else if (/专业|成果|岗位|调整|改写/.test(instruction)) {
+      suggestion = source.endsWith('。') ? source : `${source}。`;
+      if (suggestion === source) suggestion = source.replace('，', '；');
+    }
+    if (suggestion === source) suggestion = `${source}（已优化）`;
+    return {
+      type: 'proposal',
+      content: '已结合整份简历调整这处表达，未改动其他内容。',
+      suggestion,
+      summary: '优化当前文字表达',
+    };
+  }
   const text = String(input.text || '');
   const base = String(input.editingBase || input.currentText || '');
   const actions = [];

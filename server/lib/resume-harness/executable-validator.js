@@ -12,6 +12,8 @@ const {
   normalizeChangeConstraints,
   evaluateChange,
 } = require('../resume-change-policy');
+const { materializeTargetFragments } = require('./target-fragments');
+const { flowConfirmationErrors } = require('./flow-policy');
 
 const ACTION_TYPES = new Set([
   'PROFILE_SAVE_PROPOSAL',
@@ -35,9 +37,43 @@ function validateResumeRewrite(action, input, index) {
   }
 
   let operations = Array.isArray(proposal.operations) ? proposal.operations : [];
-  const targetDocument = proposal.target_resume_document
+  let targetDocument = proposal.target_resume_document
     || proposal.resume_dom
     || proposal.resume_json;
+  if (proposal.target_resume_fragments) {
+    try {
+      const materialized = materializeTargetFragments(
+        input && input.workspace && input.workspace.resume
+          ? input.workspace.resume.proposal_content || input.workspace.resume.content
+          : {},
+        proposal.target_resume_fragments,
+      );
+      proposal.target_resume_fragments = {
+        format: materialized.format,
+        changes: materialized.changes,
+        ...(materialized.insertions.length
+          ? { insertions: materialized.insertions }
+          : {}),
+      };
+      if (
+        targetDocument
+        && typeof targetDocument === 'object'
+        && hashJson(ResumeDom.toResumeDocument(
+          targetDocument,
+          { allowLegacyAiScope: false },
+        ))
+          !== hashJson(materialized.document)
+      ) {
+        errors.push(`actions[${index}] 的目标子树与完整目标文档不一致`);
+        return errors;
+      }
+      proposal.target_resume_document = materialized.document;
+      targetDocument = materialized.document;
+    } catch (error) {
+      errors.push(`actions[${index}] 的目标子树无效：${error.message}`);
+      return errors;
+    }
+  }
   const suggestion = String(proposal.suggestion || '').trim();
   if (
     (!targetDocument || typeof targetDocument !== 'object')
@@ -57,7 +93,10 @@ function validateResumeRewrite(action, input, index) {
     let nextResume;
     let simpleFocusedTextRewrite = false;
     if (targetDocument && typeof targetDocument === 'object') {
-      nextResume = ResumeDom.toResumeDocument(targetDocument);
+      nextResume = ResumeDom.toResumeDocument(
+        targetDocument,
+        { allowLegacyAiScope: false },
+      );
       if (operations.length) {
         const compiled = compileResumeOperations(currentResume, operations);
         if (hashJson(compiled.document) !== hashJson(nextResume)) {
@@ -162,6 +201,7 @@ function validateExecutableResponse(response, input) {
       }
     }
   });
+  if (!errors.length) errors.push(...flowConfirmationErrors(response, input));
   return errors;
 }
 

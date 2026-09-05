@@ -4,12 +4,15 @@ const { parseJsonObject } = require('./json');
 const { consumeChatStream } = require('./sse');
 
 class DeepSeekClientError extends Error {
-  constructor(message, { code = 'DEEPSEEK_ERROR', status = null, cause = null } = {}) {
+  constructor(message, details = {}) {
     super(message);
     this.name = 'DeepSeekClientError';
-    this.code = code;
-    this.status = status;
-    this.cause = cause;
+    this.code = details.code || 'DEEPSEEK_ERROR';
+    this.status = details.status || null;
+    this.cause = details.cause || null;
+    Object.entries(details).forEach(([key, value]) => {
+      if (!['code', 'status', 'cause'].includes(key)) this[key] = value;
+    });
   }
 }
 
@@ -30,10 +33,21 @@ function createDeepSeekClient(options = {}) {
   );
   const idleMs = positiveNumber(options.idleMs || process.env.RESUME_LLM_IDLE_MS, 30000);
   const totalMs = positiveNumber(options.totalMs || process.env.RESUME_LLM_TOTAL_MS, 180000);
-  const maxTokens = positiveNumber(options.maxTokens || process.env.RESUME_LLM_MAX_TOKENS, 4096);
+  const defaultMaxTokens = positiveNumber(
+    options.maxTokens || process.env.RESUME_LLM_MAX_TOKENS,
+    4096,
+  );
+  const maxTokensLimit = positiveNumber(
+    options.maxTokensLimit || process.env.RESUME_LLM_MAX_TOKENS_LIMIT,
+    32768,
+  );
   const fetchImpl = options.fetchImpl || fetch;
 
-  async function generate({ messages, signal, onActivity } = {}) {
+  async function generate({ messages, signal, onActivity, maxTokens: requestedMaxTokens } = {}) {
+    const effectiveMaxTokens = Math.min(
+      positiveNumber(requestedMaxTokens, defaultMaxTokens),
+      maxTokensLimit,
+    );
     if (!apiKey) {
       throw new DeepSeekClientError('未配置 RESUME_LLM_API_KEY', {
         code: 'DEEPSEEK_NOT_CONFIGURED',
@@ -68,7 +82,7 @@ function createDeepSeekClient(options = {}) {
           stream_options: { include_usage: true },
           response_format: { type: 'json_object' },
           temperature: Number(options.temperature ?? process.env.RESUME_LLM_TEMPERATURE ?? 0.2),
-          max_tokens: maxTokens,
+          max_tokens: effectiveMaxTokens,
         }),
         signal: controller.signal,
       });
@@ -92,11 +106,32 @@ function createDeepSeekClient(options = {}) {
           if (onActivity) onActivity(event);
         },
       });
+      const truncated = ['length', 'max_tokens'].includes(String(streamed.finishReason || ''));
+      if (truncated) {
+        throw new DeepSeekClientError(
+          `模型输出达到长度上限（正文 ${streamed.content.length} 字）`,
+          {
+            code: 'DEEPSEEK_OUTPUT_TRUNCATED',
+            content_length: streamed.content.length,
+            reasoning_length: streamed.reasoningLength,
+            finish_reason: streamed.finishReason,
+            usage: streamed.usage,
+            max_tokens: effectiveMaxTokens,
+          },
+        );
+      }
       const output = parseJsonObject(streamed.content);
       if (!output) {
         throw new DeepSeekClientError(
           `模型未返回合法 JSON（正文 ${streamed.content.length} 字）`,
-          { code: 'DEEPSEEK_INVALID_JSON' },
+          {
+            code: 'DEEPSEEK_INVALID_JSON',
+            content_length: streamed.content.length,
+            reasoning_length: streamed.reasoningLength,
+            finish_reason: streamed.finishReason,
+            usage: streamed.usage,
+            max_tokens: effectiveMaxTokens,
+          },
         );
       }
       return {
@@ -105,6 +140,8 @@ function createDeepSeekClient(options = {}) {
         model,
         usage: streamed.usage,
         reasoning_length: streamed.reasoningLength,
+        finish_reason: streamed.finishReason,
+        max_tokens: effectiveMaxTokens,
       };
     } catch (error) {
       if (error instanceof DeepSeekClientError) throw error;

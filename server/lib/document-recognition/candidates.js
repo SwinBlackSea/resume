@@ -26,6 +26,17 @@ function compactStyle(style) {
   );
 }
 
+function semantic(kind, extra = {}) {
+  return { kind, ...extra };
+}
+
+function blockSemanticKind(block, fallback = 'paragraph') {
+  const kind = String(block && (block.semantic_kind || block.kind) || '').toLowerCase();
+  if (kind === 'title' || kind === 'document_title') return 'document_title';
+  if (kind === 'heading' || kind === 'section_title') return 'section_title';
+  return fallback;
+}
+
 function fontFamily(value) {
   const family = String(value || '').trim();
   if (!family) return undefined;
@@ -186,6 +197,7 @@ function importedParagraphNode(paragraph, context = {}) {
       tag,
       {
         class: `editable imported-paragraph imported-${paragraph.kind}`,
+        ...(paragraph.block_id ? { 'data-block-id': paragraph.block_id } : {}),
         ...(useRichRuns ? { 'data-rich-text': 'true' } : {}),
         ...(bulletRow ? { 'data-rich-layout': 'bullet' } : {}),
         ...(timelineRow ? { 'data-rich-layout': 'timeline' } : {}),
@@ -197,6 +209,11 @@ function importedParagraphNode(paragraph, context = {}) {
         label: paragraph.kind === 'heading' || paragraph.kind === 'title'
           ? '标题'
           : paragraph.text.trim().slice(0, 36) || '正文',
+        semantic: semantic(
+          paragraph.kind === 'title'
+            ? 'document_title'
+            : (paragraph.kind === 'heading' ? 'section_title' : 'paragraph'),
+        ),
       },
     ),
     style: compactStyle(style),
@@ -259,9 +276,11 @@ function importedTableNode(table, context = {}) {
             ? importedTableNode(child, context)
             : importedParagraphNode(child, context)
         )),
+        { semantic: semantic('table_cell') },
       ),
       style: cellCss(cell, table),
     })),
+    { semantic: semantic('table_row') },
   ));
   return {
     ...ResumeDom.elementNode(
@@ -269,6 +288,7 @@ function importedTableNode(table, context = {}) {
       'table',
       { class: 'imported-table' },
       [ResumeDom.elementNode(`import-${table.id}-body`, 'tbody', {}, rows)],
+      { semantic: semantic('table') },
     ),
     style: tableStyle,
   };
@@ -297,6 +317,49 @@ function collectNativeParagraphs(nativeDocument) {
   }
   (nativeDocument.pages || []).forEach((page) => page.children.forEach(visit));
   return paragraphs;
+}
+
+function collectNativePageBlocks(page) {
+  const blocks = [];
+  function visit(child) {
+    if (!child) return;
+    if (child.type === 'paragraph') {
+      if (child.block_id && child.text && child.text.trim()) {
+        blocks.push({
+          id: child.block_id,
+          page: page.number,
+          kind: child.kind === 'paragraph' ? 'paragraph' : 'heading',
+          semantic_kind: child.kind,
+          text: child.text,
+        });
+      }
+      return;
+    }
+    if (child.type === 'table') {
+      child.rows.forEach((row) => row.cells.forEach(
+        (cell) => cell.children.forEach(visit),
+      ));
+    }
+  }
+  (page.children || []).forEach(visit);
+  return blocks;
+}
+
+function firstPageBySection(blocks, sections) {
+  const membership = new Map();
+  sections.forEach((section, sectionIndex) => {
+    if (section.title_block_id) membership.set(String(section.title_block_id), sectionIndex);
+    (section.block_ids || []).forEach((id) => membership.set(String(id), sectionIndex));
+  });
+  const result = new Map();
+  blocks.forEach((block) => {
+    const sectionIndex = membership.get(String(block.id));
+    if (sectionIndex === undefined) return;
+    const pageNumber = Number(block.page || 1);
+    const current = result.get(sectionIndex);
+    if (current === undefined || pageNumber < current) result.set(sectionIndex, pageNumber);
+  });
+  return result;
 }
 
 function deriveFontMetricScale(nativeDocument, geometryPages) {
@@ -329,7 +392,69 @@ function deriveFontMetricScale(nativeDocument, geometryPages) {
   return Number(candidates[Math.floor(candidates.length / 2)].toFixed(4));
 }
 
-function buildNativeDomDocument(nativeDocument, geometryPages) {
+function wrapPageChildrenBySemanticSections(children, blocks, semanticValue, pageNumber) {
+  const ordered = orderedBlocks(blocks || [], semanticValue || {});
+  const sections = effectiveSections(ordered, semanticValue || {});
+  const membership = new Map();
+  sections.forEach((section, sectionIndex) => {
+    if (section.title_block_id) membership.set(String(section.title_block_id), sectionIndex);
+    (section.block_ids || []).forEach((id) => membership.set(String(id), sectionIndex));
+  });
+  const sectionFirstPages = firstPageBySection(ordered, sections);
+  const runs = [];
+  let current = null;
+  (children || []).forEach((node) => {
+    const blockId = node
+      && node.attributes
+      && node.attributes['data-block-id'];
+    const explicitIndex = blockId && membership.has(String(blockId))
+      ? membership.get(String(blockId))
+      : null;
+    const sectionIndex = explicitIndex !== null
+      ? explicitIndex
+      : (current ? current.section_index : -1);
+    if (!current || current.section_index !== sectionIndex) {
+      current = { section_index: sectionIndex, nodes: [] };
+      runs.push(current);
+    }
+    current.nodes.push(node);
+  });
+  return runs.map((run, runIndex) => {
+    const sectionInfo = run.section_index >= 0 ? sections[run.section_index] : null;
+    const titleBlock = sectionInfo && sectionInfo.title_block_id
+      ? ordered.find((block) => String(block.id) === String(sectionInfo.title_block_id))
+      : null;
+    const groupId = run.section_index >= 0
+      ? `import-section-${run.section_index + 1}`
+      : `import-unclassified-${pageNumber}-${runIndex + 1}`;
+    return {
+      ...ResumeDom.elementNode(
+        `${groupId}-page-${pageNumber}-part-${runIndex + 1}`,
+        'section',
+        {
+          class: 'imported-semantic-section',
+          'data-semantic-section-id': groupId,
+        },
+        run.nodes,
+        {
+          label: titleBlock
+            ? String(titleBlock.text || '').slice(0, 60)
+            : `第 ${pageNumber} 页内容`,
+          semantic: semantic('section', {
+            group_id: groupId,
+            ...(sectionFirstPages.has(run.section_index)
+              && sectionFirstPages.get(run.section_index) !== Number(pageNumber)
+              ? { continuation: true }
+              : {}),
+          }),
+        },
+      ),
+      style: { display: 'contents' },
+    };
+  });
+}
+
+function buildNativeDomDocument(nativeDocument, geometryPages, semanticValue = {}) {
   const section = nativeDocument.section || {};
   const width = Number(section.width || 11906);
   const height = Number(section.height || 16838);
@@ -344,12 +469,19 @@ function buildNativeDomDocument(nativeDocument, geometryPages) {
       && nativeDocument.defaults.run.font_size,
     fontMetricScale,
   };
+  const allBlocks = (nativeDocument.pages || []).flatMap(collectNativePageBlocks);
   const rootChildren = nativeDocument.pages.map((page) => {
     const children = page.children.map((child) => (
       child.type === 'table'
         ? importedTableNode(child, context)
         : importedParagraphNode(child, context)
     ));
+    const structuredChildren = wrapPageChildrenBySemanticSections(
+      children,
+      allBlocks,
+      semanticValue,
+      page.number,
+    );
     return {
       ...ResumeDom.elementNode(
         `imported-page-${page.number}`,
@@ -362,8 +494,8 @@ function buildNativeDomDocument(nativeDocument, geometryPages) {
           'data-page-height-pt': String(heightPt),
           'data-font-metric-scale': String(fontMetricScale),
         },
-        children,
-        { label: `第 ${page.number} 页` },
+        structuredChildren,
+        { label: `第 ${page.number} 页`, semantic: semantic('page') },
       ),
       style: compactStyle({
         width: `${widthPt}pt`,
@@ -402,11 +534,18 @@ function buildNativeDomDocument(nativeDocument, geometryPages) {
       'article',
       { class: 'resume-dom-root imported-resume imported-native-resume' },
       rootChildren,
+      { semantic: semantic('document') },
     ),
   });
 }
 
-function buildPositionedDomDocument(pages) {
+function buildPositionedDomDocument(pages, semanticValue = {}) {
+  const allBlocks = (pages || []).flatMap((page, pageIndex) => (
+    (page.blocks || []).map((block) => ({
+      ...block,
+      page: block.page || page.number || pageIndex + 1,
+    }))
+  ));
   const rootChildren = pages.map((page, pageIndex) => {
     const width = Number(page.width || 595.28);
     const height = Number(page.height || 841.89);
@@ -416,13 +555,19 @@ function buildPositionedDomDocument(pages) {
       return {
         ...ResumeDom.elementNode(
           stableNodeId('import-positioned', block, index),
-          block.kind === 'heading' ? 'h2' : 'p',
-          { class: 'editable imported-positioned-text' },
+          blockSemanticKind(block) === 'document_title'
+            ? 'h1'
+            : (blockSemanticKind(block) === 'section_title' ? 'h2' : 'p'),
+          {
+            class: 'editable imported-positioned-text',
+            'data-block-id': block.id,
+          },
           [],
           {
             text: block.text,
             editable: true,
-            label: block.kind === 'heading' ? '标题' : '正文',
+            label: blockSemanticKind(block) === 'paragraph' ? '正文' : '标题',
+            semantic: semantic(blockSemanticKind(block)),
           },
         ),
         style: compactStyle(positioned ? {
@@ -442,13 +587,22 @@ function buildPositionedDomDocument(pages) {
         }),
       };
     });
+    const structuredChildren = wrapPageChildrenBySemanticSections(
+      children,
+      allBlocks,
+      semanticValue,
+      page.number || pageIndex + 1,
+    );
     return {
       ...ResumeDom.elementNode(
         `imported-page-${page.number || pageIndex + 1}`,
         'section',
         { class: 'imported-document-page imported-positioned-page' },
-        children,
-        { label: `第 ${page.number || pageIndex + 1} 页` },
+        structuredChildren,
+        {
+          label: `第 ${page.number || pageIndex + 1} 页`,
+          semantic: semantic('page'),
+        },
       ),
       style: {
         position: 'relative',
@@ -468,6 +622,7 @@ function buildPositionedDomDocument(pages) {
       'article',
       { class: 'resume-dom-root imported-resume imported-positioned-resume' },
       rootChildren,
+      { semantic: semantic('document') },
     ),
   });
 }
@@ -485,7 +640,7 @@ function sceneSpanNode(span, pageNumber, lineIndex, spanIndex) {
         'data-scene-text-width-pt': String(Number(width.toFixed(3))),
       },
       [],
-      { text: span.text || '' },
+      { text: span.text || '', semantic: semantic('inline') },
     ),
     style: compactStyle({
       position: 'absolute',
@@ -504,8 +659,227 @@ function sceneSpanNode(span, pageNumber, lineIndex, spanIndex) {
   };
 }
 
-function buildPageSceneDomDocument(pageScene) {
+function bboxMatchScore(left, right) {
+  if (!left || !right) return 0;
+  const leftX2 = Number(left.x || 0) + Number(left.width || 0);
+  const leftY2 = Number(left.y || 0) + Number(left.height || 0);
+  const rightX2 = Number(right.x || 0) + Number(right.width || 0);
+  const rightY2 = Number(right.y || 0) + Number(right.height || 0);
+  const width = Math.max(
+    0,
+    Math.min(leftX2, rightX2) - Math.max(Number(left.x || 0), Number(right.x || 0)),
+  );
+  const height = Math.max(
+    0,
+    Math.min(leftY2, rightY2) - Math.max(Number(left.y || 0), Number(right.y || 0)),
+  );
+  const intersection = width * height;
+  const minimumArea = Math.max(
+    1,
+    Math.min(
+      Number(left.width || 0) * Number(left.height || 0),
+      Number(right.width || 0) * Number(right.height || 0),
+    ),
+  );
+  return Math.min(1, intersection / minimumArea);
+}
+
+function alignSceneLines(page, blocks) {
+  const pageBlocks = blocks
+    .filter((block) => Number(block.page) === Number(page.number))
+    .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
+  const states = pageBlocks.map((block) => ({
+    block,
+    normalized: comparisonText(block.text),
+    matched: '',
+  }));
+  let cursor = 0;
+  return (page.text_nodes || []).map((line, lineIndex) => {
+    const lineText = comparisonText(line.text);
+    let best = null;
+    states.forEach((state, stateIndex) => {
+      if (!lineText || !state.normalized) return;
+      const remaining = state.normalized.slice(state.matched.length);
+      let score = 0;
+      if (remaining.startsWith(lineText)) score = 180 + Math.min(20, lineText.length);
+      else if (state.normalized === lineText) score = 170;
+      else if (state.normalized.includes(lineText)) {
+        score = 110 + (lineText.length / state.normalized.length) * 30;
+      } else if (lineText.includes(state.normalized)) {
+        score = 90 + (state.normalized.length / lineText.length) * 20;
+      }
+      score += bboxMatchScore(line.bbox, state.block.bbox) * 100;
+      score -= Math.abs(stateIndex - cursor) * 0.35;
+      if (!best || score > best.score) best = { state, stateIndex, score };
+    });
+    if (!best || best.score < 45) best = null;
+    if (best) {
+      const state = best.state;
+      if (state.normalized.slice(state.matched.length).startsWith(lineText)) {
+        state.matched += lineText;
+      } else if (!state.matched) {
+        state.matched = lineText;
+      }
+      if (state.matched.length >= state.normalized.length) {
+        cursor = Math.max(cursor, best.stateIndex + 1);
+      } else {
+        cursor = Math.max(cursor, best.stateIndex);
+      }
+    }
+    return {
+      ...line,
+      line_index: lineIndex,
+      block: best ? best.state.block : null,
+    };
+  });
+}
+
+function effectiveSections(blocks, semanticValue) {
+  const explicit = semanticValue && Array.isArray(semanticValue.sections)
+    ? semanticValue.sections
+    : [];
+  const sections = explicit.length ? explicit.map((section) => ({
+    title_block_id: section.title_block_id || null,
+    block_ids: [...(section.block_ids || [])],
+  })) : inferredSections(blocks);
+  const assigned = new Set();
+  sections.forEach((section) => {
+    if (section.title_block_id) assigned.add(String(section.title_block_id));
+    section.block_ids.forEach((id) => assigned.add(String(id)));
+  });
+  blocks.forEach((block) => {
+    if (assigned.has(String(block.id))) return;
+    const semanticKind = blockSemanticKind(block);
+    if (!sections.length || semanticKind === 'section_title' || semanticKind === 'document_title') {
+      sections.push({
+        title_block_id: semanticKind === 'paragraph' ? null : block.id,
+        block_ids: semanticKind === 'paragraph' ? [block.id] : [],
+      });
+    } else {
+      sections[sections.length - 1].block_ids.push(block.id);
+    }
+    assigned.add(String(block.id));
+  });
+  return sections;
+}
+
+function sceneLineNode(line, pageNumber, origin) {
+  const bbox = line.bbox || {};
+  const x = Number(bbox.x || 0);
+  const y = Number(bbox.y || 0);
+  const width = Math.max(1, Number(bbox.width || 1));
+  const height = Math.max(1, Number(bbox.height || 10));
+  const dominant = (line.spans || [])[0] || {};
+  const direction = line.direction || { x: 1, y: 0 };
+  const angle = Math.atan2(Number(direction.y || 0), Number(direction.x || 1)) * 180 / Math.PI;
+  return {
+    ...ResumeDom.elementNode(
+      `scene-${pageNumber}-line-${line.line_index + 1}`,
+      'span',
+      {
+        class: 'imported-scene-line',
+        'data-scene-line': String(line.line_index + 1),
+      },
+      (line.spans || []).map((span, spanIndex) =>
+        sceneSpanNode(span, pageNumber, line.line_index, spanIndex)),
+      { semantic: semantic('layout_line') },
+    ),
+    style: compactStyle({
+      position: 'absolute',
+      display: 'block',
+      left: `${Number((x - origin.x).toFixed(3))}pt`,
+      top: `${Number((y - origin.y).toFixed(3))}pt`,
+      width: `${Number(width.toFixed(3))}pt`,
+      height: `${Number(height.toFixed(3))}pt`,
+      margin: '0',
+      padding: '0',
+      border: '0',
+      'font-family': fontFamily(dominant.font_family),
+      'font-size': dominant.font_size
+        ? `${Number(Number(dominant.font_size).toFixed(3))}pt`
+        : undefined,
+      'font-weight': dominant.bold ? '700' : '400',
+      'font-style': dominant.italic ? 'italic' : 'normal',
+      color: dominant.color || '#000000',
+      'line-height': `${Number(height.toFixed(3))}pt`,
+      'white-space': 'pre',
+      'overflow-wrap': 'normal',
+      'transform-origin': 'left top',
+      transform: Math.abs(angle) > 0.01 ? `rotate(${Number(angle.toFixed(3))}deg)` : undefined,
+      'z-index': '1',
+    }),
+  };
+}
+
+function sceneBlockNode(lines, pageNumber, block, sectionInfo, groupIndex) {
+  const boxes = lines.map((line) => line.bbox || {});
+  const left = Math.min(...boxes.map((box) => Number(box.x || 0)));
+  const top = Math.min(...boxes.map((box) => Number(box.y || 0)));
+  const right = Math.max(...boxes.map(
+    (box) => Number(box.x || 0) + Math.max(1, Number(box.width || 1)),
+  ));
+  const bottom = Math.max(...boxes.map(
+    (box) => Number(box.y || 0) + Math.max(1, Number(box.height || 10)),
+  ));
+  const isTitle = Boolean(
+    sectionInfo
+    && sectionInfo.title_block_id
+    && block
+    && String(sectionInfo.title_block_id) === String(block.id),
+  );
+  const firstDocumentTitle = isTitle
+    && pageNumber === 1
+    && groupIndex === 0
+    && /(?:简历|resume)/i.test(String(block && block.text || ''));
+  const kind = firstDocumentTitle
+    ? 'document_title'
+    : (isTitle ? 'section_title' : blockSemanticKind(block));
+  const tag = kind === 'document_title' ? 'h1' : (kind === 'section_title' ? 'h2' : 'p');
+  const blockId = block && block.id
+    ? String(block.id)
+    : `scene-${pageNumber}-block-${groupIndex + 1}`;
+  const text = lines.map((line) => String(line.text || '')).join('');
+  return {
+    ...ResumeDom.elementNode(
+      `import-${blockId}`,
+      tag,
+      {
+        class: 'editable imported-scene-text',
+        'data-rich-text': 'true',
+        'data-block-id': blockId,
+      },
+      lines.map((line) => sceneLineNode(line, pageNumber, { x: left, y: top })),
+      {
+        editable: true,
+        label: kind === 'paragraph' ? text.trim().slice(0, 60) || '正文' : '标题',
+        semantic: semantic(kind, { group_id: blockId }),
+      },
+    ),
+    style: {
+      position: 'absolute',
+      left: `${Number(left.toFixed(3))}pt`,
+      top: `${Number(top.toFixed(3))}pt`,
+      width: `${Number(Math.max(1, right - left).toFixed(3))}pt`,
+      height: `${Number(Math.max(1, bottom - top).toFixed(3))}pt`,
+      margin: '0',
+      padding: '0',
+      border: '0',
+      'box-sizing': 'border-box',
+      'z-index': '1',
+    },
+  };
+}
+
+function buildPageSceneDomDocument(pageScene, blocks = [], semanticValue = {}) {
   const pages = Array.isArray(pageScene && pageScene.pages) ? pageScene.pages : [];
+  const ordered = orderedBlocks(blocks, semanticValue);
+  const sections = effectiveSections(ordered, semanticValue);
+  const membership = new Map();
+  sections.forEach((section, sectionIndex) => {
+    if (section.title_block_id) membership.set(String(section.title_block_id), sectionIndex);
+    (section.block_ids || []).forEach((id) => membership.set(String(id), sectionIndex));
+  });
+  const sectionFirstPages = firstPageBySection(ordered, sections);
   const rootChildren = pages.map((page, pageIndex) => {
     const pageNumber = page.number || pageIndex + 1;
     const width = Math.max(1, Number(page.width || 595.28));
@@ -520,6 +894,8 @@ function buildPageSceneDomDocument(pageScene) {
           'data-scene-background-page': String(pageNumber),
           'aria-hidden': 'true',
         },
+        [],
+        { semantic: semantic('decoration') },
       ),
       style: {
         position: 'absolute',
@@ -532,56 +908,77 @@ function buildPageSceneDomDocument(pageScene) {
         'z-index': '0',
       },
     };
-    const lines = (page.text_nodes || []).map((line, lineIndex) => {
-      const bbox = line.bbox || {};
-      const x = Number(bbox.x || 0);
-      const y = Number(bbox.y || 0);
-      const lineWidth = Math.max(1, Number(bbox.width || width - x));
-      const lineHeight = Math.max(1, Number(bbox.height || 10));
-      const dominant = (line.spans || [])[0] || {};
-      const direction = line.direction || { x: 1, y: 0 };
-      const angle = Math.atan2(Number(direction.y || 0), Number(direction.x || 1)) * 180 / Math.PI;
-      return {
-        ...ResumeDom.elementNode(
-          `scene-${pageNumber}-line-${lineIndex + 1}`,
-          'div',
-          {
-            class: 'editable imported-scene-text',
-            'data-rich-text': 'true',
-            'data-scene-line': String(lineIndex + 1),
-          },
-          (line.spans || []).map((span, spanIndex) =>
-            sceneSpanNode(span, pageNumber, lineIndex, spanIndex)),
-          {
-            editable: true,
-            label: String(line.text || '').trim().slice(0, 60) || '正文',
-          },
-        ),
-        style: compactStyle({
-          position: 'absolute',
-          left: `${Number(x.toFixed(3))}pt`,
-          top: `${Number(y.toFixed(3))}pt`,
-          width: `${Number(lineWidth.toFixed(3))}pt`,
-          height: `${Number(lineHeight.toFixed(3))}pt`,
-          margin: '0',
-          padding: '0',
-          border: '0',
-          'font-family': fontFamily(dominant.font_family),
-          'font-size': dominant.font_size
-            ? `${Number(Number(dominant.font_size).toFixed(3))}pt`
-            : undefined,
-          'font-weight': dominant.bold ? '700' : '400',
-          'font-style': dominant.italic ? 'italic' : 'normal',
-          color: dominant.color || '#000000',
-          'line-height': `${Number(lineHeight.toFixed(3))}pt`,
-          'white-space': 'pre',
-          'overflow-wrap': 'normal',
-          'transform-origin': 'left top',
-          transform: Math.abs(angle) > 0.01 ? `rotate(${Number(angle.toFixed(3))}deg)` : undefined,
-          'z-index': '1',
-        }),
-      };
+    const aligned = alignSceneLines(page, blocks);
+    const grouped = [];
+    const byBlock = new Map();
+    aligned.forEach((line) => {
+      const key = line.block && line.block.id
+        ? String(line.block.id)
+        : `unmapped-${pageNumber}-${line.line_index + 1}`;
+      let group = byBlock.get(key);
+      if (!group) {
+        group = { key, block: line.block, lines: [], first_index: line.line_index };
+        byBlock.set(key, group);
+        grouped.push(group);
+      }
+      group.lines.push(line);
     });
+    const sectionGroups = new Map();
+    grouped.forEach((group, groupIndex) => {
+      const sectionIndex = group.block && membership.has(String(group.block.id))
+        ? membership.get(String(group.block.id))
+        : -1;
+      const key = String(sectionIndex);
+      const bucket = sectionGroups.get(key) || {
+        section_index: sectionIndex,
+        first_index: group.first_index,
+        nodes: [],
+      };
+      bucket.first_index = Math.min(bucket.first_index, group.first_index);
+      bucket.nodes.push(sceneBlockNode(
+        group.lines,
+        pageNumber,
+        group.block,
+        sectionIndex >= 0 ? sections[sectionIndex] : null,
+        groupIndex,
+      ));
+      sectionGroups.set(key, bucket);
+    });
+    const semanticSections = Array.from(sectionGroups.values())
+      .sort((leftBucket, rightBucket) => leftBucket.first_index - rightBucket.first_index)
+      .map((bucket, bucketIndex) => {
+        const sectionInfo = bucket.section_index >= 0 ? sections[bucket.section_index] : null;
+        const titleBlock = sectionInfo && sectionInfo.title_block_id
+          ? ordered.find((block) => String(block.id) === String(sectionInfo.title_block_id))
+          : null;
+        const groupId = bucket.section_index >= 0
+          ? `import-section-${bucket.section_index + 1}`
+          : `import-unclassified-${pageNumber}-${bucketIndex + 1}`;
+        return {
+          ...ResumeDom.elementNode(
+            `${groupId}-page-${pageNumber}`,
+            'section',
+            {
+              class: 'imported-semantic-section',
+              'data-semantic-section-id': groupId,
+            },
+            bucket.nodes,
+            {
+              label: titleBlock
+                ? String(titleBlock.text || '').slice(0, 60)
+                : `第 ${pageNumber} 页内容`,
+              semantic: semantic('section', {
+                group_id: groupId,
+                ...(sectionFirstPages.has(bucket.section_index)
+                  && sectionFirstPages.get(bucket.section_index) !== Number(pageNumber)
+                  ? { continuation: true }
+                  : {}),
+              }),
+            },
+          ),
+          style: { display: 'contents' },
+        };
+      });
     return {
       ...ResumeDom.elementNode(
         `imported-page-${pageNumber}`,
@@ -594,8 +991,8 @@ function buildPageSceneDomDocument(pageScene) {
           'data-page-height-pt': String(Number(height.toFixed(3))),
           'data-background-contains-text': String(Boolean(page.background_contains_text)),
         },
-        [background, ...lines],
-        { label: `第 ${pageNumber} 页` },
+        [background, ...semanticSections],
+        { label: `第 ${pageNumber} 页`, semantic: semantic('page') },
       ),
       style: {
         position: 'relative',
@@ -618,6 +1015,7 @@ function buildPageSceneDomDocument(pageScene) {
       'article',
       { class: 'resume-dom-root imported-resume imported-scene-resume' },
       rootChildren,
+      { semantic: semantic('document') },
     ),
   });
 }
@@ -644,10 +1042,12 @@ function inferredSections(blocks) {
   const result = [];
   let current = { title_block_id: null, block_ids: [] };
   blocks.forEach((block) => {
-    if (block.kind === 'heading' && current.block_ids.length) {
+    const kind = blockSemanticKind(block);
+    const isHeading = kind === 'section_title' || kind === 'document_title';
+    if (isHeading && (current.title_block_id || current.block_ids.length)) {
       result.push(current);
       current = { title_block_id: block.id, block_ids: [] };
-    } else if (block.kind === 'heading' && !current.title_block_id && !current.block_ids.length) {
+    } else if (isHeading && !current.title_block_id && !current.block_ids.length) {
       current.title_block_id = block.id;
     } else {
       current.block_ids.push(block.id);
@@ -668,7 +1068,7 @@ function buildContentCandidate({
 }) {
   const ordered = orderedBlocks(blocks, semantic);
   if (pageScene && pageScene.has_text_layer && Array.isArray(pageScene.pages)) {
-    const domDocument = buildPageSceneDomDocument(pageScene);
+    const domDocument = buildPageSceneDomDocument(pageScene, ordered, semantic);
     return {
       format,
       plain_text: ordered.map((block) => block.text).join('\n'),
@@ -695,7 +1095,7 @@ function buildContentCandidate({
     };
   }
   if (nativeDocument && Array.isArray(nativeDocument.pages)) {
-    const domDocument = buildNativeDomDocument(nativeDocument, geometryPages);
+    const domDocument = buildNativeDomDocument(nativeDocument, geometryPages, semantic);
     return {
       format,
       plain_text: ordered.map((block) => block.text).join('\n'),
@@ -721,7 +1121,7 @@ function buildContentCandidate({
     && pages.length
     && pages.some((page) => (page.blocks || []).some((block) => block.bbox))
   ) {
-    const domDocument = buildPositionedDomDocument(pages);
+    const domDocument = buildPositionedDomDocument(pages, semantic);
     return {
       format,
       plain_text: ordered.map((block) => block.text).join('\n'),
@@ -757,10 +1157,15 @@ function buildContentCandidate({
       children.push(
         ResumeDom.elementNode(
           stableNodeId('import-heading', titleBlock, sectionIndex),
-          sectionIndex === 0 && titleBlock.page === 1 ? 'h1' : 'h2',
-          {},
+          blockSemanticKind(titleBlock) === 'document_title' ? 'h1' : 'h2',
+          { class: 'editable', 'data-block-id': titleBlock.id },
           [],
-          { text: titleBlock.text, editable: true, label: '标题' },
+          {
+            text: titleBlock.text,
+            editable: true,
+            label: '标题',
+            semantic: semantic(blockSemanticKind(titleBlock, 'section_title')),
+          },
         ),
       );
     }
@@ -771,10 +1176,17 @@ function buildContentCandidate({
       children.push(
         ResumeDom.elementNode(
           stableNodeId('import-block', block, blockIndex),
-          block.kind === 'heading' ? 'h2' : 'p',
-          { class: 'editable' },
+          blockSemanticKind(block) === 'document_title'
+            ? 'h1'
+            : (blockSemanticKind(block) === 'section_title' ? 'h2' : 'p'),
+          { class: 'editable', 'data-block-id': block.id },
           [],
-          { text: block.text, editable: true, label: block.kind === 'heading' ? '标题' : '正文' },
+          {
+            text: block.text,
+            editable: true,
+            label: blockSemanticKind(block) === 'paragraph' ? '正文' : '标题',
+            semantic: semantic(blockSemanticKind(block)),
+          },
         ),
       );
     });
@@ -785,7 +1197,10 @@ function buildContentCandidate({
           'section',
           { class: 'resume-section' },
           children,
-          { label: titleBlock ? titleBlock.text.slice(0, 60) : `第 ${sectionIndex + 1} 部分` },
+          {
+            label: titleBlock ? titleBlock.text.slice(0, 60) : `第 ${sectionIndex + 1} 部分`,
+            semantic: semantic('section', { group_id: `import-section-${sectionIndex + 1}` }),
+          },
         ),
       );
     }
@@ -796,10 +1211,17 @@ function buildContentCandidate({
     rootChildren.push(
       ResumeDom.elementNode(
         stableNodeId('import-block', block, index),
-        block.kind === 'heading' ? 'h2' : 'p',
-        { class: 'editable' },
+        blockSemanticKind(block) === 'document_title'
+          ? 'h1'
+          : (blockSemanticKind(block) === 'section_title' ? 'h2' : 'p'),
+        { class: 'editable', 'data-block-id': block.id },
         [],
-        { text: block.text, editable: true, label: block.kind === 'heading' ? '标题' : '正文' },
+        {
+          text: block.text,
+          editable: true,
+          label: blockSemanticKind(block) === 'paragraph' ? '正文' : '标题',
+          semantic: semantic(blockSemanticKind(block)),
+        },
       ),
     );
   });
@@ -811,6 +1233,7 @@ function buildContentCandidate({
       'article',
       { class: 'resume-dom-root imported-resume' },
       rootChildren,
+      { semantic: semantic('document') },
     ),
   });
   const plainText = ordered.map((block) => block.text).join('\n');

@@ -28,6 +28,7 @@ const MODULES = [
   './modules/document-imports',
   './modules/draft',
   './modules/ai',
+  './modules/inline-ai',
   './modules/versions',
   './modules/generations',
   './modules/artifacts',

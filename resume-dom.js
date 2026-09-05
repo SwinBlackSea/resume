@@ -10,8 +10,33 @@
   const AGGREGATE_VERSION = 'resume-aggregate-v2';
   const TEMPLATE_DOCUMENT_VERSION = 'template-document-v1';
   const BINDINGS_VERSION = 'layout-bindings-v1';
+  const AI_CONTEXT_VERSION = 'resume-ai-context-v1';
   const MAX_DEPTH = 40;
   const MAX_NODES = 5000;
+  const SEMANTIC_KINDS = new Set([
+    'document',
+    'page',
+    'header',
+    'section',
+    'section_title',
+    'document_title',
+    'group',
+    'entry',
+    'entry_header',
+    'paragraph',
+    'list',
+    'list_item',
+    'table',
+    'table_row',
+    'table_cell',
+    'figure',
+    'caption',
+    'inline',
+    'layout_line',
+    'decoration',
+    'separator',
+    'unknown',
+  ]);
   const ALLOWED_TAGS = new Set([
     'article', 'section', 'header', 'footer', 'main', 'aside', 'div',
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'strong', 'em', 'b', 'i', 'small',
@@ -274,6 +299,56 @@
     return result;
   }
 
+  function semanticToken(value, fallback) {
+    const token = String(value || '').trim().toLowerCase();
+    return /^[a-z][a-z0-9_-]{0,63}$/.test(token) ? token : fallback;
+  }
+
+  function safeSemantic(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const kind = semanticToken(value.kind, '');
+    if (!SEMANTIC_KINDS.has(kind)) return null;
+    const result = { kind };
+    const subtype = semanticToken(value.subtype, '');
+    if (subtype) result.subtype = subtype;
+    const groupId = cleanId(value.group_id, '');
+    if (groupId) result.group_id = groupId;
+    const level = Number(value.level);
+    if (Number.isInteger(level) && level >= 1 && level <= 9) result.level = level;
+    if (value.continuation === true) result.continuation = true;
+    return result;
+  }
+
+  function semanticKind(node) {
+    const explicit = node && node.semantic && semanticToken(node.semantic.kind, '');
+    if (explicit && SEMANTIC_KINDS.has(explicit)) return explicit;
+    if (!node || node.type === 'text') return 'inline';
+    if (rawHasClass(node, 'imported-scene-background')) return 'decoration';
+    if (rawHasClass(node, 'imported-document-page')) return 'page';
+    if (rawHasClass(node, 'resume-top')) return 'header';
+    if (rawHasClass(node, 'resume-row')) return 'entry_header';
+    if (rawHasClass(node, 'resume-section')) return 'section';
+    if (node.tag === 'article') return 'document';
+    if (node.tag === 'header' || node.tag === 'footer') return 'header';
+    if (node.tag === 'section' || node.tag === 'main' || node.tag === 'aside') return 'section';
+    if (node.tag === 'h1') return 'document_title';
+    if (/^h[2-6]$/.test(node.tag || '')) return 'section_title';
+    if (node.tag === 'p' || node.tag === 'dd' || node.tag === 'dt') return 'paragraph';
+    if (node.tag === 'ul' || node.tag === 'ol' || node.tag === 'dl') return 'list';
+    if (node.tag === 'li') return 'list_item';
+    if (node.tag === 'table') return 'table';
+    if (node.tag === 'tr') return 'table_row';
+    if (node.tag === 'td' || node.tag === 'th') return 'table_cell';
+    if (node.tag === 'figure' || node.tag === 'img' || node.tag === 'svg') return 'figure';
+    if (node.tag === 'figcaption') return 'caption';
+    if (node.tag === 'hr') return 'separator';
+    if (['span', 'strong', 'em', 'b', 'i', 'small', 'time', 'a'].includes(node.tag)) {
+      return 'inline';
+    }
+    if (node.editable) return 'paragraph';
+    return 'group';
+  }
+
   function rawHasClass(node, className) {
     return String(node && node.attributes && node.attributes.class || '')
       .split(/\s+/)
@@ -451,6 +526,8 @@
       if (raw.text !== undefined) normalized.text = String(raw.text == null ? '' : raw.text);
       if (raw.editable === true) normalized.editable = true;
       if (raw.label) normalized.label = String(raw.label).slice(0, 120);
+      const semantic = safeSemantic(raw.semantic);
+      if (semantic) normalized.semantic = semantic;
       if (raw.format === 'spaced-characters') normalized.format = raw.format;
       if (raw.binding && typeof raw.binding === 'object') normalized.binding = clone(raw.binding);
       if (!VOID_TAGS.has(tag)) {
@@ -478,11 +555,25 @@
     (function migrateLegacyAiScope(node) {
       if (!node || node.type !== 'element') return;
       (node.children || []).forEach(migrateLegacyAiScope);
+      const hasRetiredScope = Boolean(
+        node.attributes
+        && Object.prototype.hasOwnProperty.call(node.attributes, 'data-ai-scope'),
+      );
+      if (hasRetiredScope && options && options.allowLegacyAiScope === false) {
+        throw operationError(
+          'AI_SCOPE_ATTRIBUTE_FORBIDDEN',
+          'data-ai-scope 已停用；一个编辑节点必须对应一个真实内容节点',
+          { node_id: node.id },
+        );
+      }
       if (String(node.attributes && node.attributes['data-ai-scope'] || '') === 'true') {
         node.attributes = { ...(node.attributes || {}) };
         delete node.attributes['data-ai-scope'];
         node.editable = true;
         removeDescendantEditingIdentity(node);
+      } else if (hasRetiredScope) {
+        node.attributes = { ...(node.attributes || {}) };
+        delete node.attributes['data-ai-scope'];
       }
     })(root);
 
@@ -841,18 +932,18 @@
     return current;
   }
 
-  function ensureDocument(resume) {
+  function ensureDocument(resume, options) {
     if (resume && resume.resume_document && resume.resume_document.root) {
-      return normalizeDocument(resume.resume_document);
+      return normalizeDocument(resume.resume_document, options);
     }
     if (resume && resume.schema_version === RESUME_DOCUMENT_VERSION && resume.root) {
-      return normalizeDocument(resume);
+      return normalizeDocument(resume, options);
     }
     if (resume && resume.content_document && resume.template_document && resume.layout_bindings) {
       return composeAggregateDocument(resume);
     }
     if (resume && resume.dom_document && resume.dom_document.root) {
-      return normalizeDocument(resume.dom_document);
+      return normalizeDocument(resume.dom_document, options);
     }
     return legacyResumeToDom(resume || {});
   }
@@ -866,11 +957,11 @@
   /**
    * 当前唯一持久化模型。旧字段只参与读取，输出不再包含模板、槽位绑定或 legacy 正文字段。
    */
-  function toResumeDocument(resume) {
+  function toResumeDocument(resume, options) {
     const source = resume && resume.resume_document
       ? resume.resume_document
       : (resume && typeof resume === 'object' ? resume : {});
-    const document = ensureDocument(resume || {});
+    const document = ensureDocument(resume || {}, options);
     const legacyLayout = source.layout_hints && typeof source.layout_hints === 'object'
       ? source.layout_hints
       : {};
@@ -1059,6 +1150,146 @@
     return result;
   }
 
+  function sharedPrefixLength(left, right) {
+    const limit = Math.min(left.length, right.length);
+    let index = 0;
+    while (index < limit && left[index] === right[index]) index += 1;
+    return index;
+  }
+
+  function sharedSuffixLength(left, right, prefixLength) {
+    const limit = Math.min(left.length, right.length) - prefixLength;
+    let index = 0;
+    while (
+      index < limit
+      && left[left.length - 1 - index] === right[right.length - 1 - index]
+    ) index += 1;
+    return index;
+  }
+
+  function collectVisibleTextCarriers(node, carriers) {
+    if (!node || isEditorOnly(node)) return carriers;
+    if (node.type === 'text') {
+      carriers.push({
+        node,
+        field: 'value',
+        value: String(node.value || ''),
+      });
+      return carriers;
+    }
+    if (node.text !== undefined) {
+      carriers.push({
+        node,
+        field: 'text',
+        value: String(node.text || ''),
+      });
+    }
+    (node.children || []).forEach((child) =>
+      collectVisibleTextCarriers(child, carriers));
+    return carriers;
+  }
+
+  /**
+   * 只重新分配文字载荷，不改变任何元素、属性、样式或节点 ID。
+   *
+   * 多个行内载荷存在时，用旧文本与新文本的公共前后缀固定不变区域，
+   * 再把真正变化的中间区域按原载荷边界映射回现有节点。这样标题中的
+   * strong/em/span 等样式不会因为一次文字修改被清空。
+   */
+  function replaceInlineTextPreservingMarkup(node, text) {
+    const carriers = collectVisibleTextCarriers(node, []);
+    if (!carriers.length) {
+      if (node.type === 'text') node.value = text;
+      else node.text = text;
+      return;
+    }
+    if (carriers.length === 1) {
+      carriers[0].node[carriers[0].field] = text;
+      return;
+    }
+
+    const before = carriers.map((carrier) => carrier.value).join('');
+    if (!before.length) {
+      carriers.forEach((carrier, index) => {
+        carrier.node[carrier.field] = index === 0 ? text : '';
+      });
+      return;
+    }
+
+    const prefixLength = sharedPrefixLength(before, text);
+    const suffixLength = sharedSuffixLength(before, text, prefixLength);
+    const oldMiddleLength = before.length - prefixLength - suffixLength;
+    const newMiddleLength = text.length - prefixLength - suffixLength;
+    const mapBoundary = (offset) => {
+      if (offset <= prefixLength) return offset;
+      if (offset >= before.length - suffixLength) {
+        return text.length - (before.length - offset);
+      }
+      if (oldMiddleLength <= 0) return prefixLength;
+      return prefixLength + Math.round(
+        ((offset - prefixLength) / oldMiddleLength) * newMiddleLength,
+      );
+    };
+
+    let oldOffset = 0;
+    let previousNewOffset = 0;
+    carriers.forEach((carrier, index) => {
+      oldOffset += carrier.value.length;
+      const mapped = index === carriers.length - 1
+        ? text.length
+        : Math.max(previousNewOffset, Math.min(text.length, mapBoundary(oldOffset)));
+      carrier.node[carrier.field] = text.slice(previousNewOffset, mapped);
+      previousNewOffset = mapped;
+    });
+  }
+
+  function editableBlockChildren(node) {
+    if (!node || node.type !== 'element' || node.editable !== true) return [];
+    const visible = (node.children || []).filter((child) => {
+      if (!child || isEditorOnly(child)) return false;
+      if (child.type === 'text') return String(child.value || '').trim() !== '';
+      return true;
+    });
+    if (
+      !visible.length
+      || visible.some((child) => (
+        child.type !== 'element'
+        || !TEXT_BLOCK_TAGS.has(String(child.tag || ''))
+      ))
+    ) return [];
+    return visible;
+  }
+
+  function replaceNodeTextPreservingStructure(node, text, nodeId) {
+    if (node.type === 'text') {
+      node.value = text;
+      return;
+    }
+    const blockChildren = editableBlockChildren(node);
+    if (!blockChildren.length) {
+      replaceInlineTextPreservingMarkup(node, text);
+      return;
+    }
+
+    const segments = text.split('\n');
+    if (segments.length !== blockChildren.length) {
+      throw operationError(
+        'EDITABLE_BLOCK_COUNT_MISMATCH',
+        `当前内容包含 ${blockChildren.length} 个段落；修改文字时必须保持段落数量，增删段落请使用结构操作`,
+        {
+          node_id: nodeId,
+          expected_blocks: blockChildren.length,
+          received_blocks: segments.length,
+        },
+      );
+    }
+    // 旧实现可能把新文字写到容器自身、同时保留段落子节点。统一修复为
+    // “容器负责组织，段落负责文字”，避免再次渲染成新旧文字叠加。
+    delete node.text;
+    blockChildren.forEach((child, index) =>
+      replaceInlineTextPreservingMarkup(child, segments[index]));
+  }
+
   function applyOperations(documentValue, operations, options) {
     let document = normalizeDocument(documentValue);
     const lockedNodeId = options && options.lockedNodeId ? String(options.lockedNodeId) : null;
@@ -1075,56 +1306,9 @@
       if (op === 'replace_text') {
         const found = findNode(document, targetId);
         if (!found) throw new Error(`DOM 节点不存在：${targetId}`);
-        if (found.node.type === 'text') found.node.value = String(operation.text == null ? '' : operation.text);
-        else {
-          const blockChildren = found.node.editable
-            ? (found.node.children || []).filter((child) => (
-                child
-                && child.type === 'element'
-                && TEXT_BLOCK_TAGS.has(String(child.tag || ''))
-              ))
-            : [];
-          const text = String(operation.text == null ? '' : operation.text)
-            .replace(/\r\n?/g, '\n');
-          if (blockChildren.length > 1) {
-            const segments = text.split('\n');
-            if (segments.length !== blockChildren.length) {
-              throw operationError(
-                'EDITABLE_BLOCK_COUNT_MISMATCH',
-                `当前内容包含 ${blockChildren.length} 个段落；修改文字时必须保持段落数量，增删段落请使用结构操作`,
-                {
-                  node_id: targetId,
-                  expected_blocks: blockChildren.length,
-                  received_blocks: segments.length,
-                },
-              );
-            }
-            delete found.node.text;
-            blockChildren.forEach((child, index) => {
-              child.text = segments[index];
-              child.children = [];
-            });
-            document = normalizeDocument(found.document);
-            return;
-          }
-          if (
-            operation.replace_children === true
-            || String(found.node.attributes && found.node.attributes['data-rich-text'] || '') === 'true'
-          ) {
-            found.node.children = [];
-            if (found.node.attributes) {
-              delete found.node.attributes['data-rich-text'];
-              if (found.node.attributes['data-rich-layout']) {
-                delete found.node.attributes['data-rich-layout'];
-                delete found.node.style.display;
-                delete found.node.style['grid-template-columns'];
-                delete found.node.style['column-gap'];
-                delete found.node.style['align-items'];
-              }
-            }
-          }
-          found.node.text = text;
-        }
+        const text = String(operation.text == null ? '' : operation.text)
+          .replace(/\r\n?/g, '\n');
+        replaceNodeTextPreservingStructure(found.node, text, targetId);
         document = normalizeDocument(found.document);
         return;
       }
@@ -1572,7 +1756,10 @@
         changes.push({ ...base, type: 'structure' });
         return;
       }
-      if (Boolean(left.node.editable) !== Boolean(right.node.editable)) {
+      if (
+        Boolean(left.node.editable) !== Boolean(right.node.editable)
+        || !sameValue(left.node.semantic || null, right.node.semantic || null)
+      ) {
         changes.push({ ...base, type: 'structure' });
       }
       if (ownNodeText(left.node) !== ownNodeText(right.node)) {
@@ -1770,6 +1957,114 @@
     return output;
   }
 
+  /**
+   * 给模型使用的只读语义投影。完整 ResumeDocument 仍是唯一事实对象；
+   * 此投影只在单次请求内生成，省略坐标、CSS、背景和资源，保留稳定 ID、
+   * 语义父子关系、编辑边界和全部可见文字。
+   */
+  function toAiContextDocument(documentValue) {
+    const source = documentValue
+      && documentValue.root
+      && documentValue.schema_version !== RESUME_DOCUMENT_VERSION
+      ? { dom_document: documentValue }
+      : documentValue;
+    const document = toResumeDocument(source);
+    let nodeCount = 0;
+    let textChars = 0;
+
+    function compactNode(node) {
+      if (!node || isEditorOnly(node)) return null;
+      const kind = semanticKind(node);
+      if (kind === 'decoration') return null;
+      if (node.type === 'text') {
+        const text = String(node.value || '');
+        if (!text) return null;
+        nodeCount += 1;
+        textChars += text.length;
+        return { id: node.id, kind: 'inline', text };
+      }
+
+      const semantic = safeSemantic(node.semantic) || { kind };
+      const visibleChildren = (node.children || [])
+        .filter((child) => child && !isEditorOnly(child));
+      const childKinds = visibleChildren.map((child) => semanticKind(child));
+      const presentationOnly = visibleChildren.length > 0 && childKinds.every(
+        (childKind) => ['inline', 'layout_line', 'decoration'].includes(childKind),
+      );
+      const result = {
+        id: node.id,
+        kind,
+        tag: node.tag,
+      };
+      if (semantic.subtype) result.subtype = semantic.subtype;
+      if (semantic.group_id) result.group_id = semantic.group_id;
+      if (semantic.level) result.level = semantic.level;
+      if (semantic.continuation) result.continuation = true;
+      if (node.editable) result.editable = true;
+      if (node.label) result.label = node.label;
+
+      if (presentationOnly) {
+        const text = exportNodeText(node);
+        if (text) {
+          result.text = text;
+          textChars += text.length;
+        }
+      } else {
+        if (node.text !== undefined) {
+          result.text = String(node.text || '');
+          textChars += result.text.length;
+        }
+        const children = visibleChildren.map(compactNode).filter(Boolean);
+        if (children.length) result.children = children;
+      }
+      nodeCount += 1;
+      return result;
+    }
+
+    return {
+      schema_version: AI_CONTEXT_VERSION,
+      source_schema_version: RESUME_DOCUMENT_VERSION,
+      root: compactNode(document.root),
+      page_setup: {
+        size: document.page_setup && document.page_setup.size || 'A4',
+        orientation: document.page_setup && document.page_setup.orientation || 'portrait',
+        max_pages: document.page_setup && document.page_setup.max_pages || null,
+      },
+      stats: {
+        node_count: nodeCount,
+        text_chars: textChars,
+      },
+    };
+  }
+
+  /**
+   * 父节点不重复写入持久化 JSON；需要定位、增删或移动时从 children
+   * 一次性建立运行时索引，避免 parent_id 与真实树发生双写漂移。
+   */
+  function buildSemanticIndex(documentValue) {
+    const source = documentValue
+      && documentValue.root
+      && documentValue.schema_version !== RESUME_DOCUMENT_VERSION
+      ? { dom_document: documentValue }
+      : documentValue;
+    const document = toResumeDocument(source);
+    const entries = new Map();
+    (function visit(node, parentId, index, depth) {
+      entries.set(String(node.id), {
+        node,
+        node_id: String(node.id),
+        parent_id: parentId,
+        child_ids: (node.children || []).map((child) => String(child.id)),
+        index,
+        depth,
+        kind: semanticKind(node),
+      });
+      (node.children || []).forEach((child, childIndex) =>
+        visit(child, String(node.id), childIndex, depth + 1));
+    })(document.root, null, 0, 0);
+    return { document, entries };
+  }
+
   function escapeHtml(text) {
     return String(text == null ? '' : text)
       .replace(/&/g, '&amp;')
@@ -1791,6 +2086,9 @@
       ...(node.attributes || {}),
       'data-node-id': node.id,
       ...(node.editable ? { 'data-resume-editable': 'true' } : {}),
+      ...(node.semantic && node.semantic.kind
+        ? { 'data-semantic-kind': node.semantic.kind }
+        : {}),
     };
     const style = styleText(node.style);
     if (style) attrs.style = style;
@@ -1832,6 +2130,9 @@
         : ownerDocument.createElement(node.tag);
       element.dataset.nodeId = node.id;
       if (node.editable) element.dataset.resumeEditable = 'true';
+      if (node.semantic && node.semantic.kind) {
+        element.dataset.semanticKind = node.semantic.kind;
+      }
       Object.entries(node.attributes || {}).forEach(([name, value]) => {
         element.setAttribute(name, value);
       });
@@ -1874,7 +2175,9 @@
     AGGREGATE_VERSION,
     TEMPLATE_DOCUMENT_VERSION,
     BINDINGS_VERSION,
+    AI_CONTEXT_VERSION,
     ALLOWED_TAGS,
+    SEMANTIC_KINDS,
     normalizeDocument,
     ensureDocument,
     toResumeDocument,
@@ -1895,6 +2198,9 @@
     syncLegacyBindings,
     applyOperations,
     compareDocuments,
+    semanticKind,
+    toAiContextDocument,
+    buildSemanticIndex,
     plainText,
     exportNodeText,
     toRenderBlocks,

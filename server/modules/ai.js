@@ -41,6 +41,9 @@ const {
 const {
   resolveResumeScope,
 } = require('../lib/resume-scope');
+const {
+  materializeTargetFragments,
+} = require('../lib/resume-harness/target-fragments');
 const queue = require('../lib/queue');
 const { SCOPE_LABEL } = require('../lib/policy');
 const { toActionView, toMessageView } = require('./workspace');
@@ -383,9 +386,36 @@ function normalizeRewriteProposal({
   let proposalResume = null;
   let incrementalResume = null;
   let suggestion = String(raw.suggestion || '').trim();
-  const explicitTargetResume = raw.target_resume_document
+  let explicitTargetResume = raw.target_resume_document
     || raw.resume_dom
     || raw.resume_json;
+  let targetResumeFragments = raw.target_resume_fragments || null;
+  if (targetResumeFragments) {
+    try {
+      const materialized = materializeTargetFragments(workingResume, targetResumeFragments);
+      targetResumeFragments = {
+        format: materialized.format,
+        changes: materialized.changes,
+        ...(materialized.insertions.length
+          ? { insertions: materialized.insertions }
+          : {}),
+      };
+      if (
+        explicitTargetResume
+        && typeof explicitTargetResume === 'object'
+        && hashJson(ResumeDom.toResumeDocument(
+          explicitTargetResume,
+          { allowLegacyAiScope: false },
+        ))
+          !== hashJson(materialized.document)
+      ) {
+        throw new Error('目标子树与完整目标文档不一致');
+      }
+      explicitTargetResume = materialized.document;
+    } catch (error) {
+      throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
+    }
+  }
 
   if (
     scopeType === 'RESUME_BLOCK'
@@ -405,7 +435,10 @@ function normalizeRewriteProposal({
     }
   } else if (explicitTargetResume && typeof explicitTargetResume === 'object') {
     try {
-      proposalResume = ResumeDom.toResumeDocument(explicitTargetResume);
+      proposalResume = ResumeDom.toResumeDocument(
+        explicitTargetResume,
+        { allowLegacyAiScope: false },
+      );
     } catch (error) {
       throw problem.unprocessable('INVALID_MODEL_ACTION', error.message);
     }
@@ -561,6 +594,7 @@ function normalizeRewriteProposal({
     merge_strategy: 'three_way_target_document',
     base_resume_json: baseResume,
     target_resume_document: proposalResume,
+    target_resume_fragments: targetResumeFragments,
     operations,
     resume_json: operations.length ? null : proposalResume,
     diff: Array.isArray(raw.diff)
@@ -791,7 +825,35 @@ async function runModel(llmInput, userMessageId) {
       validation: policy.validateModelResponse(result.response, { userMessageId }),
     };
   } catch (error) {
-    console.error('[resume-harness] failed', error.code || 'UNKNOWN', error.message);
+    console.error(
+      '[resume-harness] failed',
+      error.code || 'UNKNOWN',
+      error.message,
+      JSON.stringify({
+        finish_reason: error.finish_reason || null,
+        content_length: error.content_length ?? null,
+        reasoning_length: error.reasoning_length ?? null,
+        max_tokens: error.max_tokens ?? null,
+      }),
+    );
+    if (error.code === 'DEEPSEEK_OUTPUT_TRUNCATED') {
+      throw problem.unprocessable(
+        'MODEL_OUTPUT_TRUNCATED',
+        '模型生成的修改结果过长，系统已自动重试但仍未完整返回',
+      );
+    }
+    if (error.code === 'DEEPSEEK_INVALID_JSON') {
+      throw problem.unprocessable(
+        'MODEL_RESPONSE_INVALID',
+        '模型没有返回完整可用的修改结果，请重新尝试',
+      );
+    }
+    if (error.code === 'MODEL_OUTPUT_SCHEMA_INVALID') {
+      throw problem.unprocessable(
+        'MODEL_RESPONSE_INVALID',
+        '模型返回的修改结果不完整，系统自动恢复后仍无法使用，请重新尝试',
+      );
+    }
     if (String(error.code || '').startsWith('DEEPSEEK_')) {
       throw problem.unprocessable(
         'MODEL_UNAVAILABLE',
@@ -975,6 +1037,8 @@ function applyActions({
   promptVersion,
   schemaVersion,
   repairCount,
+  outputBudget,
+  finishReason,
   scopeType,
   scopeId,
   scopeRevision,
@@ -994,12 +1058,16 @@ function applyActions({
     policy_version: POLICY_VERSION,
     task_id: task.id,
     repair_count: repairCount || 0,
+    output_budget: outputBudget || null,
+    finish_reason: finishReason || null,
     result_type: response.result_type,
     protocol_type: response.type,
     awaiting_user: Boolean(response.awaiting_user),
     quick_replies: response.quick_replies || [],
     clarification: response.clarification || null,
     plan: response.plan || null,
+    message_kind: response.message_kind || null,
+    flow_plan: response.flow_plan || null,
   };
   db.run(
     `INSERT INTO ai_messages
@@ -1129,7 +1197,9 @@ function applyActions({
       pending_message: {
         content: finalReply,
         quick_replies: response.quick_replies || [],
+        message_kind: response.message_kind || null,
       },
+      pending_plan: response.flow_plan || response.plan || null,
       pending_clarification: null,
       last_error: null,
       assistant_turn: finalReply,
@@ -1718,6 +1788,8 @@ const routes = [
         promptVersion: result.prompt_version,
         schemaVersion: result.schema_version,
         repairCount: result.repair_count,
+        outputBudget: result.output_budget,
+        finishReason: result.finish_reason,
         scopeType,
         scopeId,
         scopeRevision,
@@ -1740,6 +1812,8 @@ const routes = [
           proposed: applied.executed.map((item) => item.action_type),
           rejected: applied.rejected.map((item) => item.reason),
           repair_count: result.repair_count || 0,
+          output_budget: result.output_budget,
+          finish_reason: result.finish_reason || null,
         },
       });
       return {

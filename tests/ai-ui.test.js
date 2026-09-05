@@ -346,7 +346,8 @@ test('AI 沟通区可确认后开始新对话，并说明保留与失效内容',
   assert.strictEqual(document.querySelector('#new-chat-modal').classList.contains('show'), false);
   assert.strictEqual(document.querySelectorAll('#chat-messages .chat-proposal').length, 0);
   assert.strictEqual(document.querySelectorAll('#chat-messages .bubble').length, 1);
-  assert.match(document.querySelector('#chat-messages').textContent, /你可以直接询问整份简历/);
+  assert.match(document.querySelector('#chat-messages').textContent, /就地改写/);
+  assert.match(document.querySelector('#chat-messages').textContent, /调整结构或联动其他内容/);
   assert.strictEqual(document.querySelector('#selection-label').textContent, '@整份简历');
   assert.strictEqual(Object.hasOwn(dom.window.WS, 'pending_facts'), false);
   dom.window.close();
@@ -390,8 +391,8 @@ test('段落改写时持续标记正文位置，并在思考期间锁定发送�
     true,
     '光标落入可编辑区域时必须显示 AI 快捷入口',
   );
-  assert.match(document.querySelector('.rewrite-action').textContent, /让 AI 帮写/);
-  document.querySelector('.rewrite-action').click();
+  assert.match(document.querySelector('.rewrite-action').textContent, /就地改写/);
+  document.querySelector('.deep-edit').click();
 
   let target = document.querySelector('#target-bullet');
   assert.strictEqual(target.classList.contains('ai-target'), true);
@@ -497,11 +498,19 @@ test('点击单一编辑节点内任一格式段落时只提供整体 AI 入口'
   assert.match(document.querySelector('.rewrite-action').textContent, /整体能力模块/);
 
   document.querySelector('.rewrite-action').click();
+  assert.strictEqual(window.localAiState.targetNodeId, groupId);
+  assert.strictEqual(document.querySelector('#local-ai-popover').classList.contains('show'), true);
+  assert.strictEqual(window.activeContext, null);
+  document.querySelector('#local-ai-close').click();
+
+  firstParagraph.click();
+  document.querySelector('.deep-edit').click();
   assert.strictEqual(window.activeContext.scopeId, groupId);
 
   secondParagraph.click();
   assert.strictEqual(group.classList.contains('selected'), true);
   assert.strictEqual(secondParagraph.classList.contains('selected'), false);
   assert.strictEqual(window.activeContext.scopeId, groupId);
+  await new Promise((resolve) => setTimeout(resolve, 300));
   dom.window.close();
 });

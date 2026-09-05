@@ -124,6 +124,131 @@ test('DOM 操作使用稳定节点 ID，同步修改旧字段且拒绝危险结�
   assert.deepStrictEqual(safe.root.children[0].attributes, {});
 });
 
+test('文字修改只改变文字载荷，单段富文本容器不会叠字或丢失标题样式', () => {
+  const before = ResumeDom.toResumeDocument({
+    schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+    root: {
+      id: 'root',
+      type: 'element',
+      tag: 'article',
+      children: [
+        {
+          id: 'single-block',
+          type: 'element',
+          tag: 'div',
+          editable: true,
+          attributes: { class: 'summary', 'data-rich-text': 'true' },
+          style: { display: 'grid', 'grid-template-columns': '1fr' },
+          children: [{
+            id: 'single-paragraph',
+            type: 'element',
+            tag: 'p',
+            children: [{
+              id: 'single-strong',
+              type: 'element',
+              tag: 'strong',
+              style: { color: '#123456', 'font-size': '18pt' },
+              children: [{
+                id: 'single-text',
+                type: 'text',
+                value: '旧标题',
+              }],
+            }],
+          }],
+        },
+      ],
+    },
+  });
+
+  const after = ResumeDom.applyDocumentOperations(before, [{
+    op: 'replace_text',
+    node_id: 'single-block',
+    text: '新标题',
+    // 旧客户端即使仍传此字段，也不能把富文本结构清空。
+    replace_children: true,
+  }], { allowStructure: false });
+
+  const container = ResumeDom.findNode(after, 'single-block').node;
+  const paragraph = ResumeDom.findNode(after, 'single-paragraph').node;
+  const strong = ResumeDom.findNode(after, 'single-strong').node;
+  assert.strictEqual(container.text, undefined);
+  assert.strictEqual(ResumeDom.exportNodeText(container), '新标题');
+  assert.strictEqual(paragraph.tag, 'p');
+  assert.strictEqual(strong.tag, 'strong');
+  assert.deepStrictEqual(strong.style, { color: '#123456', 'font-size': '18pt' });
+  assert.strictEqual(ResumeDom.findNode(after, 'single-text').node.value, '新标题');
+  assert.strictEqual(container.attributes['data-rich-text'], 'true');
+  assert.strictEqual(container.style.display, 'grid');
+  assert.doesNotMatch(ResumeDom.renderToHtml(after), /新标题旧标题/);
+});
+
+test('多段文字修改保留每段标签、行内格式和节点 ID，段落数量仍由结构操作控制', () => {
+  const before = ResumeDom.toResumeDocument({
+    schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+    root: {
+      id: 'root',
+      type: 'element',
+      tag: 'article',
+      children: [{
+        id: 'rich-summary',
+        type: 'element',
+        tag: 'div',
+        editable: true,
+        children: [
+          {
+            id: 'rich-paragraph-1',
+            type: 'element',
+            tag: 'p',
+            style: { 'line-height': '1.5' },
+            children: [{
+              id: 'rich-strong',
+              type: 'element',
+              tag: 'strong',
+              text: '第一段',
+            }],
+          },
+          {
+            id: 'rich-paragraph-2',
+            type: 'element',
+            tag: 'p',
+            children: [
+              { id: 'rich-span', type: 'element', tag: 'span', text: '第二' },
+              { id: 'rich-em', type: 'element', tag: 'em', text: '段' },
+            ],
+          },
+        ],
+      }],
+    },
+  });
+  const after = ResumeDom.applyDocumentOperations(before, [{
+    op: 'replace_text',
+    node_id: 'rich-summary',
+    text: '更新后的第一段\n更新后的第二段',
+  }], { allowStructure: false });
+
+  assert.strictEqual(
+    ResumeDom.exportNodeText(ResumeDom.findNode(after, 'rich-summary').node),
+    '更新后的第一段\n更新后的第二段',
+  );
+  assert.strictEqual(ResumeDom.findNode(after, 'rich-paragraph-1').node.tag, 'p');
+  assert.strictEqual(
+    ResumeDom.findNode(after, 'rich-paragraph-1').node.style['line-height'],
+    '1.5',
+  );
+  assert.strictEqual(ResumeDom.findNode(after, 'rich-strong').node.tag, 'strong');
+  assert.strictEqual(ResumeDom.findNode(after, 'rich-span').node.tag, 'span');
+  assert.strictEqual(ResumeDom.findNode(after, 'rich-em').node.tag, 'em');
+
+  assert.throws(
+    () => ResumeDom.applyDocumentOperations(before, [{
+      op: 'replace_text',
+      node_id: 'rich-summary',
+      text: '试图合并成一段',
+    }], { allowStructure: false }),
+    (error) => error.code === 'EDITABLE_BLOCK_COUNT_MISMATCH',
+  );
+});
+
 test('通用差异引擎识别动态模块、文本和样式变化，不把固定区块写死', () => {
   const before = ResumeDom.ensureDocument(legacyResume);
   const afterAdded = ResumeDom.applyOperations(before, [overseasOperation()]);
@@ -279,7 +404,7 @@ test('内容分组与 AI 编辑粒度使用可逆语义操作，子节点 ID 和
 });
 
 test('旧版双重 AI 范围无损升级为一个编辑节点，新的嵌套编辑身份被强制拒绝', () => {
-  const legacy = ResumeDom.toResumeDocument({
+  const legacySource = {
     schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
     root: {
       id: 'root',
@@ -296,12 +421,17 @@ test('旧版双重 AI 范围无损升级为一个编辑节点，新的嵌套编�
         ],
       }],
     },
-  });
+  };
+  const legacy = ResumeDom.toResumeDocument(legacySource);
   const group = ResumeDom.findNode(legacy, 'legacy-group').node;
   assert.strictEqual(group.editable, true);
   assert.strictEqual(group.attributes['data-ai-scope'], undefined);
   assert.strictEqual(group.children.every((node) => !node.editable), true);
   assert.strictEqual(ResumeDom.nodeText(group), '第一段。\n第二段。');
+  assert.throws(
+    () => ResumeDom.toResumeDocument(legacySource, { allowLegacyAiScope: false }),
+    (error) => error.code === 'AI_SCOPE_ATTRIBUTE_FORBIDDEN',
+  );
 
   assert.throws(() => ResumeDom.toResumeDocument({
     schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
@@ -313,6 +443,105 @@ test('旧版双重 AI 范围无损升级为一个编辑节点，新的嵌套编�
       children: [{ id: 'child', type: 'element', tag: 'p', text: '内容', editable: true }],
     },
   }), (error) => error.code === 'NESTED_EDITABLE_NODE');
+});
+
+test('语义类型与父子关系保存在同一 ResumeDocument，parent_id 只在运行时派生', () => {
+  const document = ResumeDom.toResumeDocument({
+    schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+    root: {
+      id: 'semantic-root',
+      type: 'element',
+      tag: 'article',
+      semantic: { kind: 'document' },
+      children: [{
+        id: 'semantic-section',
+        type: 'element',
+        tag: 'section',
+        semantic: { kind: 'section', subtype: 'work_experience' },
+        children: [{
+          id: 'semantic-title',
+          type: 'element',
+          tag: 'h2',
+          text: '工作经历',
+          editable: true,
+          semantic: { kind: 'section_title' },
+        }, {
+          id: 'semantic-body',
+          type: 'element',
+          tag: 'p',
+          text: '负责项目推进。',
+          editable: true,
+          semantic: { kind: 'paragraph' },
+        }],
+      }],
+    },
+  });
+
+  assert.strictEqual(document.root.semantic.kind, 'document');
+  assert.strictEqual(
+    ResumeDom.findNode(document, 'semantic-body').parent.id,
+    'semantic-section',
+  );
+  assert.strictEqual(
+    Object.hasOwn(ResumeDom.findNode(document, 'semantic-body').node, 'parent_id'),
+    false,
+  );
+  const index = ResumeDom.buildSemanticIndex(document);
+  assert.strictEqual(index.entries.get('semantic-body').parent_id, 'semantic-section');
+  assert.deepStrictEqual(
+    index.entries.get('semantic-section').child_ids,
+    ['semantic-title', 'semantic-body'],
+  );
+});
+
+test('AI 语义投影保留全文与结构，但省略展示样式、背景和资源', () => {
+  const document = ResumeDom.toResumeDocument({
+    schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+    root: {
+      id: 'projection-root',
+      type: 'element',
+      tag: 'article',
+      semantic: { kind: 'document' },
+      children: [{
+        id: 'projection-page',
+        type: 'element',
+        tag: 'section',
+        semantic: { kind: 'page' },
+        style: { position: 'relative', width: '595pt' },
+        children: [{
+          id: 'projection-background',
+          type: 'element',
+          tag: 'img',
+          semantic: { kind: 'decoration' },
+          attributes: { src: 'data:image/png;base64,AAAA' },
+        }, {
+          id: 'projection-section',
+          type: 'element',
+          tag: 'section',
+          semantic: { kind: 'section' },
+          children: [{
+            id: 'projection-body',
+            type: 'element',
+            tag: 'p',
+            text: '完整正文内容',
+            editable: true,
+            semantic: { kind: 'paragraph' },
+            style: { position: 'absolute', left: '50pt' },
+          }],
+        }],
+      }],
+    },
+    assets: [{ id: 'large-background', type: 'image' }],
+  });
+  const projection = ResumeDom.toAiContextDocument(document);
+  const serialized = JSON.stringify(projection);
+
+  assert.strictEqual(projection.schema_version, ResumeDom.AI_CONTEXT_VERSION);
+  assert.match(serialized, /完整正文内容/);
+  assert.match(serialized, /projection-section/);
+  assert.doesNotMatch(serialized, /projection-background/);
+  assert.doesNotMatch(serialized, /position/);
+  assert.doesNotMatch(serialized, /large-background/);
 });
 
 test('整份简历可由 AI 新增动态模块，新增内容可继续选中改写并撤销', async (t) => {

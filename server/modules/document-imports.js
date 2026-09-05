@@ -354,7 +354,18 @@ const routes = [
         let contentCandidate = parseJson(item.content_candidate, {});
         let corrected = false;
         if (body.resume_json) {
-          const resume = ResumeDom.toResumeDocument(body.resume_json);
+          let resume;
+          try {
+            resume = ResumeDom.toResumeDocument(
+              body.resume_json,
+              { allowLegacyAiScope: false },
+            );
+          } catch (error) {
+            throw problem.unprocessable(
+              'DOCUMENT_CONTENT_INVALID',
+              `识别后的简历文档无效：${error.message}`,
+            );
+          }
           contentCandidate = {
             ...contentCandidate,
             plain_text: ResumeDom.plainText(resume),
@@ -424,7 +435,18 @@ const routes = [
           if (!contentCandidate.resume_json) {
             throw problem.unprocessable('DOCUMENT_CONTENT_MISSING', '没有可应用的完整文档');
           }
-          const nextResume = ResumeDom.toResumeDocument(contentCandidate.resume_json);
+          let nextResume;
+          try {
+            nextResume = ResumeDom.toResumeDocument(
+              contentCandidate.resume_json,
+              { allowLegacyAiScope: false },
+            );
+          } catch (error) {
+            throw problem.unprocessable(
+              'DOCUMENT_CONTENT_INVALID',
+              `识别后的简历文档无效：${error.message}`,
+            );
+          }
 
           const revision = draft.revision + 1;
           db.run(

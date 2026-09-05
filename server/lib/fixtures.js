@@ -351,7 +351,7 @@ const JOB_INPUT_FILES = [
 const PROFILE_UPLOAD_FILES = [{ name: '旧简历.pdf', mime: 'application/pdf', size: 236_510 }];
 
 const WELCOME_MESSAGE =
-  '你可以直接询问整份简历，也可以选择中间的内容并点击“帮我改写”，让我只修改这一段。';
+  '你可以直接询问整份简历；点击文字旁的“就地改写”可快速润色。需要调整结构或联动其他内容时，在这里继续聊。';
 
 module.exports = {
   JOB_TEXT,

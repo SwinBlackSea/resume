@@ -121,6 +121,7 @@ function changeEventLabel(event) {
     || before.label
     || {
       document_transaction: '修改简历文字',
+      inline_ai_text: 'AI 局部修改文字',
       dom_operations: 'AI 修改简历',
       resume_document_merge: 'AI 修改简历',
       document_import: '导入简历',
@@ -277,9 +278,20 @@ const routes = [
             current: draft.revision,
           });
         }
-        const resume = ResumeDom.toResumeDocument(
-          body.resume_json ? body.resume_json : JSON.parse(draft.resume_json || '{}'),
-        );
+        let resume;
+        try {
+          resume = body.resume_json
+            ? ResumeDom.toResumeDocument(
+                body.resume_json,
+                { allowLegacyAiScope: false },
+              )
+            : ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}'));
+        } catch (error) {
+          throw problem.unprocessable(
+            'RESUME_DOCUMENT_INVALID',
+            `简历文档无效：${error.message}`,
+          );
+        }
         const revision = draft.revision + 1;
         db.run(
           `UPDATE resume_drafts SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ? WHERE id = ?`,

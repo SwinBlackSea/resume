@@ -85,6 +85,26 @@ test('结构建议预览从真实文档差异提取内容，不暴露底层操�
   assert.strictEqual(preview.based_on_revision, 7);
 });
 
+test('纯删除模块只描述模块删除，不误报文字调整或子项数量', () => {
+  const before = documentWithItems();
+  const after = ResumeDom.applyDocumentOperations(before, [{
+    op: 'remove_node',
+    node_id: 'experience',
+  }], { allowStructure: true });
+  const preview = buildChangePreview(before, after, {
+    constraints: {
+      content: 'modify',
+      content_order: 'preserve',
+      structure: 'modify',
+      style: 'preserve',
+    },
+  });
+
+  assert.strictEqual(preview.summary, '删除“工作经历”模块');
+  assert.doesNotMatch(preview.summary, /同时调整文字|删除3项内容/);
+  assert.strictEqual(preview.counts.text, 0);
+});
+
 test('文字、位置和显示效果可以在同一个通用预览中并存', () => {
   const before = documentWithItems();
   const after = ResumeDom.applyDocumentOperations(before, [

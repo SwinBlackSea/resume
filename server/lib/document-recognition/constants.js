@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 
-const PARSER_VERSION = 'document-recognition-v3';
+const PARSER_VERSION = 'document-recognition-v4-semantic-tree';
 const SUPPORTED_FORMATS = new Set(['pdf', 'docx', 'doc', 'png', 'jpg', 'jpeg', 'webp']);
 const IMAGE_FORMATS = new Set(['png', 'jpg', 'jpeg', 'webp']);
 const MAX_FILE_SIZE = 20 * 1024 * 1024;

@@ -16,6 +16,16 @@ const { normalizeSemantic } = require('../server/lib/document-recognition/semant
 const { renderHtml } = require('../server/lib/render/html');
 const { buildDocumentXml } = require('../server/lib/render/docx');
 
+function findNode(root, predicate) {
+  if (!root) return null;
+  if (predicate(root)) return root;
+  for (const child of root.children || []) {
+    const found = findNode(child, predicate);
+    if (found) return found;
+  }
+  return null;
+}
+
 const STYLES = `<?xml version="1.0" encoding="UTF-8"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:docDefaults>
@@ -121,16 +131,36 @@ test('DOCX 识别保留分页、表格、单元格和直接文字样式', () => 
   assert.strictEqual(firstPage.style.width, '595.3pt');
   assert.strictEqual(firstPage.style['min-height'], '841.9pt');
   assert.strictEqual(firstPage.style.padding, '42.5pt 52.5pt 42.5pt 52.5pt');
-  assert.strictEqual(firstPage.children[0].style['font-size'], '24pt');
-  assert.strictEqual(firstPage.children[0].style['line-height'], '46.34pt');
-  assert.match(firstPage.children[0].style.margin, /2pt$/);
-  const table = document.root.children[0].children.find((node) => node.tag === 'table');
+  assert.strictEqual(firstPage.semantic.kind, 'page');
+  const title = findNode(firstPage, (node) => node.semantic && node.semantic.kind === 'document_title');
+  assert.strictEqual(title.style['font-size'], '24pt');
+  assert.strictEqual(title.style['line-height'], '46.34pt');
+  assert.match(title.style.margin, /2pt$/);
+  const titleLocation = ResumeDom.findNode(document, title.id);
+  assert.strictEqual(titleLocation.parent.semantic.kind, 'section');
+  const workTitle = findNode(
+    firstPage,
+    (node) => node.semantic
+      && node.semantic.kind === 'section_title'
+      && ResumeDom.exportNodeText(node) === '工作经历',
+  );
+  const workTitleLocation = ResumeDom.findNode(document, workTitle.id);
+  const continuedSection = document.root.children[1].children.find(
+    (node) => node.semantic && node.semantic.kind === 'section',
+  );
+  assert.ok(continuedSection);
+  assert.strictEqual(continuedSection.semantic.continuation, true);
+  assert.strictEqual(
+    continuedSection.semantic.group_id,
+    workTitleLocation.parent.semantic.group_id,
+  );
+  const table = findNode(firstPage, (node) => node.tag === 'table');
   assert.ok(table);
   assert.strictEqual(table.style.width, '465pt');
   assert.strictEqual(table.children[0].children[0].children.length, 3);
   assert.strictEqual(table.children[0].children[0].children[0].style['background-color'], '#F3F6F8');
   assert.strictEqual(table.children[0].children[0].children[0].style.padding, '5pt 5pt 5pt 5pt');
-  const timeline = document.root.children[0].children.find(
+  const timeline = findNode(firstPage,
     (node) => node.attributes && node.attributes['data-rich-layout'] === 'timeline',
   );
   assert.ok(timeline);
@@ -151,9 +181,10 @@ test('旧版 DOCX 导入草稿读取时自动升级为固定 pt 页面', () => {
   page.style['aspect-ratio'] = '11906 / 16838';
   page.style.padding = '5.048% 8.819% 5.048% 8.819%';
   page.style['font-size'] = '10px';
-  page.children[0].style['font-size'] = '24px';
-  page.children[0].style['line-height'] = '2.083';
-  page.children[0].style.margin = '0px 0 2px';
+  const oldTitle = findNode(page, (node) => node.semantic && node.semantic.kind === 'document_title');
+  oldTitle.style['font-size'] = '24px';
+  oldTitle.style['line-height'] = '2.083';
+  oldTitle.style.margin = '0px 0 2px';
 
   const upgraded = ResumeDom.ensureDocument({ dom_document: oldDocument });
   const upgradedPage = upgraded.root.children[0];
@@ -163,15 +194,19 @@ test('旧版 DOCX 导入草稿读取时自动升级为固定 pt 页面', () => {
   assert.strictEqual(upgradedPage.style.padding, '42.5pt 52.5pt 42.5pt 52.5pt');
   assert.strictEqual(upgradedPage.style['font-size'], '10pt');
   assert.strictEqual(upgradedPage.attributes['data-font-metric-scale'], '1.448');
-  assert.strictEqual(upgradedPage.children[0].style['font-size'], '24pt');
-  assert.strictEqual(upgradedPage.children[0].style['line-height'], '72.39pt');
-  assert.strictEqual(upgradedPage.children[0].style.margin, '0pt 0 2pt');
+  const upgradedTitle = findNode(
+    upgradedPage,
+    (node) => node.semantic && node.semantic.kind === 'document_title',
+  );
+  assert.strictEqual(upgradedTitle.style['font-size'], '24pt');
+  assert.strictEqual(upgradedTitle.style['line-height'], '72.39pt');
+  assert.strictEqual(upgradedTitle.style.margin, '0pt 0 2pt');
 });
 
 test('未编辑时保留混合样式，编辑后只替换目标文字且不会重复旧 run', () => {
   const { content } = buildFixture();
   const document = ResumeDom.ensureDocument(content.resume_json);
-  const timeline = document.root.children[0].children.find(
+  const timeline = findNode(document.root.children[0],
     (node) => node.attributes && node.attributes['data-rich-layout'] === 'timeline',
   );
   assert.strictEqual(timeline.children.length, 3);
@@ -181,9 +216,14 @@ test('未编辑时保留混合样式，编辑后只替换目标文字且不会�
     text: '示例大学　学生工作负责人　2023.04—至今',
   }]);
   const changed = ResumeDom.findNode(updated, timeline.id).node;
-  assert.strictEqual(changed.children.length, 0);
-  assert.strictEqual(changed.text, '示例大学　学生工作负责人　2023.04—至今');
-  assert.strictEqual(changed.style.display, undefined);
+  assert.strictEqual(changed.children.length, 3);
+  assert.strictEqual(changed.text, undefined);
+  assert.strictEqual(changed.style.display, 'grid');
+  assert.strictEqual(changed.style['grid-template-columns'], 'auto minmax(0,1fr) auto');
+  assert.deepStrictEqual(
+    changed.children.map((child) => child.id),
+    timeline.children.map((child) => child.id),
+  );
   assert.strictEqual(
     ResumeDom.exportNodeText(changed),
     '示例大学　学生工作负责人　2023.04—至今',
@@ -255,28 +295,117 @@ test('Page Scene 将视觉背景和精确文字层组合为通用可编辑页面
   const document = ResumeDom.ensureDocument(content.resume_json);
   const page = document.root.children[0];
   const background = page.children[0];
-  const line = page.children[1];
-  const span = line.children[0];
+  const section = page.children[1];
+  const block = section.children[0];
+  const visualLine = block.children[0];
+  const span = visualLine.children[0];
 
   assert.strictEqual(layout.schema.layout, 'imported-scene');
   assert.strictEqual(layout.schema.fidelity, 'rendered-page-scene');
   assert.strictEqual(page.style.width, '595.28pt');
   assert.strictEqual(page.style.height, '841.89pt');
   assert.strictEqual(background.tag, 'img');
+  assert.strictEqual(background.semantic.kind, 'decoration');
   assert.strictEqual(background.attributes['data-scene-background-page'], '1');
-  assert.strictEqual(line.editable, true);
-  assert.strictEqual(line.style.left, '52.5pt');
-  assert.strictEqual(line.style.top, '120pt');
+  assert.strictEqual(section.semantic.kind, 'section');
+  assert.strictEqual(block.semantic.kind, 'section_title');
+  assert.strictEqual(block.editable, true);
+  assert.strictEqual(block.style.left, '52.5pt');
+  assert.strictEqual(block.style.top, '120pt');
+  assert.strictEqual(visualLine.semantic.kind, 'layout_line');
   assert.strictEqual(span.style['font-size'], '12pt');
   assert.strictEqual(span.attributes['data-scene-text-width-pt'], '60');
 
   const updated = ResumeDom.applyOperations(document, [{
     op: 'replace_text',
-    node_id: line.id,
+    node_id: block.id,
     replace_children: true,
     text: '项目经历',
   }]);
-  const changed = ResumeDom.findNode(updated, line.id).node;
-  assert.strictEqual(changed.children.length, 0);
-  assert.strictEqual(changed.text, '项目经历');
+  const changed = ResumeDom.findNode(updated, block.id).node;
+  assert.strictEqual(changed.children.length, 1);
+  assert.strictEqual(changed.text, undefined);
+  assert.strictEqual(ResumeDom.exportNodeText(changed), '项目经历');
+  assert.strictEqual(changed.children[0].id, visualLine.id);
+  assert.strictEqual(changed.children[0].children[0].id, span.id);
+  assert.strictEqual(changed.children[0].children[0].style['font-size'], '12pt');
+  assert.strictEqual(changed.children[0].children[0].style.color, '#164D7A');
+});
+
+test('Page Scene 将同一文字块的多行归为一个可编辑语义节点', () => {
+  const blocks = [{
+    id: 'block-title',
+    page: 1,
+    order: 0,
+    kind: 'heading',
+    text: '职业概况',
+  }, {
+    id: 'block-body',
+    page: 1,
+    order: 1,
+    kind: 'paragraph',
+    text: '第一行内容第二行内容',
+  }];
+  const pageScene = {
+    version: 'page-scene-v1',
+    has_text_layer: true,
+    render_dpi: 120,
+    text_node_count: 3,
+    pages: [{
+      number: 1,
+      width: 595.28,
+      height: 841.89,
+      background_contains_text: false,
+      text_nodes: [
+        {
+          text: '职业概况',
+          bbox: { x: 52.5, y: 80, width: 60, height: 16 },
+          spans: [{ text: '职业概况', font_size: 12, bold: true }],
+        },
+        {
+          text: '第一行内容',
+          bbox: { x: 52.5, y: 110, width: 80, height: 14 },
+          spans: [{ text: '第一行内容', font_size: 10 }],
+        },
+        {
+          text: '第二行内容',
+          bbox: { x: 52.5, y: 128, width: 80, height: 14 },
+          spans: [{ text: '第二行内容', font_size: 10 }],
+        },
+      ],
+    }],
+  };
+  const semantic = normalizeSemantic({}, blocks);
+  const content = buildContentCandidate({
+    blocks,
+    pages: [{ number: 1, width: 595.28, height: 841.89, blocks }],
+    semantic,
+    format: 'pdf',
+    pageScene,
+  });
+  const document = ResumeDom.ensureDocument(content.resume_json);
+  const section = findNode(
+    document.root,
+    (node) => node.semantic && node.semantic.kind === 'section',
+  );
+  const title = section.children.find(
+    (node) => node.semantic && node.semantic.kind === 'section_title',
+  );
+  const paragraph = section.children.find(
+    (node) => node.semantic && node.semantic.kind === 'paragraph',
+  );
+
+  assert.ok(title);
+  assert.ok(paragraph);
+  assert.strictEqual(paragraph.editable, true);
+  assert.strictEqual(paragraph.children.length, 2);
+  assert.deepStrictEqual(
+    paragraph.children.map((node) => node.semantic.kind),
+    ['layout_line', 'layout_line'],
+  );
+  assert.strictEqual(ResumeDom.exportNodeText(paragraph), '第一行内容第二行内容');
+  assert.strictEqual(
+    ResumeDom.buildSemanticIndex(document).entries.get(paragraph.id).parent_id,
+    section.id,
+  );
 });

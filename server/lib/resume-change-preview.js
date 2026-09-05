@@ -118,6 +118,19 @@ function semanticItemCount(items, documentValue) {
   }, 0);
 }
 
+function singleModuleLabel(items, documentValue) {
+  if (items.length !== 1) return '';
+  const document = ResumeDom.toResumeDocument(documentValue);
+  const found = ResumeDom.findNode(document, items[0].node_id);
+  if (!found || found.node.type !== 'element' || found.node.tag !== 'section') return '';
+  const title = (found.node.children || []).find((child) =>
+    child.type === 'element' && /^h[1-6]$/.test(String(child.tag || '')));
+  const titleText = title ? ResumeDom.nodeText(title).trim() : '';
+  if (titleText) return titleText.slice(0, 40);
+  const explicit = String(found.node.label || items[0].label || '').trim();
+  return explicit.slice(0, 40);
+}
+
 function textTokens(text) {
   return (
     String(text || '')
@@ -186,6 +199,12 @@ function summarizeSemanticChange({
   const contentPreserved = constraints && constraints.content === 'preserve'
     ? true
     : sameContent(beforeText, afterText, contentOrder);
+  const removedModuleLabel = afterCount === 0
+    ? singleModuleLabel(beforeItems, before)
+    : '';
+  const addedModuleLabel = beforeCount === 0
+    ? singleModuleLabel(afterItems, after)
+    : '';
   const addedIds = new Set(
     comparison.changes
       .filter((change) => change.type === 'added')
@@ -235,9 +254,17 @@ function summarizeSemanticChange({
     } else if (hasMoved) {
       parts.push(`调整${count(counts, 'moved')}项内容的位置`);
     } else if (!beforeCount && afterCount) {
-      parts.push(`新增${afterCount}项内容`);
+      parts.push(
+        addedModuleLabel
+          ? `新增“${addedModuleLabel}”模块`
+          : `新增${afterCount}项内容`,
+      );
     } else if (beforeCount && !afterCount) {
-      parts.push(`删除${beforeCount}项内容`);
+      parts.push(
+        removedModuleLabel
+          ? `删除“${removedModuleLabel}”模块`
+          : `删除${beforeCount}项内容`,
+      );
     } else {
       parts.push('调整内容结构');
     }
@@ -245,7 +272,7 @@ function summarizeSemanticChange({
       parts.push('文字保持不变');
     } else if (count(counts, 'text')) {
       parts.push(`修改${count(counts, 'text')}处文字`);
-    } else {
+    } else if (beforeCount > 0 && afterCount > 0) {
       parts.push('同时调整文字');
     }
   } else if (count(counts, 'text')) {
