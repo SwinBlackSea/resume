@@ -12,10 +12,16 @@ const db = require('../lib/db');
 const { uuidv7, nowIso, problem, hashJson } = require('../lib/util');
 const audit = require('../lib/audit');
 const resumeHarness = require('../lib/resume-harness');
+const {
+  MODEL_ERROR_CODES,
+  isModelServiceError,
+} = require('../lib/model-client');
 const { createNodeDeltaPair } = require('../lib/resume-change');
 const { refreshResumeProposalStaleness } = require('../lib/resume-proposals');
 const { withIdempotency } = require('../lib/idempotency');
 const ResumeDom = require('../../resume-dom');
+const { compactInlineHistory } = require('../lib/ai-storage');
+const inflight = require('../lib/ai-inflight');
 
 const ACTION_TYPE = 'RESUME_INLINE_REWRITE_PROPOSAL';
 const ACTION_FORMAT = 'resume-inline-rewrite-proposal-v1';
@@ -106,7 +112,7 @@ function normalizeSelection(body, document, target) {
   };
 }
 
-function buildModelInput(ctx, body, target, selection) {
+function buildModelInput(ctx, body, target, selection, previousChain = []) {
   const document = ResumeDom.toResumeDocument(parseJson(ctx.draft.resume_json, {}));
   const experiences = db.all(
     `SELECT type, organization, title, start_date, end_date, is_current, description
@@ -116,10 +122,29 @@ function buildModelInput(ctx, body, target, selection) {
     [ctx.profile.id, ctx.profile.owner_id],
   );
   const targetText = ResumeDom.exportNodeText(target.node);
-  const sourceText = selection ? selection.text : targetText;
+  const previousPayload = previousChain.length
+    ? previousChain[previousChain.length - 1].payload
+    : null;
+  const sourceText = previousPayload && Object.hasOwn(previousPayload, 'suggestion')
+    ? String(previousPayload.suggestion || '')
+    : (selection ? selection.text : targetText);
   return {
     request: {
-      instruction: String(body.instruction || '').trim(),
+      instruction: String(body.instruction || ''),
+      ...(previousPayload ? {
+        adjustment: {
+          previous_action_id: String(body.previous_action_id),
+          round: Number(previousPayload.adjustment_round || 0) + 1,
+        },
+      } : {}),
+    },
+    conversation: {
+      task_key: previousChain.length ? previousChain[0].action.id : '',
+      cache: previousPayload && previousPayload.conversation_memory || null,
+      turns: previousChain.flatMap(({ payload }) => [
+        { role: 'user', content: String(payload.instruction || '') },
+        { role: 'assistant', content: String(payload.suggestion || '') },
+      ]),
     },
     workspace: {
       resume: {
@@ -153,30 +178,81 @@ function buildModelInput(ctx, body, target, selection) {
   };
 }
 
+function loadPreviousInlineAction(actionId, user, projectId) {
+  if (!actionId) return null;
+  const action = loadInlineAction(String(actionId), user);
+  const payload = parseJson(action.payload_json, {});
+  if (
+    String(payload.project_id || '') !== String(projectId)
+    || !['awaiting_confirmation', 'proposed', 'superseded'].includes(action.status)
+    || !Object.hasOwn(payload, 'suggestion')
+  ) {
+    throw problem.conflict(
+      'INLINE_ADJUSTMENT_UNAVAILABLE',
+      '上一版建议已经不能继续调整，请重新生成',
+    );
+  }
+  return { action, payload };
+}
+
+function loadPreviousInlineChain(previous, user, projectId) {
+  if (!previous) return [];
+  const chain = [];
+  const seen = new Set();
+  const expectedTargetId = String(previous.payload.target_node_id || '');
+  const expectedTargetMode = String(previous.payload.target_mode || '');
+  let cursor = previous;
+  while (cursor) {
+    if (seen.has(cursor.action.id)) {
+      throw problem.conflict(
+        'INLINE_ADJUSTMENT_UNAVAILABLE',
+        '上一版建议的连续调整记录异常，请重新生成',
+      );
+    }
+    seen.add(cursor.action.id);
+    if (
+      String(cursor.payload.project_id || '') !== String(projectId)
+      || String(cursor.payload.target_node_id || '') !== expectedTargetId
+      || String(cursor.payload.target_mode || '') !== expectedTargetMode
+      || !Object.hasOwn(cursor.payload, 'suggestion')
+    ) {
+      throw problem.conflict(
+        'INLINE_ADJUSTMENT_UNAVAILABLE',
+        '上一版建议已经不能继续调整，请重新生成',
+      );
+    }
+    chain.push(cursor);
+    const parentId = cursor.payload.previous_action_id;
+    if (!parentId) break;
+    const action = loadInlineAction(String(parentId), user);
+    cursor = { action, payload: parseJson(action.payload_json, {}) };
+  }
+  return chain.reverse();
+}
+
 function mapModelError(error) {
   const code = String(error && error.code || '');
-  if (code === 'DEEPSEEK_OUTPUT_TRUNCATED') {
+  if (code === 'MODEL_CONTEXT_COMPACTION_FAILED') {
+    return problem.unprocessable(code, error.message);
+  }
+  if (code === MODEL_ERROR_CODES.OUTPUT_TRUNCATED) {
     return problem.unprocessable(
       'MODEL_OUTPUT_TRUNCATED',
-      'AI 返回的局部结果过长且未完成，请缩小选中文字后重试',
+      'AI 本次没有完成局部生成，请重新生成一次',
     );
   }
   if (
-    code === 'DEEPSEEK_INVALID_JSON'
+    code === MODEL_ERROR_CODES.INVALID_JSON
     || code === 'MODEL_OUTPUT_SCHEMA_INVALID'
     || code === 'INLINE_OUTPUT_SCHEMA_INVALID'
+    || code === MODEL_ERROR_CODES.RESPONSE_FAILED
   ) {
     return problem.unprocessable(
       'MODEL_RESPONSE_INVALID',
       'AI 没有返回完整可用的局部结果，请再试一次',
     );
   }
-  if (
-    code === 'DEEPSEEK_NOT_CONFIGURED'
-    || code === 'DEEPSEEK_TIMEOUT'
-    || code === 'DEEPSEEK_NETWORK_ERROR'
-    || code === 'DEEPSEEK_HTTP_ERROR'
-  ) {
+  if (isModelServiceError(error)) {
     return problem.unprocessable(
       'MODEL_UNAVAILABLE',
       code.includes('TIMEOUT')
@@ -185,16 +261,50 @@ function mapModelError(error) {
     );
   }
   if (error && error.code === 'INLINE_REWRITE_INVALID') {
+    const validationErrors = Array.isArray(error.validation_errors)
+      ? error.validation_errors
+      : [];
+    const lengthError = validationErrors.find((message) =>
+      /明确要求不超过\d+字，当前结果为\d+字/.test(String(message)));
+    const unchanged = validationErrors.some((message) =>
+      String(message).includes('与当前文字完全相同'));
     return problem.unprocessable(
       'INLINE_REWRITE_INVALID',
-      'AI 没有生成可靠的局部文字，请换一种说法再试',
-      { validation_errors: error.validation_errors || [] },
+      lengthError
+        ? `AI 未达到字数要求，系统自动重试后仍不符合：${lengthError}`
+        : unchanged
+          ? 'AI 连续两次原样返回，本次未生成修改建议'
+          : 'AI 没有生成可靠的局部文字，请重新生成一次',
+      { validation_errors: validationErrors },
     );
   }
   return problem.unprocessable(
     'INLINE_REWRITE_INVALID',
     'AI 返回的局部修改无法使用，请再试一次',
   );
+}
+
+function modelFailureDetails(error) {
+  return {
+    code: String(error && error.code || 'UNKNOWN'),
+    finish_reason: error && error.finish_reason || null,
+    content_length: Number.isFinite(error && error.content_length)
+      ? error.content_length
+      : null,
+    reasoning_length: Number.isFinite(error && error.reasoning_length)
+      ? error.reasoning_length
+      : null,
+    max_tokens: Number.isFinite(error && error.max_tokens) ? error.max_tokens : null,
+    repair_count: Number.isInteger(error && error.repair_count) ? error.repair_count : 0,
+    output_budget: error && error.output_budget || null,
+    validation_errors: Array.isArray(error && error.validation_errors)
+      ? error.validation_errors.slice(0, 10)
+      : [],
+    attempts: Array.isArray(error && error.attempts)
+      ? error.attempts.slice(0, 2)
+      : [],
+    failed_at: nowIso(),
+  };
 }
 
 function supersedeEarlierActions(projectId, ownerId, targetNodeId, excludeActionId = null) {
@@ -219,6 +329,23 @@ function supersedeEarlierActions(projectId, ownerId, targetNodeId, excludeAction
       );
     }
   });
+}
+
+function restorePreviousInlineAction(previous, requestTransition) {
+  if (
+    !previous
+    || !requestTransition
+    || Number(requestTransition.changes || 0) !== 1
+    || !['awaiting_confirmation', 'proposed'].includes(previous.action.status)
+  ) {
+    return;
+  }
+  db.run(
+    `UPDATE ai_action_requests
+     SET status = ?, rejected_at = NULL
+     WHERE id = ? AND status = 'superseded'`,
+    [previous.action.status, previous.action.id],
+  );
 }
 
 function commonPrefixLength(left, right) {
@@ -365,6 +492,18 @@ function loadInlineAction(actionId, user) {
   return action;
 }
 
+function clientRequestToken(value) {
+  const token = String(value || '');
+  if (token && !/^[a-zA-Z0-9_-]{8,96}$/.test(token)) {
+    throw problem.badRequest('局部请求标识无效');
+  }
+  return token;
+}
+
+function cancellationKey(projectId, token) {
+  return `inline-cancel:${projectId}:${token}`;
+}
+
 function applyInlineAction({ action, user, requestId, ipHash }) {
   return db.tx(() => {
     const payload = parseJson(action.payload_json, {});
@@ -448,6 +587,9 @@ function applyInlineAction({ action, user, requestId, ipHash }) {
         "UPDATE ai_action_requests SET status = 'applied', applied_at = ? WHERE id = ?",
         [nowIso(), action.id],
       );
+      compactInlineHistory(db.getDb(), {
+        ownerId: user.id, projectId: payload.project_id, finishedActionId: action.id,
+      });
       return {
         id: action.id,
         status: 'applied',
@@ -519,6 +661,9 @@ function applyInlineAction({ action, user, requestId, ipHash }) {
         change_event_id: changeId,
       },
     });
+    compactInlineHistory(db.getDb(), {
+      ownerId: user.id, projectId: payload.project_id, finishedActionId: action.id,
+    });
     return {
       id: action.id,
       status: 'applied',
@@ -535,39 +680,126 @@ function applyInlineAction({ action, user, requestId, ipHash }) {
 const routes = [
   {
     method: 'POST',
+    pattern: '/projects/:id/ai/inline-rewrites/cancel',
+    handler: ({ params, body, user }) => {
+      loadProjectContext(params.id, user);
+      const token = clientRequestToken(body.client_request_id);
+      if (!token) throw problem.badRequest('缺少局部请求标识');
+      const canceledIds = [];
+      const result = db.tx(() => withIdempotency(user,
+        cancellationKey(params.id, token), 'inline_ai_cancel', () => {
+          const rows = db.all(
+            `SELECT * FROM ai_action_requests
+             WHERE owner_id = ? AND action_type = ?
+               AND json_extract(payload_json, '$.project_id') = ?
+               AND json_extract(payload_json, '$.client_request_id') = ?`,
+            [user.id, ACTION_TYPE, params.id, token],
+          );
+          for (const row of rows) {
+            if (['applied', 'reverted', 'superseded'].includes(row.status)) continue;
+            db.run("UPDATE ai_action_requests SET status = 'rejected', rejected_at = ? WHERE id = ?",
+              [nowIso(), row.id]);
+            compactInlineHistory(db.getDb(), {
+              ownerId: user.id, projectId: params.id, finishedActionId: row.id,
+            });
+            canceledIds.push(row.id);
+          }
+          // 取消可先于生成请求到达；小回执阻止后到请求重新建立任务。
+          return { id: token, status: 'canceled', resume_unchanged: true };
+        }));
+      canceledIds.forEach((id) => inflight.cancel(`inline:${user.id}:${id}`));
+      return result;
+    },
+  },
+  {
+    method: 'POST',
     pattern: '/projects/:id/ai/inline-rewrites',
     handler: async ({ params, body, user, requestId, ipHash }) => {
-      const instruction = String(body.instruction || '').trim();
-      if (!instruction) throw problem.badRequest('请告诉 AI 你想怎么修改');
-      if (instruction.length > 1000) throw problem.badRequest('修改要求不能超过 1000 个字符');
+      const instruction = String(body.instruction || '');
+      if (!instruction.trim()) throw problem.badRequest('请告诉 AI 你想怎么修改');
       if (!body.target_node_id) throw problem.badRequest('请选择要修改的简历文字');
       if (!['node', 'selection'].includes(body.target_mode || 'node')) {
         throw problem.badRequest('不支持的局部修改范围');
       }
       const ctx = loadProjectContext(params.id, user);
+      const clientToken = clientRequestToken(body.client_request_id);
+      if (clientToken && db.get(
+        'SELECT id FROM idempotency_keys WHERE owner_id = ? AND key = ?',
+        [user.id, cancellationKey(params.id, clientToken)],
+      )) throw problem.conflict('INLINE_REQUEST_CANCELED', '这次局部修改已经关闭');
+      if (clientToken && db.get(
+        `SELECT id FROM ai_action_requests WHERE owner_id = ? AND action_type = ?
+         AND json_extract(payload_json, '$.project_id') = ?
+         AND json_extract(payload_json, '$.client_request_id') = ?`,
+        [user.id, ACTION_TYPE, params.id, clientToken],
+      )) throw problem.conflict('INLINE_REQUEST_EXISTS', '这次局部请求已处理，请勿重复提交');
       const document = ResumeDom.toResumeDocument(parseJson(ctx.draft.resume_json, {}));
-      const resolved = ResumeDom.resolveAiScopeNode(document, String(body.target_node_id));
+      const previous = loadPreviousInlineAction(
+        body.previous_action_id,
+        user,
+        ctx.project.id,
+      );
+      if (
+        previous
+        && (
+          String(previous.payload.target_node_id) !== String(body.target_node_id)
+          || String(previous.payload.target_mode) !== String(body.target_mode || 'node')
+        )
+      ) {
+        throw problem.conflict(
+          'INLINE_ADJUSTMENT_TARGET_CHANGED',
+          '继续调整时修改位置不能改变，请重新选择',
+        );
+      }
+      const requestedTargetId = previous
+        ? previous.payload.target_node_id
+        : String(body.target_node_id);
+      const resolved = ResumeDom.resolveAiScopeNode(document, requestedTargetId);
       const target = resolved
         ? ResumeDom.findNode(document, resolved.node.id)
         : null;
       if (!target || target.node.editable !== true) {
         throw problem.badRequest('这处内容不能进行局部修改');
       }
-      const selection = normalizeSelection(body, document, target);
-      const input = buildModelInput(ctx, { ...body, instruction }, target, selection);
+      const selection = previous
+        ? previous.payload.selection
+        : normalizeSelection(body, document, target);
+      const previousChain = loadPreviousInlineChain(previous, user, ctx.project.id);
+      const input = buildModelInput(
+        ctx,
+        { ...body, instruction },
+        target,
+        selection,
+        previousChain,
+      );
       const actionId = uuidv7();
       const initialPayload = {
         format: ACTION_FORMAT,
+        ...(clientToken ? { client_request_id: clientToken } : {}),
+        session_id: previousChain.length
+          ? (previousChain[0].payload.session_id || previousChain[0].action.id) : actionId,
+        ...(input.conversation.cache
+          ? { conversation_memory: input.conversation.cache }
+          : {}),
         project_id: ctx.project.id,
         target_mode: selection ? 'selection' : 'node',
         target_node_id: target.node.id,
         target_type: target.node.type,
         target_tag: target.node.tag || null,
         target_label: target.node.label || '',
-        base_draft_revision: ctx.draft.revision,
-        base_node_text: ResumeDom.exportNodeText(target.node),
+        base_draft_revision: previous
+          ? previous.payload.base_draft_revision
+          : ctx.draft.revision,
+        base_node_text: previous
+          ? previous.payload.base_node_text
+          : ResumeDom.exportNodeText(target.node),
         selection,
         instruction,
+        ...(previous ? {
+          previous_action_id: previous.action.id,
+          adjustment_round: Number(previous.payload.adjustment_round || 0) + 1,
+          iteration_base_text: String(previous.payload.suggestion || ''),
+        } : {}),
       };
       db.tx(() => {
         // 用户后发起的要求立即成为这一位置的最新意图。模型响应速度不能
@@ -589,20 +821,51 @@ const routes = [
             nowIso(),
           ],
         );
+        compactInlineHistory(db.getDb(), { ownerId: user.id, projectId: ctx.project.id });
       });
 
       let result;
+      const running = inflight.begin(`inline:${user.id}:${actionId}`);
       try {
-        result = await resumeHarness.completeInlineRewrite(input);
+        result = await resumeHarness.completeInlineRewrite(input, {
+          signal: running.signal,
+          onMemory: (memory) => {
+            initialPayload.conversation_memory = memory;
+            db.run(
+              `UPDATE ai_action_requests SET payload_json = ?
+               WHERE id = ? AND status = 'processing'`,
+              [JSON.stringify(initialPayload), actionId],
+            );
+          },
+        });
       } catch (error) {
-        db.run(
-          `UPDATE ai_action_requests
-           SET status = 'failed'
-           WHERE id = ? AND status = 'processing'`,
-          [actionId],
+        const failure = modelFailureDetails(error);
+        db.tx(() => {
+          const transition = db.run(
+            `UPDATE ai_action_requests
+             SET payload_json = ?, status = 'failed'
+             WHERE id = ? AND status = 'processing'`,
+            [JSON.stringify({ ...initialPayload, failure }), actionId],
+          );
+          restorePreviousInlineAction(previous, transition);
+        });
+        console.error(
+          '[inline-ai] failed',
+          failure.code,
+          error.message,
+          JSON.stringify({
+            finish_reason: failure.finish_reason,
+            content_length: failure.content_length,
+            reasoning_length: failure.reasoning_length,
+            max_tokens: failure.max_tokens,
+            repair_count: failure.repair_count,
+            output_budget: failure.output_budget,
+            attempts: failure.attempts,
+          }),
         );
-        console.error('[inline-ai] failed', error.code || 'UNKNOWN', error.message);
         throw mapModelError(error);
+      } finally {
+        running.finish();
       }
       if (result.response.type === 'message') {
         const payload = {
@@ -615,14 +878,19 @@ const routes = [
             prompt_version: result.prompt_version,
             schema_version: result.schema_version,
             repair_count: result.repair_count || 0,
+            route: result.model_route || null,
+            routing_reason: result.routing_reason || null,
           },
         };
-        db.run(
-          `UPDATE ai_action_requests
-           SET payload_json = ?, status = 'rejected', rejected_at = ?, policy_version = ?
-           WHERE id = ? AND status = 'processing'`,
-          [JSON.stringify(payload), nowIso(), result.prompt_version, actionId],
-        );
+        db.tx(() => {
+          const transition = db.run(
+            `UPDATE ai_action_requests
+             SET payload_json = ?, status = 'rejected', rejected_at = ?, policy_version = ?
+             WHERE id = ? AND status = 'processing'`,
+            [JSON.stringify(payload), nowIso(), result.prompt_version, actionId],
+          );
+          restorePreviousInlineAction(previous, transition);
+        });
         audit.log({
           ownerId: user.id,
           action: 'resume_inline_ai_handoff',
@@ -641,7 +909,11 @@ const routes = [
           content: result.response.content,
           handoff: true,
           target_node_id: target.node.id,
-          engine: { provider: result.provider, model: result.model },
+          engine: {
+            provider: result.provider,
+            model: result.model,
+            route: result.model_route || null,
+          },
         };
       }
 
@@ -656,6 +928,10 @@ const routes = [
           prompt_version: result.prompt_version,
           schema_version: result.schema_version,
           repair_count: result.repair_count || 0,
+          route: result.model_route || null,
+          routing_reason: result.routing_reason || null,
+          attempts: result.attempts || [],
+          gateway_metrics: result.gateway_metrics || null,
         },
       };
       db.run(
@@ -666,6 +942,14 @@ const routes = [
         [JSON.stringify(payload), result.prompt_version, actionId],
       );
       const currentAction = loadInlineAction(actionId, user);
+      if (!['awaiting_confirmation', 'proposed'].includes(currentAction.status)) {
+        return {
+          type: 'message', result_type: 'MESSAGE', discarded: true,
+          content: '这次局部修改已结束，未生成新的建议。',
+          target_node_id: target.node.id,
+          action: { id: actionId, status: currentAction.status, action_type: ACTION_TYPE },
+        };
+      }
       audit.log({
         ownerId: user.id,
         action: 'resume_inline_ai_proposed',
@@ -678,7 +962,9 @@ const routes = [
           target_node_id: target.node.id,
           target_mode: payload.target_mode,
           base_revision: ctx.draft.revision,
+          adjustment_round: payload.adjustment_round || 0,
           repair_count: result.repair_count || 0,
+          attempts: result.attempts || [],
           status: currentAction.status,
         },
       });
@@ -694,7 +980,11 @@ const routes = [
           expected_revision: ctx.draft.revision,
           payload,
         },
-        engine: { provider: result.provider, model: result.model },
+        engine: {
+          provider: result.provider,
+          model: result.model,
+          route: result.model_route || null,
+        },
       };
     },
   },
@@ -730,18 +1020,25 @@ const routes = [
         ) {
           return { id: action.id, status: action.status, idempotent_replay: true };
         }
-        db.run(
-          "UPDATE ai_action_requests SET status = 'rejected', rejected_at = ? WHERE id = ?",
-          [nowIso(), action.id],
-        );
-        audit.log({
+        db.tx(() => {
+          db.run(
+            "UPDATE ai_action_requests SET status = 'rejected', rejected_at = ? WHERE id = ?",
+            [nowIso(), action.id],
+          );
+          compactInlineHistory(db.getDb(), {
+            ownerId: user.id, projectId: parseJson(action.payload_json).project_id,
+            finishedActionId: action.id,
+          });
+          audit.log({
           ownerId: user.id,
           action: 'resume_inline_ai_rejected',
           resourceType: 'ai_action_request',
           resourceId: action.id,
           requestId,
           ipHash,
+          });
         });
+        inflight.cancel(`inline:${user.id}:${action.id}`);
         return { id: action.id, status: 'rejected', resume_unchanged: true };
       }),
   },

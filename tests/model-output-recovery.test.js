@@ -32,7 +32,7 @@ test('全局 AI 自动重试协议错误，并向用户区分格式错误、截�
     generate: async () => {
       invalidCalls += 1;
       const error = new Error('模型未返回合法 JSON');
-      error.code = 'DEEPSEEK_INVALID_JSON';
+      error.code = 'MODEL_INVALID_JSON';
       error.finish_reason = 'stop';
       error.content_length = 12;
       throw error;
@@ -50,7 +50,7 @@ test('全局 AI 自动重试协议错误，并向用户区分格式错误、截�
     generate: async () => {
       truncatedCalls += 1;
       const error = new Error('模型输出达到长度上限');
-      error.code = 'DEEPSEEK_OUTPUT_TRUNCATED';
+      error.code = 'MODEL_OUTPUT_TRUNCATED';
       error.finish_reason = 'length';
       error.content_length = 12000;
       error.max_tokens = 8192;
@@ -67,7 +67,7 @@ test('全局 AI 自动重试协议错误，并向用户区分格式错误、截�
     model: 'network-error',
     generate: async () => {
       const error = new Error('模型网络不可达');
-      error.code = 'DEEPSEEK_NETWORK_ERROR';
+      error.code = 'MODEL_NETWORK_ERROR';
       throw error;
     },
   }, '删除职业概况');

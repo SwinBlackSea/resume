@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Resume Schema 校验、内容安全校验与完整度计算。
+ * Resume Schema 校验与完整度计算。
  * 不保存内容来源、证据映射或资料到正文的派生关系。
  */
 const ResumeDom = require('../../resume-dom');
@@ -52,38 +52,6 @@ function keyTokens(text) {
   return result;
 }
 
-function collectUserTokens(texts) {
-  const tokens = new Set();
-  (texts || []).forEach((text) => keyTokens(text).forEach((token) => tokens.add(token)));
-  return tokens;
-}
-
-/**
- * 只检查结果是否出现用户没有提供的可核验数字，不追踪每句话来自哪里。
- */
-function validateContentSafety(resumeJson, userProvidedTexts = []) {
-  const known = collectUserTokens(userProvidedTexts);
-  const violations = [];
-  let text = '';
-  try {
-    text = ResumeDom.plainText(ResumeDom.ensureDocument(resumeJson));
-  } catch (_) {
-    text = JSON.stringify(resumeJson || {});
-  }
-  keyTokens(text).forEach((token) => {
-    if (!known.has(token)) {
-      violations.push({
-        section: 'document',
-        token,
-        text,
-        code: 'UNSUPPORTED_ASSERTION',
-        message: `出现用户没有提供的数据：${token}`,
-      });
-    }
-  });
-  return { violations, ok: violations.length === 0 };
-}
-
 function computeReadiness({ profileBasics, experiences, job }) {
   const missing = [];
   if (!profileBasics || !profileBasics.name) missing.push('姓名');
@@ -116,7 +84,6 @@ module.exports = {
   RESUME_SCHEMA_VERSION,
   RESUME_FIELDS,
   validateResumeJson,
-  validateContentSafety,
   computeReadiness,
   computeProfileCompleteness,
   keyTokens,

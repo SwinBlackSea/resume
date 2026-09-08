@@ -6,7 +6,8 @@
  */
 const db = require('../lib/db');
 const { uuidv7, nowIso, sha256, problem } = require('../lib/util');
-const { objectKey, putObject, getObject } = require('../lib/storage');
+const { objectKey, putObject, getObject, removeObject } = require('../lib/storage');
+const { isReferenced, imageUpload } = require('../lib/chat-images');
 
 const MAX_SIZE = 20 * 1024 * 1024;
 const SUPPORTED_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'webp']);
@@ -54,6 +55,11 @@ const routes = [
     pattern: '/uploads',
     handler: ({ body, user }) => {
       const { original_name, mime_type, size } = body;
+      const conversationId = body.chat_conversation_id || null;
+      if (conversationId && !db.get(
+        "SELECT id FROM ai_conversations WHERE id = ? AND owner_id = ? AND status = 'active'",
+        [conversationId, user.id],
+      )) throw problem.badRequest('对话已结束，请重新选择图片');
       if (!original_name) throw problem.badRequest('缺少文件名');
       const extension = extensionOf(original_name);
       if (!SUPPORTED_EXTENSIONS.has(extension)) {
@@ -66,9 +72,9 @@ const routes = [
       const id = uuidv7();
       const key = objectKey(user.id, 'upload', original_name);
       db.run(
-        `INSERT INTO uploads (id, owner_id, object_key, original_name, mime_type, size, sha256, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, '', 'uploading', ?, ?)`,
-        [id, user.id, key, original_name, mime_type || '', size || 0, nowIso(), nowIso()],
+        `INSERT INTO uploads (id, owner_id, object_key, original_name, mime_type, size, sha256, status, created_at, updated_at, chat_conversation_id)
+         VALUES (?, ?, ?, ?, ?, ?, '', 'uploading', ?, ?, ?)`,
+        [id, user.id, key, original_name, mime_type || '', size || 0, nowIso(), nowIso(), conversationId],
       );
       return {
         id,
@@ -77,6 +83,21 @@ const routes = [
         complete_url: `/api/v1/uploads/${id}/complete`,
         status: 'uploading',
       };
+    },
+  },
+  {
+    method: 'GET',
+    pattern: '/uploads/:id/preview',
+    raw: true,
+    handler: ({ params, user, res }) => {
+      const stored = db.get('SELECT chat_conversation_id FROM uploads WHERE id = ? AND owner_id = ?', [params.id, user.id]);
+      const upload = imageUpload(params.id, user, stored && stored.chat_conversation_id);
+      const buffer = getObject(upload.object_key);
+      if (!buffer) throw problem.notFound('图片文件不存在');
+      res.writeHead(200, { 'content-type': upload.mime_type, 'content-length': buffer.length,
+        'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' });
+      res.end(buffer);
+      return { __handled: true };
     },
   },
   {
@@ -89,6 +110,7 @@ const routes = [
         user.id,
       ]);
       if (!upload) throw problem.notFound('上传会话不存在');
+      if (upload.status === 'ready') throw problem.conflict('UPLOAD_COMPLETED', '图片或文件已上传完成，不能覆盖原内容');
       const chunks = [];
       let size = 0;
       for await (const chunk of req) {
@@ -150,11 +172,12 @@ const routes = [
         user.id,
       ]);
       if (!upload) throw problem.notFound('上传不存在');
-      const referenced =
+      const referenced = isReferenced(upload.id) ||
         db.get('SELECT * FROM job_files WHERE upload_id = ?', [upload.id]) ||
         db.get('SELECT * FROM template_definitions WHERE template_upload_id = ?', [upload.id]) ||
         db.get('SELECT * FROM document_imports WHERE upload_id = ?', [upload.id]);
       if (referenced) throw problem.conflict('UPLOAD_REFERENCED', '文件已被引用，不能删除');
+      removeObject(upload.object_key);
       db.run('DELETE FROM uploads WHERE id = ?', [upload.id]);
       return { id: upload.id, deleted: true };
     },

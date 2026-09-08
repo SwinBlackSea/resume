@@ -1,12 +1,20 @@
 # 简历星球 · AI Native 简历工作台
 
-产品与技术基线已更新为 **PRD v2.11.0**、**TECH v2.11.0**：资料、当前简历和 AI 对话是平级对象；当前简历是一份包含正文、页面、样式、资源和语义树的完整可编辑文档。
+产品与技术基线已更新为 **PRD v2.14.1**、**TECH v2.14.1**：资料、当前简历和 AI 对话是平级对象；当前简历是一份包含正文、页面、样式、资源和语义树的完整可编辑文档。
 
-当前实现按 v2.11.0 收口：PDF、DOCX、DOC 和图片统一进入同一语义树，`children` 表达真实父子关系。全局与局部 AI 都读取由完整文档临时生成的精简语义投影，只携带全文、稳定 ID、语义和编辑边界，不携带 CSS、坐标、背景或资源；全局 AI 只返回经过最小范围校验的变化区域，服务端继承原排版并形成完整目标。正文旁“就地改写”仍只处理当前文字或选区。所有结果都需用户确认，确认顺序决定最终内容。
+v2.14.1：`+/-` 以完整列表项、经历块、表格行/合并行组为默认边界，内部段落增删显式选择，完整保留子树。聊天支持选图、粘贴、拖入、纯图发送及后续多轮看图，不自动写入资料；新对话清理旧聊天专用图片。真实 Chromium 回归包含嵌套结构、全部缩放、连续点击、自动保存、撤销重做，以及可选的公开 DOCX/PDF 文件样本。
+
+v2.14.0全局聊天：明确要求直接生成可预览建议，取消按修改复杂度强制确认思路；自然追问、解释和应用后的对话持续承接。失败可直接重试原要求，后台状态可跨刷新恢复，支持停止生成并阻止迟到回写；重叠片段恢复保留独立修改，最终建议原子提交。所有正文变更仍需用户点击应用。
+
+v2.13.2存储治理：全局新对话创建成功即删除项目此前聊天、任务和建议；局部应用成功或放弃后清空该任务历史，失败保留重试链。幂等缓存不重复保存整份简历，过期撤销只保留操作摘要；当前草稿、资料、版本和有效五步撤销/重做独立保留。新旧请求并发时通过取消信号与数据库状态双重阻止回写。
+
+局部AI用Flash处理纯文本，保持轻量且不推理；全局AI及恢复使用Pro与low推理强度，读取整份简历的真实节点、文字、样式和页面设置，不降低文档能力。旧对话滚动整理并复用任务记忆，最近对话和本轮原话完整保留。模型默认返回最小修改，后端继承未返回字段；所有正文变更仍需用户应用。server/harness/model-gateway/供应商adapter职责分离，重试诊断不得替换最后一条用户要求。
+
+画布现在读取根节点样式及完整页面设置，HTML/PDF/DOCX共用页面尺寸与边距换算。静态服务只公开前端入口与必需脚本，不公开仓库文件。PDF/DOCX仍使用语义导出引擎，尚不能宣称任意CSS效果都与浏览器完全一致。
 
 - 前端：`index.html`（单一 HTML，页面设计唯一来源，见 `AGENTS.md`）
 - 后端：`server/`（Node.js 24，依赖见 `package.json`）
-- 测试：`tests/`（覆盖 v2.11.0 统一语义树、精简模型上下文、稀疏目标片段、严格 JSON 恢复、动态输出预算、双入口边界、并发顺序、全局三方合并、文件导入、文档事务、版本闭环与原型结构一致性）
+- 测试：`tests/`（覆盖 v2.13.1 统一语义树、语义增删、局部纯文本多轮承接、全局完整文档上下文、稀疏目标片段、严格 JSON 恢复、动态输出预算、并发顺序、全局三方合并、文件导入、文档事务、版本闭环与原型结构一致性）
 
 文档分工：
 
@@ -52,7 +60,7 @@ npm run reset                     # 重置演示数据库
 server/index.js ── 路由分发、静态服务、错误处理（RFC 7807）
    │
    ├─ modules/   业务模块（项目/资料/岗位/上传/文档草稿/AI/版本/生成/产物）
-   ├─ lib/       基础设施（db、policy、resume-harness、deepseek-client、queue、render、storage…）
+   ├─ lib/       基础设施（db、policy、resume-harness、model-client、queue、render、storage…）
    └─ schema.sql 数据模型（业务表 + 冻结触发器 + 唯一约束）
 
 异步链路：业务事务 → outbox_events → Worker → 对象存储/数据库 → SSE → 浏览器
@@ -65,14 +73,14 @@ server/index.js ── 路由分发、静态服务、错误处理（RFC 7807）
 | 数据库 | `node:sqlite`（SQLite） | 承载 TECH §7 全部表与约束，生产可换 PostgreSQL |
 | 队列 | 进程内 Worker + `outbox_events` | 先落库再投递，避免「有快照无任务」 |
 | 对象存储 | `data/objects` 本地目录 | 私有桶语义，下载走短期签名 URL |
-| AI 编排 | `lib/resume-harness/` | 完整文档先投影为精简语义树；全局返回最小变化并装配完整 B，局部只生成锁定文字 |
-| 模型客户端 | `lib/deepseek-client/` | 调用无状态 DeepSeek Chat Completions；支持流式、图片与超时控制 |
+| AI 编排 | `lib/resume-harness/` | 共用自然会话骨架；全局读取精简语义树并装配完整 B，局部读取纯文本并只生成锁定文字 |
+| 模型客户端 | `lib/model-client/` | 供应商无关调用契约；DeepSeek 适配器使用 Responses API、严格 Schema、流式解析与分级超时 |
 | 文档组件 | `resume-dom.js` | 完整 ResumeDocument、语义类型、真实父子树、文字事务、稳定节点 ID、AI 投影与旧草稿转换 |
 | 渲染 | `lib/render/{pdf,docx,html}.js` | ResumeDocument → PDF/DOCX/HTML |
 
 ---
 
-## 3. 前端：沿用原型布局并落实 v2.11.0
+## 3. 前端：沿用原型布局并落实 v2.13.1
 
 实现方式：
 
@@ -81,9 +89,9 @@ server/index.js ── 路由分发、静态服务、错误处理（RFC 7807）
 - **内容**：初始数据由后端 seed 提供（陈知行、3 个版本、8/11 项要求覆盖）；
   旧原型中的来源、待确认事实和资料到正文使用关系不再展示。
 - **交互**：现有文字直改、正文旁就地改写、右侧全局 AI、`@作用范围`、改写方案卡片、撤销栏、版本浏览器、
-  生成进度、缩放、拖拽导入等行为与原型一致，底层改为真实 API 调用。
+  生成进度、缩放、拖拽导入等行为与原型一致；简历编辑栏在中央画布内悬浮，滚动后自动收紧并持续提供高频操作，底层改为真实 API 调用。
 - **动态正文**：不再由前端写死工作、项目、教育等模块；通用组件遍历正文树。
-  现有文字可按节点直改；模块增删移动、段落结构和样式调整由 AI 表达最小变化区域，服务端形成完整目标文档。
+  现有文字可按节点直改；光标指向可编辑 DOM 时，简历页面内才显示 `+/-`，可递归复制完整参考子树或删除当前完整语义单元；模块标题会区分增加内容与新增同级模块。移动、合并、拆分、样式和页面调整仍由 AI 表达最小变化区域。
 - **历史版本**：详情复用通用文档渲染器；比较默认覆盖历史版本与当前实时草稿；
   从旧版本继续时复制完整文档，并先保护未保存修改。
 - **验证**：`tests/prototype-parity.test.js` 用 jsdom 同时解析「原型静态 DOM」与
@@ -92,11 +100,11 @@ server/index.js ── 路由分发、静态服务、错误处理（RFC 7807）
 
 ---
 
-## 4. v2.11.0 实现状态
+## 4. v2.13.1 实现状态
 
 ### 4.1 三个平级工作空间
 
-| v2.11.0 能力 | 规则 | 当前实现状态 |
+| v2.13.1 能力 | 规则 | 当前实现状态 |
 |---|---|---|
 | 资料可选 | 资料、简历和对话是平级输入 | 已实现上下文分离 |
 | 对话内容可直接用于简历 | 用户明确提供的信息无需先保存资料即可进入修改建议 | 已实现 |
@@ -111,24 +119,29 @@ server/index.js ── 路由分发、静态服务、错误处理（RFC 7807）
 | 安全继续修改 | 未保存修改先保存或明确放弃；资料不被历史版本覆盖 | 已实现 |
 | 单一完整文档 | 正文、页面、样式、资源和语义标记由 ResumeDocument 一体保存 | 已实现 |
 | 统一语义树 | DOCX/PDF 等导入结果使用相同 semantic kind；父子关系只由 children 表达 | 已实现 |
-| 精简 AI 上下文 | 保留全文、ID、语义、层级和编辑边界，过滤坐标、CSS、背景与资源 | 已实现；全局与局部共用 |
+| 分层 AI 上下文 | 局部只发纯文本；全局保留原生节点字段、全文、富文本、样式、布局、页面和资源描述 | 已实现；输入输出同形，正文不摘要 |
+| 长任务记忆 | 旧对话滚动摘要，最近原话不截断，缓存按任务和消息前缀校验 | 活跃任务保留原文，结束后按生命周期清理 |
+| 模型基础设施边界 | gateway只放行模型协议字段，adapter不处理业务，harness有界恢复 | 已实现；计量不记录正文 |
+| 会话式模型输入 | 系统规则、只读上下文、任务内 `user/assistant` 历史、本轮 user 依次发送；局部用 working set 聚焦当前文字与原始指令 | 已实现；前端只传动作或任务 ID，后端重建 |
 | 稀疏变化继承 | 模型只返回改变字段；标题标签、富文本、样式与资源由服务端继承 | 已实现 |
 | 现有文字直改 | 无需模式切换；停顿或失焦后自动保存，可撤销但不自动成版 | 已实现 |
+| 语义节点增删 | 正文旁 `+/-` 按真实父子关系新增同级内容或删除当前单元；标题增加提供两种明确结果 | 已实现；固定坐标页面不直接新增，底图含原文字时也不直接删除 |
 | AI 结构调整 | 模块、段落、样式和页面操作只在应用建议后写入 | 已实现 |
 | 正文旁就地改写 | 只修改当前文字或选区，不调整结构、不进入右侧会话 | 已实现 |
 | 双入口状态隔离 | 点击正文不暗中切换右侧作用范围；转到对话时才显式切换 | 已实现 |
 | 局部确认顺序 | 同位置以后发起请求为准；不同入口以最后确认结果为准 | 已实现 |
 | 局部并发恢复 | 换位置、关闭、超时和迟到结果均可安全回收或重试 | 已实现 |
+| 局部确定性约束 | 明确字数上限由服务端按真实字符数校验；超限或无变化自动恢复一次 | 已实现；再次不合格不进入待应用 |
 | AI 双结果协议 | 沟通过程统一为 `message`，最终可应用结果统一为 `proposal` | 已实现；旧四态仅用于历史消息兼容 |
 | 任务上下文隔离 | 用户、项目、会话、任务四级归属；任务只读取自己的消息 | 已实现 |
-| 继续调整 | 同时提供基线 A、上一版目标 B、最新草稿 C 和完整任务对话 | 已实现 |
+| 继续调整 | 全局 AI 提供 A/B/C 与任务对话；局部 AI 以上一版候选文字为直接输入并读取最新完整简历 | 已实现 |
 | 目标片段 v2 | 现有内容返回目标子树；新增内容只返回父位置、稳定锚点和新子树，服务端形成完整 B | 已实现；兼容读取 v1，完整目标文档只用于元数据和整份重构 |
 | 严格输出恢复 | 顶层 JSON 截断时不误收内层对象；协议字段不完整与无效 JSON 均只恢复一次 | 已实现；失败类型与服务不可用、执行失败分离 |
 | 动态输出预算 | 首次预算随简历复杂度增长并受软上限保护；恢复预算可提高但不突破绝对硬上限 | 已实现；默认软上限 16384、硬上限 32768 |
 | 三方合并 | A→B 的 AI 变化合并到应用时 C，未涉及内容保留 C | 已实现，客观冲突可重新生成 |
 | 五级撤销/重做 | 文字与 AI 增删、移动、结构调整共用事务栈；新修改清空重做分支 | 已实现 |
 | AI 真实差异预览 | 建议卡片由执行前后 ResumeDocument 自动生成修改摘要和真实内容，不展示底层操作名称 | 已实现 |
-| 无 Word 编辑器 | 不建立编辑会话、DOCX 草稿修订或手工结构工具栏 | 已实现并提供旧库清理迁移 |
+| 无 Word 编辑器 | 不建立编辑会话或 DOCX 草稿修订；只提供与语义节点贴合的轻量增删控件 | 已实现并提供旧库清理迁移 |
 | 无模板模型 | 不建立模板、预设、模板版本或槽位绑定 | 已实现；旧字段仅用于读取兼容 |
 
 ### 4.2 AI 写入边界
@@ -158,9 +171,9 @@ server/index.js ── 路由分发、静态服务、错误处理（RFC 7807）
 - 文件导入确认应用时自动创建且只创建一个 imported 版本；
 - 普通 AI 修改只进入草稿和撤销记录；
 - 复制历史版本只把内容复制为当前草稿，不覆盖原版本，也不建立版本树；
-- 内容校验只判断是否补造用户未提供的具体陈述，不保存逐句依据关系。
+- AI 建议不做事实真实性校验；所有内容先展示差异，由用户决定是否应用。
 
-## 5. v2.11.0 主要 API（TECH §6）
+## 5. v2.13.1 主要 API（TECH §6）
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
@@ -175,10 +188,11 @@ server/index.js ── 路由分发、静态服务、错误处理（RFC 7807）
 | POST | `/projects/:id/ai/messages` | 发送 `conversation_id` 与可选 `task_id`；返回 `message` 或 `proposal` |
 | POST | `/projects/:id/ai/inline-rewrites` | 读取完整简历，为当前文字或选区生成局部建议 |
 | POST | `/ai/inline-rewrites/:id/apply`、`/reject` | 应用或放弃局部文字建议 |
-| POST | `/projects/:id/ai/conversations` | 关闭指定旧会话并开始新对话 |
+| POST | `/projects/:id/ai/conversations` | 创建新对话并删除项目此前会话、消息、任务和建议 |
 | POST | `/ai/actions/:id/apply`、`/reject`、`/revert` | 建议应用 / 拒绝 / 撤销 |
 | GET/POST | `/projects/:id/resume-draft/history`、`/undo`、`/redo` | 最近五步撤销/重做 |
 | POST/PATCH | `/projects/:id/resume-draft/transactions`、`/resume-draft`、changes revert | 文档事务与兼容草稿保存 |
+| POST | `/projects/:id/resume-draft/node-actions` | 服务端按语义树执行受限 `+/-` 增删 |
 | POST/GET | `/projects/:id/versions`、`/versions/:id`、`/compare`、`/clone`、`/export` | 版本保存、详情、比较、复制完整文档、导出 |
 | POST/GET | `/projects/:id/generations`、`/generations/:id`、`/events`(SSE)、`/retry`、`/cancel` | 生成与进度 |
 | POST | `/artifacts/:id/download-url`、`/download` | 短期下载地址与附件下载 |
@@ -187,7 +201,7 @@ server/index.js ── 路由分发、静态服务、错误处理（RFC 7807）
 
 ## 6. 测试
 
-`AI_BEHAVIOR_TESTS.md` v19 是自动化发布门槛。
+`AI_BEHAVIOR_TESTS.md` v21 是自动化发布门槛。
 
 ```bash
 npm install
@@ -201,6 +215,7 @@ npm test
 | `tests/versions.test.js` | 草稿/版本/生成闭环、真实缩略图、冻结约束、访问隔离与产物下载 |
 | `tests/resume-dom.test.js` | 动态模块、稳定节点、安全白名单、AI 应用/继续修改/撤销和跨格式渲染 |
 | `tests/resume-change.test.js` | 节点差量、结构差量、局部撤销冲突和旧记录压缩 |
+| `tests/manual-node-actions.test.js` | 语义 `+/-` 能力、服务端结构生成、固定页面保护和统一撤销重做 |
 | `tests/document-imports.test.js` | 导入完整文档、自动版本、资料隔离和幂等 |
 | `tests/prototype-parity.test.js` | 前端渲染 DOM 与原型逐结构比对，并阻止模板与旧内容关系回归 |
 
@@ -216,20 +231,26 @@ npm test
 | `RESUME_DB_PATH` | `data/resume.db` | SQLite 文件位置 |
 | `RESUME_CHANGE_PAYLOAD_RETENTION_DAYS` | `7` | 已成版或已撤销的完整变更内容保留天数；到期后保留操作摘要 |
 | `RESUME_FONT_PATH` | `/home/ubuntu/.fonts/NotoSansSC.ttf` | PDF 中文字体 |
-| `RESUME_LLM_PROVIDER` | — | AI 对话设为 `deepseek`；未配置时明确报错 |
-| `RESUME_LLM_ENDPOINT` | `https://api.deepseek.com/chat/completions` | DeepSeek Chat Completions 地址 |
-| `RESUME_LLM_API_KEY` | — | DeepSeek API Key |
-| `RESUME_LLM_MODEL` | `deepseek-v4-flash-vision-exp` | 对话与图片理解模型 |
-| `RESUME_LLM_MAX_TOKENS` | `4096` | 未指定请求级预算时的模型输出上限 |
-| `RESUME_LLM_MIN_OUTPUT_TOKENS` | `4096` | 全局 AI 动态输出预算下限 |
-| `RESUME_LLM_INITIAL_MAX_TOKENS` | `16384` | 全局 AI 首次请求的动态预算软上限 |
-| `RESUME_LLM_MAX_TOKENS_LIMIT` | `32768` | 全局 AI 请求级动态预算的绝对硬上限 |
+| `RESUME_MODEL_PROVIDER` | — | 模型供应商；当前生产适配器为 `deepseek` |
+| `RESUME_MODEL_ENDPOINT` | `https://api.deepseek.com/responses` | 模型 Responses API 地址 |
+| `RESUME_MODEL_API_KEY` | — | 模型 API Key；只在服务端读取 |
+| `RESUME_MODEL_TEXT_MODEL` | `deepseek-v4-flash` | 普通问答、单点文字修改和局部首轮改写 |
+| `RESUME_MODEL_COMPLEX_MODEL` | `deepseek-v4-pro` | 全局整份文档、结构、样式及协议恢复；complex 表示能力，型号可配置 |
+| `RESUME_GLOBAL_AI_REASONING_EFFORT` | `low` | 仅全局AI；none/low/medium/high，预算预留推理空间并受硬上限保护；不影响局部速度 |
+| `RESUME_MODEL_VISION_MODEL` | `deepseek-v4-flash-vision-exp` | 仅图片请求与文档视觉识别使用 |
+| `RESUME_MODEL_MAX_TOKENS` | `4096` | 未指定请求级预算时的模型输出上限 |
+| `RESUME_MODEL_MIN_OUTPUT_TOKENS` | `4096` | 全局 AI 动态输出预算下限 |
+| `RESUME_MODEL_INITIAL_MAX_TOKENS` | `16384` | 全局 AI 首次请求的动态预算软上限 |
+| `RESUME_MODEL_MAX_TOKENS_LIMIT` | `32768` | 所有模型请求的绝对输出硬上限 |
 | `RESUME_DOCUMENT_AI_ENABLED` | `true` | 是否用视觉模型辅助判断导入文件的阅读顺序和模块关系 |
 | `RESUME_DOCUMENT_OCR_ENABLED` | `true` | 是否启用文档识别服务的本地图片 OCR |
 | `RESUME_DOCUMENT_OCR_PYTHON` | 项目内识别 venv | 自定义文档识别 Python 路径 |
 | `RESUME_DOCUMENT_RUNTIME_DIR` | `.runtime/document-recognition/jobs` | 文档识别临时任务目录 |
 | `RESUME_OCR_ENDPOINT` / `RESUME_OCR_API_KEY` | — | 云 OCR；未配置时图片需粘贴文本兜底 |
 | `RESUME_DOWNLOAD_SECRET` | 本地默认 | 下载令牌签名密钥 |
+
+旧版 `RESUME_LLM_*` 变量仍可被服务端读取，用于现有部署平滑迁移；新部署统一使用
+`RESUME_MODEL_*`。旧的单模型配置不会覆盖新的文本/复杂结构默认路由。
 
 ---
 
@@ -239,7 +260,7 @@ npm test
 岗位多图导入/OCR/分析、一键生成 PDF/DOCX、主动保存版本、不可变版本、
 历史详情/比较/复制/导出、失败重试与部分成功、审计日志、跨用户隔离、幂等。
 
-当前工程已完成 v2.11.0 统一语义树、精简 AI 上下文、稀疏目标片段、严格输出恢复、动态预算以及全局/局部 AI 双入口收口；生产基础设施仍可按下表演进：
+当前工程已完成 v2.13.1 统一语义树、局部纯文本会话、全局完整文档上下文、语义节点增删、局部多轮承接、稀疏目标片段、严格输出恢复、动态预算以及全局/局部 AI 双入口收口；生产基础设施仍可按下表演进：
 
 | 项 | 当前实现 | 生产建议 |
 |---|---|---|

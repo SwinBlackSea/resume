@@ -21,7 +21,10 @@ const PAGE_WIDTH = 595.28; // A4 pt
 const PAGE_HEIGHT = 841.89;
 
 class PdfDoc {
-  constructor() {
+  constructor(pageLayout) {
+    this.width = pageLayout.width;
+    this.height = pageLayout.height;
+    this.margin = pageLayout.margins;
     this.pages = [];
     this.currentOps = [];
     this.fontResources = new Map(); // name → font object
@@ -35,7 +38,7 @@ class PdfDoc {
 
   /** 以「距页面顶部 topPt」的坐标系写入文本，内部转换为 PDF 坐标。 */
   text(x, top, content, { size = 9.5, color = '#414448', bold = false, letterSpacing = 0 } = {}) {
-    const y = PAGE_HEIGHT - top - size;
+    const y = this.height - top - size;
     const rgb = hexToRgb01(color);
     let line = `${rgb} rg\n`;
     if (bold) line += `2 Tr 0.35 w\n`; // 无粗体字形时用填充+描边模拟
@@ -50,8 +53,8 @@ class PdfDoc {
   }
 
   segment(x1, top1, x2, top2, color = '#d1d1d6', width = 0.7) {
-    const y1 = PAGE_HEIGHT - top1;
-    const y2 = PAGE_HEIGHT - top2;
+    const y1 = this.height - top1;
+    const y2 = this.height - top2;
     const rgb = hexToRgb01(color);
     this.currentOps.push(
       `${rgb} RG ${width} w ${fmt(x1)} ${fmt(y1)} m ${fmt(x2)} ${fmt(y2)} l S\n`,
@@ -119,7 +122,7 @@ function wrapText(font, text, maxWidth, size) {
 function layoutResume(doc, font, resume, template) {
   const schema = template.schema || template;
   const typo = schema.typography || {};
-  const margin = (schema.page && schema.page.margin) || { top: 58, right: 64, bottom: 64, left: 64 };
+  const margin = doc.margin;
   const baseSize = typo.base_size || 9.5;
   const lineHeight = typo.line_height || 1.75;
   const color = typo.color || '#414448';
@@ -129,11 +132,11 @@ function layoutResume(doc, font, resume, template) {
   const rendered = ResumeDom.toRenderBlocks(attached.dom_document);
 
   const left = margin.left;
-  const contentWidth = PAGE_WIDTH - margin.left - margin.right;
+  const contentWidth = doc.width - margin.left - margin.right;
   let top = margin.top;
 
   const ensureSpace = (needed) => {
-    if (top + needed <= PAGE_HEIGHT - margin.bottom) return;
+    if (top + needed <= doc.height - margin.bottom) return;
     doc.newPage();
     top = margin.top;
   };
@@ -151,7 +154,7 @@ function layoutResume(doc, font, resume, template) {
     top += 16;
   }
   if (headerTitle || (rendered.header && rendered.header.subtitle)) {
-    doc.line(left, top, PAGE_WIDTH - margin.right, accent, 1.6);
+    doc.line(left, top, doc.width - margin.right, accent, 1.6);
     top += 22;
   }
 
@@ -165,7 +168,7 @@ function layoutResume(doc, font, resume, template) {
     });
     top += 16;
     if (titleStyle.rule !== false) {
-      doc.line(left, top, PAGE_WIDTH - margin.right, titleStyle.color || accent, 0.7);
+      doc.line(left, top, doc.width - margin.right, titleStyle.color || accent, 0.7);
       top += 12;
     } else {
       top += 6;
@@ -210,7 +213,7 @@ function layoutResume(doc, font, resume, template) {
     }
     if (period) {
       const periodWidth = measureText(font, period, 9);
-      doc.text(PAGE_WIDTH - margin.right - periodWidth, top, period, { size: 9, color: '#73767a' });
+      doc.text(doc.width - margin.right - periodWidth, top, period, { size: 9, color: '#73767a' });
     }
     top += 17;
   };
@@ -273,7 +276,7 @@ function layoutResume(doc, font, resume, template) {
       drawParagraph(`${numberedIndex}. ${block.text}`);
     } else if (block.type === 'rule') {
       ensureSpace(12);
-      doc.line(left, top, PAGE_WIDTH - margin.right, '#d1d1d6', 0.7);
+      doc.line(left, top, doc.width - margin.right, '#d1d1d6', 0.7);
       top += 10;
     } else if (block.type === 'table') {
       drawTable(block);
@@ -378,7 +381,7 @@ function reverseLookup(font, gid) {
 }
 
 /** 组装 PDF 文件字节。 */
-function serialize(font, pages, usedGids, pageCount) {
+function serialize(font, pages, usedGids, pageCount, pageLayout) {
   const objects = [];
   const add = (body) => {
     objects.push(body);
@@ -408,7 +411,7 @@ function serialize(font, pages, usedGids, pageCount) {
 
   pages.forEach((_, index) => {
     pageObjIds[index] = add(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${fmt(PAGE_WIDTH)} ${fmt(PAGE_HEIGHT)}] ` +
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${fmt(pageLayout.width)} ${fmt(pageLayout.height)}] ` +
         `/Resources << /Font << /F1 ${type0Number} 0 R >> >> /Contents ${contentIds[index]} 0 R >>`,
     );
   });
@@ -497,7 +500,7 @@ function serialize(font, pages, usedGids, pageCount) {
  * @param {{resume:object, template:object}} input
  * @returns {{buffer:Buffer, pages:number}}
  */
-function renderPdf({ resume, template }) {
+function renderPdf({ resume, template = {} }) {
   if (!fs.existsSync(FONT_PATH)) {
     const err = new Error(`缺少中文字体 ${FONT_PATH}`);
     err.code = 'RENDER_FONT_MISSING';
@@ -507,14 +510,18 @@ function renderPdf({ resume, template }) {
   activeFont = font;
   gidToUnicode = new Map();
 
-  const doc = new PdfDoc();
+  const schema = template.schema || template;
+  const pageLayout = ResumeDom.resolvePageLayout(resume, {
+    margins: (schema.page && schema.page.margin) || { top: 58, right: 64, bottom: 64, left: 64 },
+  });
+  const doc = new PdfDoc(pageLayout);
   doc.newPage();
   layoutResume(doc, font, resume, template);
   const pages = doc.finish();
   const pageCount = Math.max(1, pages.length);
   const usedGids = collectUsedGids(font, pages);
   usedGids.add(font.glyphId(32));
-  const buffer = serialize(font, pages, usedGids, pageCount);
+  const buffer = serialize(font, pages, usedGids, pageCount, pageLayout);
   return { buffer, pages: pageCount };
 }
 

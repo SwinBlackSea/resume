@@ -223,7 +223,7 @@ test('无效结构动作会通用修复为可确认建议', async () => {
   }
 });
 
-test('最终建议未通过领域校验时不伪造用户意图追问', async () => {
+test('全局 AI 可直接补充用户未提供的精确数据并进入预览', async () => {
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
     model: 'rejected-action-copy',
@@ -248,13 +248,17 @@ test('最终建议未通过领域校验时不伪造用户意图追问', async ()
       { type: 'RESUME_BLOCK', id: 'target-bullet' },
     );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
-    assert.deepStrictEqual(res.body.actions, []);
-    assert.ok(res.body.rejected.length);
-    assert.strictEqual(res.body.result_type, 'ERROR');
-    assert.match(res.body.reply_text, /没有通过最终校验/);
-    assert.deepStrictEqual(res.body.quick_replies, []);
-    assert.doesNotMatch(res.body.reply_text, /确认后|即可应用/);
-    assert.strictEqual(res.body.reply.content, res.body.reply_text);
+    const action = res.body.actions.find(
+      (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+    );
+    assert.ok(action, JSON.stringify(res.body));
+    assert.deepStrictEqual(res.body.rejected, []);
+    assert.match(action.payload.proposal.suggestion, /99999%/);
+    assert.strictEqual(action.payload.proposal.model, undefined);
+    await helpers.call(ctx, 'POST', `/ai/actions/${action.id}/reject`, {
+      idemKey: `reject-open-content-${action.id}`,
+      body: { reason: '测试结束' },
+    });
   } finally {
     restore();
   }
@@ -292,7 +296,7 @@ test('连续两次不可执行的模型动作返回准确错误类型', async ()
     );
     assert.strictEqual(res.status, 422, JSON.stringify(res.body));
     assert.strictEqual(res.body.title, 'PROPOSAL_NOT_EXECUTABLE');
-    assert.match(res.body.detail, /无法安全应用/);
+    assert.match(res.body.detail, /正文未变.*可直接重试/);
     assert.doesNotMatch(res.body.detail, /没有返回可用结果/);
     assert.ok(res.body.persisted_message_id);
     const task = db.get('SELECT * FROM ai_tasks WHERE id = ?', [res.body.task_id]);
@@ -389,10 +393,11 @@ test('真实结果歧义先澄清，用户回答后在同一任务生成建议',
 test('复杂请求先确认极简处理思路，确认后在同一任务直接生成建议', async () => {
   let calls = 0;
   let resumedInput = null;
+  let resumedCapability = null;
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
     model: 'confirmed-plan-task',
-    generate: async ({ input }) => {
+    generate: async ({ input, capability }) => {
       calls += 1;
       if (calls === 1) {
         return {
@@ -400,11 +405,13 @@ test('复杂请求先确认极简处理思路，确认后在同一任务直接�
             type: 'message',
             content: '我准备这样修改：\n1. 结合整份简历中的相关经历\n2. 强化管理经验并去除重复表达\n3. 最终整理为三个清晰段落\n本次先只修改当前内容。',
             awaiting_user: true,
+            message_kind: 'plan_confirmation',
             quick_replies: ['按这个思路修改', '调整要求'],
           },
         };
       }
       resumedInput = input;
+      resumedCapability = capability;
       return {
         output: {
           result_type: 'PROPOSAL',
@@ -440,7 +447,10 @@ test('复杂请求先确认极简处理思路，确认后在同一任务直接�
     const second = await send(
       '按这个思路修改',
       { type: 'RESUME_BLOCK', id: 'target-bullet' },
-      { task_id: first.body.task_id },
+      {
+        task_id: first.body.task_id,
+        quick_reply_id: first.body.quick_replies[0].id,
+      },
     );
     assert.strictEqual(second.status, 200, JSON.stringify(second.body));
     assert.strictEqual(second.body.task_id, first.body.task_id);
@@ -451,6 +461,8 @@ test('复杂请求先确认极简处理思路，确认后在同一任务直接�
       resumedInput.request.task.state.answered_message.content,
       first.body.reply_text,
     );
+    assert.ok(resumedInput.request.task.state.confirmed_plan);
+    assert.strictEqual(resumedCapability, 'complex');
   } finally {
     restore();
   }

@@ -16,9 +16,12 @@ const {
 const audit = require('../lib/audit');
 const policy = require('../lib/policy');
 const resumeHarness = require('../lib/resume-harness');
-const { getObject } = require('../lib/storage');
+const {
+  MODEL_ERROR_CODES,
+  isModelServiceError,
+} = require('../lib/model-client');
+const { loadChatImages, releaseClosedChatImages } = require('../lib/chat-images');
 const { diffWords } = require('../lib/polish');
-const { keyTokens } = require('../lib/resume-schema');
 const { withIdempotency } = require('../lib/idempotency');
 const { createNodeDeltaPair, createStructureDeltaPair } = require('../lib/resume-change');
 const { buildChangePreview } = require('../lib/resume-change-preview');
@@ -48,6 +51,8 @@ const queue = require('../lib/queue');
 const { SCOPE_LABEL } = require('../lib/policy');
 const { toActionView, toMessageView } = require('./workspace');
 const ResumeDom = require('../../resume-dom');
+const { purgeConversations, compactGlobalHistory } = require('../lib/ai-storage');
+const inflight = require('../lib/ai-inflight');
 
 const POLICY_VERSION = policy.POLICY_VERSION;
 
@@ -83,7 +88,7 @@ function loadContext(projectId, user, options = {}) {
        WHERE id = ? AND project_id = ? AND owner_id = ?`,
       [options.conversationId, project.id, user.id],
     );
-    if (!conversation) throw problem.badRequest('当前 AI 对话不存在');
+    if (!conversation) throw problem.conflict('CONVERSATION_ENDED', '当前对话已经清空，请在新对话中继续');
     if (!options.allowClosedConversation && conversation.status !== 'active') {
       throw problem.conflict('CONVERSATION_ENDED', '当前对话已经结束，请开始新对话');
     }
@@ -113,7 +118,8 @@ function startNewConversation({
   ipHash,
   previousConversationId = null,
 }) {
-  return db.tx(() => {
+  const oldIds = [];
+  const result = db.tx(() => {
     const ctx = loadContext(projectId, user, {
       conversationId: previousConversationId,
       allowClosedConversation: true,
@@ -149,6 +155,13 @@ function startNewConversation({
        VALUES (?, ?, ?, 'RESUME_DOCUMENT', 'active', ?, ?)`,
       [id, ctx.project.id, user.id, nowIso(), nowIso()],
     );
+    oldIds.push(...db.all(
+      'SELECT id FROM ai_conversations WHERE owner_id = ? AND project_id = ? AND id <> ?',
+      [user.id, projectId, id],
+    ).map((row) => row.id));
+    const deleted = purgeConversations(db.getDb(), {
+      ownerId: user.id, projectId, keepId: id,
+    });
     audit.log({
       ownerId: user.id,
       action: 'ai_conversation_started',
@@ -170,8 +183,12 @@ function startNewConversation({
       profile_unchanged: true,
       resume_unchanged: true,
       versions_unchanged: true,
+      deleted,
     };
   });
+  oldIds.forEach((id) => inflight.cancel(`global:${user.id}:${id}`));
+  releaseClosedChatImages(user.id);
+  return result;
 }
 
 function findResumeNodeInDraft(resume, nodeId) {
@@ -228,7 +245,7 @@ function validateLockedScope(ctx, scopeType, scopeId) {
   return { scopeId: scopeId || null, currentText: '', found: null };
 }
 
-function resolveTask({ ctx, user, body, scopeType, scopeId, content }) {
+function resolveTask({ ctx, user, body, scopeType, scopeId, content, retry = false }) {
   let task = null;
   if (body.task_id) {
     task = db.get(
@@ -240,7 +257,11 @@ function resolveTask({ ctx, user, body, scopeType, scopeId, content }) {
     if (task.scope_type !== scopeType || String(task.scope_id || '') !== String(scopeId || '')) {
       throw problem.conflict('SCOPE_CONFLICT', '当前对话目标已切换，请重新发送');
     }
-    if (['completed', 'failed', 'canceled'].includes(task.status)) {
+    const latestTask = task.status === 'completed' && db.get(
+      `SELECT task_id FROM ai_messages WHERE conversation_id = ?
+       ORDER BY created_at DESC, id DESC LIMIT 1`, [ctx.conversation.id],
+    );
+    if (task.status === 'canceled' || (task.status === 'completed' && latestTask?.task_id !== task.id)) {
       throw problem.conflict('TASK_ENDED', '上一项 AI 任务已经结束，请重新发送本轮要求');
     }
     if (['planning', 'validated'].includes(task.status)) {
@@ -260,7 +281,7 @@ function resolveTask({ ctx, user, body, scopeType, scopeId, content }) {
         user.id,
         scopeType,
         scopeId,
-        content.slice(0, 180),
+        content,
         JSON.stringify({
           phase: 'understanding',
           latest_instruction: content,
@@ -278,7 +299,23 @@ function resolveTask({ ctx, user, body, scopeType, scopeId, content }) {
   } else {
     const state = parseJson(task.state_json, {});
     const turns = Array.isArray(state.turns) ? state.turns.slice(-11) : [];
-    turns.push({ role: 'user', content: content.slice(0, 1000) });
+    const pendingMessage = state.pending_message && typeof state.pending_message === 'object'
+      ? state.pending_message
+      : null;
+    const pendingReplies = pendingMessage && Array.isArray(pendingMessage.quick_replies)
+      ? pendingMessage.quick_replies
+      : [];
+    const firstReply = pendingReplies[0] || null;
+    const confirmsPendingPlan = Boolean(
+      pendingMessage
+      && pendingMessage.message_kind === 'plan_confirmation'
+      && firstReply
+      && (
+        String(body.quick_reply_id || '') === String(firstReply.id || '')
+        || String(content) === String(firstReply.label || '')
+      )
+    );
+    if (!retry) turns.push({ role: 'user', content: content.slice(0, 1000) });
     db.run('UPDATE ai_tasks SET state_json = ?, status = ?, updated_at = ? WHERE id = ?', [
       JSON.stringify({
         ...state,
@@ -286,9 +323,14 @@ function resolveTask({ ctx, user, body, scopeType, scopeId, content }) {
         latest_instruction: content,
         latest_user_message: content,
         turns,
-        answered_message: state.pending_message || state.answered_message || null,
+        answered_message: pendingMessage || state.answered_message || null,
         answered_clarification: state.pending_clarification || state.answered_clarification || null,
-        confirmed_plan: state.pending_plan || state.confirmed_plan || null,
+        confirmed_plan: confirmsPendingPlan
+          ? (state.pending_plan || {
+              content: pendingMessage.content,
+              confirmed_reply: String(content).slice(0, 160),
+            })
+          : (state.confirmed_plan || null),
         pending_message: null,
         pending_clarification: null,
         pending_plan: null,
@@ -312,22 +354,6 @@ function actionAllowedInScope(type, scopeType) {
   return false;
 }
 
-function collectWorkspaceText({ profile, experiences, resume, job, messages, content }) {
-  return [
-    JSON.stringify(parseJson(profile && profile.basics_json, {})),
-    String((profile && profile.summary) || ''),
-    ...(experiences || []).flatMap((item) => [
-      item.organization,
-      item.title,
-      item.description,
-    ]),
-    JSON.stringify(resume || {}),
-    String((job && job.confirmed_text) || ''),
-    ...(messages || []).filter((item) => item.role === 'user').map((item) => item.content),
-    content,
-  ].filter(Boolean);
-}
-
 function taskConversationMessages(conversationId, taskId, excludeMessageId = null) {
   return db
     .all(
@@ -339,8 +365,10 @@ function taskConversationMessages(conversationId, taskId, excludeMessageId = nul
     )
     .filter((row) => {
       if (excludeMessageId && row.id === excludeMessageId) return false;
-      if (row.task_id) return String(row.task_id) === String(taskId);
       const metadata = parseJson(row.model_metadata_json, {});
+      // Backend failure notices are diagnostics, not assistant conversation.
+      if (metadata.result_type === 'ERROR') return false;
+      if (row.task_id) return String(row.task_id) === String(taskId);
       return String(metadata.task_id || '') === String(taskId);
     })
     .map((row) => ({
@@ -348,13 +376,8 @@ function taskConversationMessages(conversationId, taskId, excludeMessageId = nul
       content: row.content,
       scope_type: row.scope_type,
       scope_id: row.scope_id,
+      attachment_ids: parseJson(row.model_metadata_json, {}).attachment_ids || [],
     }));
-}
-
-function unsupportedTokens(text, userProvidedTexts) {
-  const known = new Set();
-  userProvidedTexts.forEach((value) => keyTokens(value).forEach((token) => known.add(token)));
-  return Array.from(keyTokens(text)).filter((token) => !known.has(token));
 }
 
 function normalizeRewriteProposal({
@@ -365,7 +388,6 @@ function normalizeRewriteProposal({
   scopeId,
   draft,
   task,
-  userTexts,
   proposalBaseResume,
   parentProposal,
 }) {
@@ -389,17 +411,12 @@ function normalizeRewriteProposal({
   let explicitTargetResume = raw.target_resume_document
     || raw.resume_dom
     || raw.resume_json;
-  let targetResumeFragments = raw.target_resume_fragments || null;
+  let targetResumeFragments = raw.target_resume_fragments
+    ? deepClone(raw.target_resume_fragments)
+    : null;
   if (targetResumeFragments) {
     try {
       const materialized = materializeTargetFragments(workingResume, targetResumeFragments);
-      targetResumeFragments = {
-        format: materialized.format,
-        changes: materialized.changes,
-        ...(materialized.insertions.length
-          ? { insertions: materialized.insertions }
-          : {}),
-      };
       if (
         explicitTargetResume
         && typeof explicitTargetResume === 'object'
@@ -569,16 +586,6 @@ function normalizeRewriteProposal({
     suggestion = changePreview.after.text || changePreview.summary;
   }
 
-  const added = unsupportedTokens(
-    [suggestion, JSON.stringify(operations), JSON.stringify(proposalResume)].join('\n'),
-    userTexts,
-  );
-  if (added.length) {
-    throw problem.unprocessable(
-      'UNSUPPORTED_ASSERTION',
-      `建议中出现了你没有提供的数据：${added.join('、')}`,
-    );
-  }
   return {
     task_id: task.id,
     scope_type: scopeType,
@@ -596,7 +603,7 @@ function normalizeRewriteProposal({
     target_resume_document: proposalResume,
     target_resume_fragments: targetResumeFragments,
     operations,
-    resume_json: operations.length ? null : proposalResume,
+    // A/B是唯一执行依据，不再把完整目标B重复写入resume_json。
     diff: Array.isArray(raw.diff)
       ? raw.diff
       : diffWords(changePreview.before.text, changePreview.after.text),
@@ -612,24 +619,9 @@ function normalizeRewriteProposal({
   };
 }
 
-function loadVisionAttachments(attachmentIds, user) {
-  return (attachmentIds || []).map((id) => {
-    const upload = db.get('SELECT * FROM uploads WHERE id = ? AND owner_id = ?', [id, user.id]);
-    if (!upload) throw problem.notFound('附件不存在');
-    if (!String(upload.mime_type || '').startsWith('image/')) {
-      throw problem.badRequest('AI 对话附件目前只支持图片');
-    }
-    return {
-      id: upload.id,
-      mime_type: upload.mime_type,
-      file_name: upload.original_name,
-      content_base64: getObject(upload.object_key).toString('base64'),
-    };
-  });
-}
-
-function assembleInput({
+async function assembleInput({
   ctx,
+  user,
   userMessageId,
   content,
   scopeType,
@@ -649,6 +641,14 @@ function assembleInput({
     task.id,
     userMessageId,
   );
+  const imageHistory = [];
+  for (const message of history) {
+    if (message.role !== 'user' || !message.attachment_ids.length) continue;
+    imageHistory.push({
+      text: message.content,
+      attachments: await loadChatImages(message.attachment_ids, user, ctx.conversation.id),
+    });
+  }
   const locked = validateLockedScope(ctx, scopeType, scopeId);
   let editingBase = locked.currentText;
   let parentProposal = null;
@@ -799,6 +799,7 @@ function assembleInput({
     },
     conversationMessages: history,
     attachments,
+    imageHistory,
   });
   return {
     llmInput,
@@ -806,20 +807,26 @@ function assembleInput({
     editingBase,
     proposalBaseResume: proposalContent,
     parentProposal: parentProposalPayload,
-    userTexts: collectWorkspaceText({
-      profile: ctx.profile,
-      experiences,
-      resume,
-      job: ctx.job,
-      messages: history,
-      content,
-    }).concat(proposalContent ? [JSON.stringify(proposalContent)] : []),
   };
 }
 
-async function runModel(llmInput, userMessageId) {
+async function runModel(llmInput, userMessageId, signal, runId) {
   try {
-    const result = await resumeHarness.complete(llmInput);
+    const result = await resumeHarness.complete(llmInput, {
+      signal,
+      onMemory: (memory) => {
+        const taskId = llmInput.request.task.id;
+        const stored = db.get('SELECT state_json FROM ai_tasks WHERE id = ?', [taskId]);
+        if (!stored || signal.aborted || parseJson(stored.state_json, {}).active_run_id !== runId) {
+          throw problem.conflict('REQUEST_CANCELED', '本轮生成已停止');
+        }
+        db.run('UPDATE ai_tasks SET state_json = ?, updated_at = ? WHERE id = ?', [
+          JSON.stringify({ ...parseJson(stored.state_json, {}), conversation_memory: memory }),
+          nowIso(),
+          taskId,
+        ]);
+      },
+    });
     return {
       ...result,
       validation: policy.validateModelResponse(result.response, { userMessageId }),
@@ -834,15 +841,19 @@ async function runModel(llmInput, userMessageId) {
         content_length: error.content_length ?? null,
         reasoning_length: error.reasoning_length ?? null,
         max_tokens: error.max_tokens ?? null,
+        diagnostics: error.validation_diagnostics || [],
       }),
     );
-    if (error.code === 'DEEPSEEK_OUTPUT_TRUNCATED') {
+    if (error.code === 'MODEL_CONTEXT_COMPACTION_FAILED') {
+      throw problem.unprocessable(error.code, error.message);
+    }
+    if (error.code === MODEL_ERROR_CODES.OUTPUT_TRUNCATED) {
       throw problem.unprocessable(
         'MODEL_OUTPUT_TRUNCATED',
         '模型生成的修改结果过长，系统已自动重试但仍未完整返回',
       );
     }
-    if (error.code === 'DEEPSEEK_INVALID_JSON') {
+    if (error.code === MODEL_ERROR_CODES.INVALID_JSON) {
       throw problem.unprocessable(
         'MODEL_RESPONSE_INVALID',
         '模型没有返回完整可用的修改结果，请重新尝试',
@@ -854,7 +865,13 @@ async function runModel(llmInput, userMessageId) {
         '模型返回的修改结果不完整，系统自动恢复后仍无法使用，请重新尝试',
       );
     }
-    if (String(error.code || '').startsWith('DEEPSEEK_')) {
+    if (error.code === MODEL_ERROR_CODES.RESPONSE_FAILED) {
+      throw problem.unprocessable(
+        'MODEL_RESPONSE_INVALID',
+        '模型没有完成可用的修改结果，请重新尝试',
+      );
+    }
+    if (isModelServiceError(error)) {
       throw problem.unprocessable(
         'MODEL_UNAVAILABLE',
         String(error.code).includes('TIMEOUT')
@@ -870,11 +887,11 @@ async function runModel(llmInput, userMessageId) {
         ? 'AI 建议涉及了本轮未授权的简历区域，系统已阻止。请明确要一起调整的内容后重试'
         : validationErrors.some((message) => message.includes('保留全部原文字'))
           ? 'AI 建议没有完整保留原文字，系统已阻止。请重试或明确是否允许改写内容'
-          : 'AI 返回的修改无法安全应用，请重试或换一种方式描述';
+          : '修改尚未完成，简历正文未变。已保留本轮要求和处理思路，可直接重试';
       throw problem.unprocessable(
         'PROPOSAL_NOT_EXECUTABLE',
         detail,
-        { validation_errors: validationErrors },
+        { validation_errors: validationErrors, validation_diagnostics: error.validation_diagnostics || [] },
       );
     }
     throw problem.unprocessable(
@@ -948,12 +965,14 @@ function persistTaskFailure({
   scopeRevision,
   userMessageId,
   error,
+  runId,
 }) {
   const liveTask = db.get('SELECT * FROM ai_tasks WHERE id = ? AND owner_id = ?', [
     task.id,
     user.id,
   ]);
-  if (!liveTask || liveTask.status === 'canceled') return null;
+  if (!liveTask || !['understanding', 'planning', 'validated'].includes(liveTask.status)
+    || (runId && parseJson(liveTask.state_json, {}).active_run_id !== runId)) return null;
   const detail = String(error && (error.detail || error.message) || 'AI 请求未完成');
   const content = `这次请求没有成功：${detail}`;
   const assistantMessageId = uuidv7();
@@ -988,7 +1007,6 @@ function persistTaskFailure({
       message: detail.slice(0, 500),
       at: nowIso(),
     },
-    assistant_turn: content,
   }, liveTask.active_proposal_id ? 'waiting_apply' : 'failed');
   return assistantMessageId;
 }
@@ -1025,6 +1043,7 @@ function settleTaskAfterAction(action) {
     },
     pending ? 'waiting_apply' : 'completed',
   );
+  if (!pending) db.run('UPDATE ai_tasks SET active_proposal_id = NULL WHERE id = ?', [taskId]);
 }
 
 function applyActions({
@@ -1039,6 +1058,10 @@ function applyActions({
   repairCount,
   outputBudget,
   finishReason,
+  modelRoute,
+  routingReason,
+  routingScore,
+  gatewayMetrics,
   scopeType,
   scopeId,
   scopeRevision,
@@ -1046,7 +1069,6 @@ function applyActions({
   editingBase,
   proposalBaseResume,
   parentProposal,
-  userTexts,
   task,
 }) {
   const assistantMessageId = uuidv7();
@@ -1060,6 +1082,10 @@ function applyActions({
     repair_count: repairCount || 0,
     output_budget: outputBudget || null,
     finish_reason: finishReason || null,
+    model_route: modelRoute || null,
+    routing_reason: routingReason || null,
+    routing_score: Number.isFinite(routingScore) ? routingScore : null,
+    gateway_metrics: gatewayMetrics || null,
     result_type: response.result_type,
     protocol_type: response.type,
     awaiting_user: Boolean(response.awaiting_user),
@@ -1106,7 +1132,6 @@ function applyActions({
           scopeId,
           draft: ctx.draft,
           task,
-          userTexts,
           proposalBaseResume,
           parentProposal,
         });
@@ -1170,26 +1195,17 @@ function applyActions({
       }
       if (row) executed.push(toActionView(row));
     } catch (error) {
-      rejected.push({ action_type: action.type, reason: error.detail || error.message });
+      // A proposal batch is atomic. Never publish only the fragments/actions
+      // that happened to pass business assembly.
+      throw problem.unprocessable('ACTIONS_REJECTED',
+        '修改尚未完成，简历正文未变。已保留本轮要求，可直接重试',
+        { rejected: [{ action_type: action.type, reason: error.detail || error.message }] });
     }
   });
   let finalReply = response.reply;
   if (!executed.length && rejected.length) {
-    response.result_type = 'ERROR';
-    response.type = 'message';
-    response.awaiting_user = false;
-    response.quick_replies = [];
-    metadata.result_type = response.result_type;
-    metadata.protocol_type = response.type;
-    metadata.awaiting_user = false;
-    metadata.quick_replies = [];
-    metadata.plan = null;
-    metadata.clarification = null;
-    finalReply = '这次修改没有通过最终校验，简历正文没有变化。请重新发送要求。';
-    db.run(
-      'UPDATE ai_messages SET content = ?, model_metadata_json = ? WHERE id = ?',
-      [finalReply, JSON.stringify(metadata), assistantMessageId],
-    );
+    throw problem.unprocessable('ACTIONS_REJECTED',
+      '修改尚未完成，简历正文未变。已保留本轮要求，可直接重试', { rejected });
   }
   if (response.result_type === 'MESSAGE' && response.awaiting_user) {
     updateTaskState(task, {
@@ -1226,24 +1242,16 @@ function applyActions({
       assistant_turn: finalReply,
     }, 'failed');
   } else {
-    if (task.active_proposal_id) {
-      db.run(
-        "UPDATE ai_action_requests SET status = 'superseded' WHERE id = ? AND status = 'awaiting_confirmation'",
-        [task.active_proposal_id],
-      );
-      db.run(
-        'UPDATE ai_tasks SET active_proposal_id = NULL WHERE id = ? AND active_proposal_id = ?',
-        [task.id, task.active_proposal_id],
-      );
-    }
+    // An ordinary answer is not an instruction to discard a pending proposal
+    // or forget this conversation. Only apply/discard/new-chat ends that chain.
     updateTaskState(task, {
-      phase: 'completed',
+      phase: task.active_proposal_id ? 'awaiting_confirmation' : 'conversing',
       pending_message: null,
       pending_plan: null,
       pending_clarification: null,
       last_error: null,
       assistant_turn: finalReply,
-    }, 'completed');
+    }, task.active_proposal_id ? 'waiting_apply' : 'conversing');
   }
   return { assistantMessageId, executed, rejected, finalReply };
 }
@@ -1638,6 +1646,56 @@ function applyCurrentJob({ action, ctx, user, requestId, ipHash }) {
 const routes = [
   {
     method: 'GET',
+    pattern: '/projects/:id/ai/status',
+    handler: ({ params, user, query }) => {
+      const ctx = loadContext(params.id, user, {
+        conversationId: query.get('conversation_id') || null,
+      });
+      const task = db.get(
+        `SELECT id, status, json_extract(state_json, '$.active_run_id') AS run_id
+         FROM ai_tasks WHERE conversation_id = ? AND owner_id = ?
+         AND status IN ('understanding','planning','validated') LIMIT 1`,
+        [ctx.conversation.id, user.id],
+      );
+      const latest = db.get(
+        `SELECT id FROM ai_messages WHERE conversation_id = ? AND owner_id = ?
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [ctx.conversation.id, user.id],
+      );
+      return { conversation_id: ctx.conversation.id, running_task: task || null, latest_message_id: latest?.id || null };
+    },
+  },
+  {
+    method: 'POST',
+    pattern: '/projects/:id/ai/cancel',
+    handler: ({ params, user, body }) => {
+      const ctx = loadContext(params.id, user, { conversationId: body.conversation_id || null });
+      const task = db.get(
+        `SELECT * FROM ai_tasks WHERE conversation_id = ? AND owner_id = ?
+         AND status IN ('understanding','planning','validated') LIMIT 1`,
+        [ctx.conversation.id, user.id],
+      );
+      if (!task) return { stopped: false };
+      const state = parseJson(task.state_json, {});
+      if (body.run_id !== state.active_run_id) {
+        throw problem.conflict('REQUEST_SUPERSEDED', '生成状态已更新，请刷新后重试');
+      }
+      const request = db.get(
+        `SELECT * FROM ai_messages WHERE task_id = ? AND role = 'user'
+         ORDER BY created_at DESC, id DESC LIMIT 1`, [task.id],
+      );
+      const messageId = db.tx(() => persistTaskFailure({
+        ctx, user, task, scopeType: task.scope_type, scopeId: task.scope_id,
+        scopeRevision: ctx.draft.revision, userMessageId: request.id,
+        runId: state.active_run_id,
+        error: { code: 'REQUEST_CANCELED', message: '已停止生成，正文未变。本轮要求已保留，可重试或继续补充' },
+      }));
+      inflight.cancel(`global:${user.id}:${ctx.conversation.id}`);
+      return { stopped: true, persisted_message_id: messageId };
+    },
+  },
+  {
+    method: 'GET',
     pattern: '/projects/:id/ai/messages',
     handler: ({ params, user, query }) => {
       const { conversation, draft } = loadContext(params.id, user, {
@@ -1693,8 +1751,55 @@ const routes = [
       const ctx = loadContext(params.id, user, {
         conversationId: body.conversation_id || null,
       });
-      const content = String(body.content || '').trim();
-      if (!content) throw problem.badRequest('消息内容不能为空');
+      const busy = db.get(
+        `SELECT id FROM ai_tasks WHERE conversation_id = ? AND owner_id = ?
+         AND status IN ('understanding','planning','validated') LIMIT 1`,
+        [ctx.conversation.id, user.id],
+      );
+      if (busy) throw problem.conflict('TASK_BUSY', 'AI 正在处理上一条消息，请稍候或停止生成');
+      let retryRequest = null;
+      if (body.retry_message_id) {
+        // A retry is a reference to the latest failed turn, never client-built
+        // history. Reuse its user row and attachments without duplicating text.
+        const failure = db.get(
+          `SELECT * FROM ai_messages WHERE id = ? AND conversation_id = ?
+           AND owner_id = ? AND role = 'assistant'`,
+          [body.retry_message_id, ctx.conversation.id, user.id],
+        );
+        const latest = db.get(
+          `SELECT id FROM ai_messages WHERE conversation_id = ? AND owner_id = ?
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          [ctx.conversation.id, user.id],
+        );
+        const metadata = parseJson(failure && failure.model_metadata_json, {});
+        const retryTask = failure && db.get(
+          'SELECT * FROM ai_tasks WHERE id = ? AND conversation_id = ? AND owner_id = ?',
+          [failure.task_id, ctx.conversation.id, user.id],
+        );
+        if (!failure || latest?.id !== failure.id || metadata.result_type !== 'ERROR'
+          || !retryTask || !['failed', 'waiting_apply'].includes(retryTask.status)) {
+          throw problem.conflict('RETRY_SUPERSEDED', '这条请求已处理或对话已更新，请继续当前对话');
+        }
+        retryRequest = db.get(
+          `SELECT * FROM ai_messages WHERE id = ? AND task_id = ? AND conversation_id = ?
+           AND owner_id = ? AND role = 'user'`,
+          [metadata.request_message_id, retryTask.id, ctx.conversation.id, user.id],
+        );
+        if (!retryRequest) throw problem.conflict('RETRY_UNAVAILABLE', '本轮要求已不存在，请重新发送');
+        const requestMetadata = parseJson(retryRequest.model_metadata_json, {});
+        body = {
+          conversation_id: ctx.conversation.id,
+          task_id: retryTask.id,
+          content: retryRequest.content,
+          scope_type: retryRequest.scope_type,
+          scope_id: retryRequest.scope_id,
+          attachment_ids: requestMetadata.attachment_ids || [],
+        };
+      }
+      const content = String(body.content || '');
+      if (!content.trim() && !(Array.isArray(body.attachment_ids) && body.attachment_ids.length)) {
+        throw problem.badRequest('请输入要求或添加图片');
+      }
       const scopeType = body.scope_type || 'RESUME_DOCUMENT';
       const locked = validateLockedScope(ctx, scopeType, body.scope_id || null);
       const scopeId = locked.scopeId;
@@ -1703,11 +1808,19 @@ const routes = [
         : ctx.draft
           ? ctx.draft.revision
           : null;
-      const task = resolveTask({ ctx, user, body, scopeType, scopeId, content });
-      const attachmentIds = Array.isArray(body.attachment_ids) ? body.attachment_ids : [];
-      const attachments = loadVisionAttachments(attachmentIds, user);
-      const userMessageId = uuidv7();
-      db.run(
+      const attachmentIds = body.attachment_ids === undefined ? [] : body.attachment_ids;
+      const attachments = await loadChatImages(attachmentIds, user, ctx.conversation.id);
+      // Image decoding yields to the event loop. Recheck ownership/liveness
+      // and the conversation lock before creating any task or user message.
+      if (!db.get("SELECT id FROM ai_conversations WHERE id = ? AND owner_id = ? AND status = 'active'",
+        [ctx.conversation.id, user.id])) throw problem.conflict('REQUEST_CANCELED', '对话已结束，请在新对话中重新发送');
+      if (db.get(`SELECT id FROM ai_tasks WHERE conversation_id = ? AND owner_id = ?
+        AND status IN ('understanding','planning','validated') LIMIT 1`, [ctx.conversation.id, user.id])) {
+        throw problem.conflict('TASK_BUSY', 'AI 正在处理上一条消息，请稍候或停止生成');
+      }
+      const task = resolveTask({ ctx, user, body, scopeType, scopeId, content, retry: Boolean(retryRequest) });
+      const userMessageId = retryRequest ? retryRequest.id : uuidv7();
+      if (!retryRequest) db.run(
         `INSERT INTO ai_messages
          (id, conversation_id, task_id, owner_id, role, content, scope_type, scope_id, scope_revision,
           model_metadata_json, created_at)
@@ -1731,9 +1844,14 @@ const routes = [
       );
       let assembled;
       let result;
+      let applied;
+      const runId = uuidv7();
+      const running = inflight.begin(`global:${user.id}:${ctx.conversation.id}`);
       try {
-        assembled = assembleInput({
+        updateTaskState(task, { phase: 'planning', active_run_id: runId }, 'planning');
+        assembled = await assembleInput({
           ctx,
+          user,
           userMessageId,
           content,
           scopeType,
@@ -1743,16 +1861,32 @@ const routes = [
           parentProposalId: body.parent_proposal_id || null,
           attachments,
         });
-        updateTaskState(task, { phase: 'planning' }, 'planning');
-        result = await runModel(assembled.llmInput, userMessageId);
+        result = await runModel(assembled.llmInput, userMessageId, running.signal, runId);
+        const liveTask = db.get('SELECT status, state_json FROM ai_tasks WHERE id = ?', [task.id]);
+        if (running.signal.aborted || !liveTask || liveTask.status !== 'planning'
+          || parseJson(liveTask.state_json, {}).active_run_id !== runId) {
+          throw problem.conflict('REQUEST_CANCELED', '本轮生成已停止，迟到结果未保存');
+        }
         updateTaskState(task, {
           phase: 'validated',
           last_model_resume_revision: ctx.draft.revision,
           last_model_resume_hash: assembled.llmInput.workspace.resume.content_hash,
           last_model_result_type: result.response.result_type,
         }, 'validated');
+        applied = db.tx(() => applyActions({
+          ctx, user, response: result.response, validation: result.validation,
+          provider: result.provider, model: result.model,
+          promptVersion: result.prompt_version, schemaVersion: result.schema_version,
+          repairCount: result.repair_count, outputBudget: result.output_budget,
+          finishReason: result.finish_reason, modelRoute: result.model_route,
+          routingReason: result.routing_reason, routingScore: result.routing_score,
+          gatewayMetrics: result.gateway_metrics,
+          scopeType, scopeId, scopeRevision, currentText: assembled.currentText,
+          editingBase: assembled.editingBase, proposalBaseResume: assembled.proposalBaseResume,
+          parentProposal: assembled.parentProposal, task,
+        }));
       } catch (error) {
-        const failureMessageId = persistTaskFailure({
+        const failureMessageId = db.tx(() => persistTaskFailure({
           ctx,
           user,
           task,
@@ -1761,7 +1895,8 @@ const routes = [
           scopeRevision,
           userMessageId,
           error,
-        });
+          runId,
+        }));
         if (error && typeof error === 'object') {
           error.extra = {
             ...(error.extra || {}),
@@ -1770,6 +1905,8 @@ const routes = [
           };
         }
         throw error;
+      } finally {
+        running.finish();
       }
       const liveConversation = db.get(
         "SELECT id FROM ai_conversations WHERE id = ? AND owner_id = ? AND status = 'active'",
@@ -1778,28 +1915,7 @@ const routes = [
       if (!liveConversation) {
         throw problem.conflict('CONVERSATION_ENDED', '当前对话已结束，请在新对话中重新发送');
       }
-      const applied = applyActions({
-        ctx,
-        user,
-        response: result.response,
-        validation: result.validation,
-        provider: result.provider,
-        model: result.model,
-        promptVersion: result.prompt_version,
-        schemaVersion: result.schema_version,
-        repairCount: result.repair_count,
-        outputBudget: result.output_budget,
-        finishReason: result.finish_reason,
-        scopeType,
-        scopeId,
-        scopeRevision,
-        currentText: assembled.currentText,
-        editingBase: assembled.editingBase,
-        proposalBaseResume: assembled.proposalBaseResume,
-        parentProposal: assembled.parentProposal,
-        userTexts: assembled.userTexts,
-        task,
-      });
+      compactGlobalHistory(db.getDb(), user.id);
       audit.log({
         ownerId: user.id,
         action: 'ai_message_processed',
@@ -1814,6 +1930,8 @@ const routes = [
           repair_count: result.repair_count || 0,
           output_budget: result.output_budget,
           finish_reason: result.finish_reason || null,
+          model_route: result.model_route || null,
+          routing_reason: result.routing_reason || null,
         },
       });
       return {
@@ -1826,7 +1944,11 @@ const routes = [
         conversation_id: ctx.conversation.id,
         policy_version: POLICY_VERSION,
         prompt_version: result.prompt_version,
-        engine: { provider: result.provider, model: result.model },
+        engine: {
+          provider: result.provider,
+          model: result.model,
+          route: result.model_route || null,
+        },
         task_id: task.id,
         result_type: result.response.result_type,
         type: result.response.type,
@@ -1927,6 +2049,7 @@ const routes = [
           throw problem.conflict('ACTION_NOT_CONFIRMABLE', '该动作不支持确认');
         }
         settleTaskAfterAction(action);
+        compactGlobalHistory(db.getDb(), user.id);
         return { id: action.id, status: 'applied', ...result };
       }),
   },
@@ -1956,6 +2079,7 @@ const routes = [
           );
         }
         settleTaskAfterAction(action);
+        compactGlobalHistory(db.getDb(), user.id);
         audit.log({
           ownerId: user.id,
           action: 'ai_action_rejected',

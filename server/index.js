@@ -19,6 +19,10 @@ const db = require('./lib/db');
 const { resolveUser, ipHash } = require('./lib/auth');
 const { seedIfEmpty } = require('./lib/seed');
 const queue = require('./lib/queue');
+const {
+  configuredModels,
+  configuredProvider,
+} = require('./lib/model-client');
 
 const MODULES = [
   './modules/workspace',
@@ -64,6 +68,8 @@ function buildRouter() {
 }
 
 const STATIC_ROOT = path.join(__dirname, '..');
+// 仓库不是 public 目录：配置、数据库、源码、原型和测试不得通过静态路由下载。
+const PUBLIC_FILES = new Set(['index.html', 'resume-dom.js']);
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -76,12 +82,15 @@ const MIME_TYPES = {
 
 function serveStatic(req, res, pathname) {
   const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-  const target = path.join(STATIC_ROOT, relative);
-  // 防目录穿越
-  if (!target.startsWith(STATIC_ROOT)) {
-    res.writeHead(403).end('Forbidden');
+  if (!PUBLIC_FILES.has(relative)) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未找到资源');
     return;
   }
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    res.writeHead(405, { allow: 'GET, HEAD' }).end('Method Not Allowed');
+    return;
+  }
+  const target = path.join(STATIC_ROOT, relative);
   fs.readFile(target, (err, data) => {
     if (err) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未找到资源');
@@ -90,8 +99,9 @@ function serveStatic(req, res, pathname) {
     res.writeHead(200, {
       'content-type': MIME_TYPES[path.extname(target)] || 'application/octet-stream',
       'cache-control': 'no-cache',
+      'x-content-type-options': 'nosniff',
     });
-    res.end(data);
+    res.end(req.method === 'HEAD' ? undefined : data);
   });
 }
 
@@ -136,7 +146,7 @@ function createServer() {
       const user = resolveUser(req);
       let body = {};
       if (!route.raw && ['POST', 'PATCH', 'PUT'].includes(req.method)) {
-        body = await readJsonBody(req);
+        body = await readJsonBody(req, route.maxBodyBytes);
       }
       const result = await route.handler({
         req,
@@ -163,9 +173,11 @@ function bootstrap({ port = 8787 } = {}) {
   const server = createServer();
   server.listen(port, () => {
     const project = db.get('SELECT * FROM resume_projects ORDER BY created_at ASC LIMIT 1');
+    const provider = configuredProvider() || '未配置';
+    const models = configuredModels();
     console.log(`简历星球服务已启动： http://localhost:${port}`);
     if (envLoaded.loaded) console.log(`已加载配置文件： ${envLoaded.file}（${envLoaded.count} 项）`);
-    console.log(`AI 引擎： Resume Harness / ${process.env.RESUME_LLM_PROVIDER || '未配置'} / ${process.env.RESUME_LLM_MODEL || '未配置模型'}`);
+    console.log(`AI 引擎： Resume Harness / ${provider} / 文本 ${models.text} / 复杂结构 ${models.complex} / 视觉 ${models.vision}`);
     console.log(`工作区接口：       http://localhost:${port}/api/v1/projects/${project ? project.id : ':id'}`);
     if (seeded && seeded.seeded) console.log('已初始化演示数据（陈知行 · 高级产品经理岗位）');
   });

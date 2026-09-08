@@ -10,12 +10,14 @@ const { uuidv7, nowIso, problem, hashJson } = require('../lib/util');
 const audit = require('../lib/audit');
 const {
   createNodeDeltaPair,
+  createStructureDeltaPair,
   isArchivedPayload,
   isNodeDelta,
   isStructureDelta,
   restoreNodeDelta,
   restoreStructureDelta,
 } = require('../lib/resume-change');
+const { compileManualNodeAction } = require('../lib/manual-node-actions');
 const { refreshResumeProposalStaleness } = require('../lib/resume-proposals');
 const ResumeDom = require('../../resume-dom');
 const HISTORY_DEPTH = 5;
@@ -121,6 +123,7 @@ function changeEventLabel(event) {
     || before.label
     || {
       document_transaction: '修改简历文字',
+      manual_structure: '增删简历内容',
       inline_ai_text: 'AI 局部修改文字',
       dom_operations: 'AI 修改简历',
       resume_document_merge: 'AI 修改简历',
@@ -269,6 +272,7 @@ const routes = [
   {
     method: 'PATCH',
     pattern: '/projects/:id/resume-draft',
+    maxBodyBytes: 16 * 1024 * 1024,
     handler: ({ params, body, user, requestId, ipHash }) =>
       db.tx(() => {
         const draft = loadDraft(params.id, user);
@@ -471,6 +475,144 @@ const routes = [
           revision,
           resume_json: nextResume,
           change_id: changeId,
+          has_unsnapshotted_changes: true,
+          version_created: false,
+        };
+      }),
+  },
+  {
+    method: 'POST',
+    pattern: '/projects/:id/resume-draft/node-actions',
+    handler: ({ params, body, user, requestId, ipHash }) =>
+      db.tx(() => {
+        const draft = loadDraft(params.id, user);
+        const mutationId = String(body.mutation_id || uuidv7());
+        const existing = db.get(
+          'SELECT * FROM resume_change_events WHERE project_id = ? AND mutation_id = ?',
+          [draft.project_id, mutationId],
+        );
+        if (existing) {
+          const after = JSON.parse(existing.after_json || '{}');
+          if (
+            existing.change_type !== 'manual_structure'
+            || String(existing.scope_id || '') !== String(body.node_id || '')
+            || String(after.manual_action || '') !== String(body.action || '')
+          ) {
+            throw problem.conflict(
+              'MUTATION_ID_REUSED',
+              '这次操作的标识已经用于另一项修改，请重新操作',
+            );
+          }
+          return {
+            id: draft.id,
+            revision: draft.revision,
+            resume_json: ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}')),
+            change_id: existing.id,
+            focus_node_id: after.focus_node_id || null,
+            label: changeEventLabel(existing),
+            has_unsnapshotted_changes: Boolean(draft.has_unsnapshotted_changes),
+            idempotent_replay: true,
+            version_created: false,
+          };
+        }
+        if (body.expected_revision !== undefined && body.expected_revision !== draft.revision) {
+          throw problem.conflict('REVISION_CONFLICT', '简历已被其他操作修改，请刷新后重试', {
+            expected: body.expected_revision,
+            current: draft.revision,
+          });
+        }
+        if (!body.node_id || !body.action) {
+          throw problem.badRequest('请选择要增删的简历内容');
+        }
+        const beforeResume = ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}'));
+        let compiled;
+        let nextResume;
+        try {
+          compiled = compileManualNodeAction(beforeResume, body.action, body.node_id);
+          nextResume = ResumeDom.applyDocumentOperations(beforeResume, compiled.operations, {
+            allowStructure: true,
+          });
+        } catch (error) {
+          if (
+            [
+              'MANUAL_NODE_ACTION_UNAVAILABLE',
+              'FIXED_LAYOUT_ACTION_UNAVAILABLE',
+              'MANUAL_NODE_TARGET_MISSING',
+            ].includes(error.code)
+          ) {
+            throw problem.unprocessable(error.code, error.message);
+          }
+          throw problem.unprocessable('MANUAL_NODE_ACTION_INVALID', error.message);
+        }
+        const delta = createStructureDeltaPair(
+          beforeResume,
+          nextResume,
+          compiled.operations,
+          {
+            label: String(compiled.label || '增删简历内容').slice(0, 120),
+            input_type: 'manual_structure',
+            manual_action: String(body.action),
+            source_node_id: String(body.node_id),
+            focus_node_id: compiled.focusNodeId || null,
+          },
+        );
+        if (!delta) {
+          throw problem.unprocessable(
+            'MANUAL_NODE_ACTION_INVALID',
+            '这次增删无法形成安全的撤销记录，请刷新后重试',
+          );
+        }
+        const revision = draft.revision + 1;
+        const changedAt = nowIso();
+        const changeId = uuidv7();
+        db.run(
+          `UPDATE resume_drafts
+           SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ?
+           WHERE id = ?`,
+          [JSON.stringify(nextResume), revision, changedAt, draft.id],
+        );
+        db.run(
+          `INSERT INTO resume_change_events
+           (id, project_id, owner_id, draft_revision, change_type, scope_type, scope_id,
+            before_json, after_json, actor_type, mutation_id, created_at)
+           VALUES (?, ?, ?, ?, 'manual_structure', 'RESUME_BLOCK', ?, ?, ?, 'user', ?, ?)`,
+          [
+            changeId,
+            draft.project_id,
+            user.id,
+            revision,
+            body.node_id,
+            JSON.stringify(delta.before),
+            JSON.stringify(delta.after),
+            mutationId,
+            changedAt,
+          ],
+        );
+        refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+          resume: nextResume,
+          revision,
+        });
+        audit.log({
+          ownerId: user.id,
+          action: 'resume_manual_node_action_applied',
+          resourceType: 'resume_draft',
+          resourceId: draft.id,
+          requestId,
+          ipHash,
+          metadata: {
+            revision,
+            action: body.action,
+            node_id: body.node_id,
+            operations: compiled.operations.length,
+          },
+        });
+        return {
+          id: draft.id,
+          revision,
+          resume_json: nextResume,
+          change_id: changeId,
+          focus_node_id: compiled.focusNodeId || null,
+          label: compiled.label,
           has_unsnapshotted_changes: true,
           version_created: false,
         };

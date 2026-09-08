@@ -54,6 +54,20 @@ test('Harness 每轮携带完整工作区、会话和锁定焦点', () => {
     '先写得更专业',
     '这是上一版建议',
   ]);
+  const messages = buildMessages(built);
+  assert.deepStrictEqual(
+    messages.slice(2, -1).map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+    [
+      { role: 'user', content: '先写得更专业' },
+      { role: 'assistant', content: '这是上一版建议' },
+    ],
+  );
+  assert.strictEqual(messages.at(-1).role, 'user');
+  assert.strictEqual(messages.at(-1).content[0].text, '把当前内容拆成两个段落');
+  assert.doesNotMatch(String(messages[1].content), /"text":"把当前内容拆成两个段落"/);
 });
 
 test('Harness 继续调整时把完整建议态文档一并交给模型', () => {
@@ -102,9 +116,11 @@ test('Harness 继续调整时把完整建议态文档一并交给模型', () => 
     String(messages[1].content),
     /上一轮建议形成的完整内容/,
   );
+  assert.match(String(messages[1].content), /"previous_target_document"/);
+  assert.doesNotMatch(String(messages[1].content), /"proposal_content"/);
 });
 
-test('Harness 给模型发送语义树而不是页面样式、坐标和资源', () => {
+test('全局 Harness 保留全文、样式和页面布局，资源仅发送描述', () => {
   const document = ResumeDom.toResumeDocument({
     schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
     root: {
@@ -154,14 +170,18 @@ test('Harness 给模型发送语义树而不是页面样式、坐标和资源', 
   const messages = buildMessages(built);
   const modelContext = String(messages[1].content);
 
-  assert.match(modelContext, /resume-ai-context-v1/);
+  assert.match(modelContext, /resume-ai-context-v3/);
   assert.match(modelContext, /完整语义正文标记/);
   assert.match(modelContext, /summary-section/);
   assert.match(modelContext, /section_title/);
-  assert.doesNotMatch(modelContext, /595\.28pt/);
-  assert.doesNotMatch(modelContext, /52\.5pt/);
-  assert.doesNotMatch(modelContext, /background-1/);
-  assert.doesNotMatch(modelContext, /injected_css/);
+  assert.doesNotMatch(modelContext, /"source_schema_version"/);
+  assert.doesNotMatch(modelContext, /"stats"/);
+  assert.match(modelContext, /"tag":"p"/);
+  assert.match(modelContext, /595\.28pt/);
+  assert.match(modelContext, /52\.5pt/);
+  assert.match(modelContext, /background-1/);
+  assert.match(modelContext, /injected_css/);
+  assert.doesNotMatch(modelContext, /x{4000}/);
   assert.ok(modelContext.length < JSON.stringify(document).length);
 });
 
@@ -170,17 +190,23 @@ test('Harness 将图片与本轮锁定焦点一起发送给视觉模型', () => 
   const last = messages[messages.length - 1];
   assert.strictEqual(last.role, 'user');
   assert.ok(Array.isArray(last.content));
-  assert.match(last.content[0].text, /bullet-1/);
+  assert.strictEqual(last.content[0].text, '把当前内容拆成两个段落');
+  assert.match(String(messages[1].content), /bullet-1/);
   assert.strictEqual(last.content[1].image_url.url, 'data:image/png;base64,aW1hZ2U=');
 });
 
-test('Harness 会话记忆按预算保留完整的最近消息', () => {
+test('Harness 同步组装不截断历史，必须等待摘要成功才缩小窗口', () => {
   const conversationMessages = Array.from({ length: 8 }, (_, index) => ({
     role: index % 2 ? 'assistant' : 'user',
     content: `完整消息-${index}`,
   }));
   const built = input({ conversationMessages, memoryOptions: { maxMessages: 3, maxChars: 1000 } });
   assert.deepStrictEqual(built.conversation.recent_messages.map((item) => item.content), [
+    '完整消息-0',
+    '完整消息-1',
+    '完整消息-2',
+    '完整消息-3',
+    '完整消息-4',
     '完整消息-5',
     '完整消息-6',
     '完整消息-7',
@@ -223,6 +249,16 @@ test('动态预算配置冲突时硬上限优先，绝不被更高下限突破',
   assert.strictEqual(budget.initial, 10000);
   assert.strictEqual(budget.retry, 10000);
   assert.strictEqual(budget.configuration_adjusted, true);
+});
+
+test('全局推理与正文共享供应商输出预算，预留推理额度但不突破硬上限', () => {
+  const plain = calculateOutputBudget(input(), { minimum: 1000 });
+  const thinking = calculateOutputBudget(input(), { minimum: 1000, reasoningEffort: 'low' });
+  assert.equal(thinking.reasoning_allowance, 4096);
+  assert.equal(thinking.initial, plain.initial + 4096);
+  const limited = calculateOutputBudget(input(), { maximum: 4000, reasoningEffort: 'high' });
+  assert.equal(limited.initial, 4000);
+  assert.equal(limited.retry, 4000);
 });
 
 test('旧 RESUME_LLM_MAX_TOKENS 不会提升动态预算的默认 32768 硬上限', () => {
@@ -328,7 +364,7 @@ test('Harness 对不可执行的通用 DOM 动作自动修复一次', async () =
           },
         };
       }
-      repairPrompt = String(messages[messages.length - 1].content || '');
+      repairPrompt = String(messages[messages.length - 2].content || '');
       return {
         output: {
           reply: '已生成可执行的结构建议，确认后即可应用。',
@@ -373,6 +409,90 @@ test('Harness 对不可执行的通用 DOM 动作自动修复一次', async () =
     assert.ok(result.response.actions[0].payload.proposal.target_resume_document);
     assert.match(repairPrompt, /无法形成合法的目标简历/);
     assert.match(repairPrompt, /空操作/);
+  } finally {
+    restore();
+  }
+});
+
+test('全局协议失败仍使用完整文档能力，不擅自把请求收窄为单节点', async () => {
+  let calls = 0;
+  const capabilities = [];
+  let repairPrompt = '';
+  const restore = setModelClientForTests({
+    provider: 'test',
+    model: 'text-repair-routing',
+    generate: async ({ input: modelInput, messages, capability }) => {
+      calls += 1;
+      capabilities.push(capability);
+      if (calls === 1) {
+        return {
+          capability,
+          output: {
+            type: 'proposal',
+            content: '已准备精简。',
+            proposal: {
+              target_resume_fragments: {
+                format: 'resume-target-fragments-v2',
+                changes: [],
+                insertions: [{
+                  parent_id: 'work-1',
+                  after_id: 'bullet-1',
+                  new_subtrees: [{ id: 'invalid-text-node', text: '错误新增' }],
+                }],
+              },
+              change_constraints: {
+                content: 'modify',
+                content_order: 'preserve',
+                structure: 'modify',
+                style: 'preserve',
+                allowed_region_ids: ['bullet-1'],
+              },
+            },
+          },
+        };
+      }
+      repairPrompt = String(messages[messages.length - 2].content || '');
+      const current = ResumeDom.toResumeDocument(modelInput.workspace.resume.content);
+      const found = ResumeDom.findNode(current, 'bullet-1');
+      const target = ResumeDom.applyDocumentOperations(current, [{
+        op: 'replace_text',
+        node_id: 'bullet-1',
+        text: '精简后的完整正文',
+      }], { allowStructure: true });
+      return {
+        capability,
+        output: {
+          type: 'proposal',
+          content: '已准备精简当前文字。',
+          proposal: {
+            target_resume_document: target,
+            change_constraints: {
+              content: 'modify',
+              content_order: 'preserve',
+              structure: 'preserve',
+              style: 'preserve',
+              allowed_region_ids: [found.parent.id],
+            },
+          },
+        },
+      };
+    },
+  });
+  try {
+    const result = await complete(input({
+      text: '把当前这句话写得更简洁，保留原意。',
+      request: {
+        text: '把当前这句话写得更简洁，保留原意。',
+        message_id: 'message-current',
+        task: { id: 'task-1', goal: '精简当前文字', state: {} },
+      },
+      attachments: [],
+    }));
+    assert.strictEqual(calls, 2);
+    assert.deepStrictEqual(capabilities, ['complex', 'complex']);
+    assert.doesNotMatch(repairPrompt, /本请求已确定为单点文字修改|只修改现有节点/);
+    assert.match(repairPrompt, /不新增限制或改写用户意图/);
+    assert.strictEqual(result.response.type, 'proposal');
   } finally {
     restore();
   }
@@ -437,7 +557,7 @@ test('Harness 对只改结构却丢失原文的建议自动修复一次', async 
           },
         };
       }
-      repairPrompt = String(messages[messages.length - 1].content || '');
+      repairPrompt = String(messages[messages.length - 2].content || '');
       return {
         output: {
           reply: '已完整保留原文并拆成两个段落，确认后即可应用。',
@@ -739,7 +859,7 @@ test('删除含文字节点时会修正错误的 content=preserve 约束', async
     model: 'delete-content-constraint-repair',
     generate: async ({ messages }) => {
       calls += 1;
-      if (calls === 2) repairPrompt = String(messages[messages.length - 1].content || '');
+      if (calls === 2) repairPrompt = String(messages[messages.length - 2].content || '');
       return {
         output: {
           type: 'proposal',
@@ -814,7 +934,7 @@ test('Harness 拒绝相互矛盾的目标子树和完整目标文档，并只保
           },
         };
       }
-      repairPrompt = String(messages[messages.length - 1].content || '');
+      repairPrompt = String(messages[messages.length - 2].content || '');
       return {
         output: {
           type: 'proposal',
@@ -886,7 +1006,7 @@ test('完整目标文档包含已停用 AI 范围属性时拒绝迁移，并自�
           },
         };
       }
-      repairPrompt = String(messages[messages.length - 1].content || '');
+      repairPrompt = String(messages[messages.length - 2].content || '');
       const target = ResumeDom.applyDocumentOperations(current, [{
         op: 'replace_text',
         node_id: 'bullet-1',
@@ -930,20 +1050,22 @@ test('完整目标文档包含已停用 AI 范围属性时拒绝迁移，并自�
 test('Harness 在模型输出截断后提高动态预算，并要求改用最小目标子树', async () => {
   let calls = 0;
   const budgets = [];
+  const thinkingModes = [];
   let retryPrompt = '';
   const restore = setModelClientForTests({
     provider: 'test',
     model: 'target-fragment-protocol-retry',
-    generate: async ({ messages, maxTokens }) => {
+    generate: async ({ messages, maxTokens, reasoningEffort }) => {
       calls += 1;
       budgets.push(maxTokens);
+      thinkingModes.push(reasoningEffort);
       if (calls === 1) {
         const error = new Error('输出达到长度上限');
-        error.code = 'DEEPSEEK_OUTPUT_TRUNCATED';
+        error.code = 'MODEL_OUTPUT_TRUNCATED';
         error.finish_reason = 'length';
         throw error;
       }
-      retryPrompt = String(messages[messages.length - 1].content || '');
+      retryPrompt = String(messages[messages.length - 2].content || '');
       return {
         output: {
           type: 'proposal',
@@ -973,8 +1095,12 @@ test('Harness 在模型输出截断后提高动态预算，并要求改用最小
     assert.strictEqual(calls, 2);
     assert.strictEqual(result.repair_count, 1);
     assert.ok(budgets[1] > budgets[0]);
-    assert.match(retryPrompt, /target_resume_fragments/);
-    assert.match(retryPrompt, /replacement_subtree:null/);
+    assert.deepStrictEqual(thinkingModes, [
+      process.env.RESUME_GLOBAL_AI_REASONING_EFFORT || 'low',
+      process.env.RESUME_GLOBAL_AI_REASONING_EFFORT || 'low',
+    ]);
+    assert.match(retryPrompt, /resume_proposal/);
+    assert.match(retryPrompt, /replacement_json/);
     assert.match(retryPrompt, /insertions/);
   } finally {
     restore();
@@ -1007,7 +1133,7 @@ test('Harness 对合法 JSON 但缺少协议字段的结果自动恢复一次', 
           max_tokens: maxTokens,
         };
       }
-      retryPrompt = String(messages[messages.length - 1].content || '');
+      retryPrompt = String(messages[messages.length - 2].content || '');
       return {
         output: {
           type: 'proposal',
@@ -1056,7 +1182,7 @@ test('Harness 整个请求最多调用模型两次，协议恢复后不再叠加
       calls += 1;
       if (calls === 1) {
         const error = new Error('输出达到长度上限');
-        error.code = 'DEEPSEEK_OUTPUT_TRUNCATED';
+        error.code = 'MODEL_OUTPUT_TRUNCATED';
         throw error;
       }
       return {
@@ -1121,7 +1247,7 @@ test('Harness 对复杂请求以自然语言说明处理思路，不提前生成
   }
 });
 
-test('模型直接返回文字与结构混合修改时，Harness 强制先用自然语言确认处理思路', async () => {
+test('明确的文字与结构混合修改直接进入预览，不人为增加思路确认和模型调用', async () => {
   let calls = 0;
   let repairPrompt = '';
   const restore = setModelClientForTests({
@@ -1130,7 +1256,7 @@ test('模型直接返回文字与结构混合修改时，Harness 强制先用自
     generate: async ({ input: modelInput, messages }) => {
       calls += 1;
       if (calls === 2) {
-        repairPrompt = String(messages[messages.length - 1].content || '');
+        repairPrompt = String(messages[messages.length - 2].content || '');
         return {
           output: {
             type: 'message',
@@ -1192,13 +1318,11 @@ test('模型直接返回文字与结构混合修改时，Harness 强制先用自
     const result = await complete(input({
       text: '拆成两个段落并润色',
     }));
-    assert.strictEqual(calls, 2);
-    assert.strictEqual(result.repair_count, 1);
-    assert.strictEqual(result.response.result_type, 'MESSAGE');
-    assert.strictEqual(result.response.actions.length, 0);
-    assert.strictEqual(result.response.message_kind, 'plan_confirmation');
-    assert.match(repairPrompt, /必须先确认处理思路/);
-    assert.match(result.response.content, /结合整份简历/);
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(result.repair_count, 0);
+    assert.strictEqual(result.response.result_type, 'PROPOSAL');
+    assert.strictEqual(result.response.actions.length, 1);
+    assert.strictEqual(repairPrompt, '');
   } finally {
     restore();
   }
@@ -1280,7 +1404,7 @@ test('用户已经回应处理思路后，同一类复杂修改直接生成可�
   }
 });
 
-test('普通澄清的快捷回复不会被误认为已经确认复杂修改思路', async () => {
+test('真实歧义澄清后直接生成混合修改，不再追加一次思路确认', async () => {
   let calls = 0;
   const restore = setModelClientForTests({
     provider: 'test',
@@ -1362,10 +1486,9 @@ test('普通澄清的快捷回复不会被误认为已经确认复杂修改思�
         },
       },
     }));
-    assert.strictEqual(calls, 2);
-    assert.strictEqual(result.response.result_type, 'MESSAGE');
-    assert.strictEqual(result.response.message_kind, 'plan_confirmation');
-    assert.deepStrictEqual(result.response.actions, []);
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(result.response.result_type, 'PROPOSAL');
+    assert.strictEqual(result.response.actions.length, 1);
   } finally {
     restore();
   }

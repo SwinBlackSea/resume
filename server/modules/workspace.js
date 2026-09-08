@@ -12,6 +12,10 @@ const { DEMO_EMAIL } = require('../lib/auth');
 const { previewProposalOnResume } = require('../lib/resume-change-preview');
 const { loadHistoryStacks } = require('./draft');
 const { normalizeQuickReplies } = require('../lib/resume-harness/output-schema');
+const {
+  configuredModels,
+  configuredProvider,
+} = require('../lib/model-client');
 const ResumeDom = require('../../resume-dom');
 
 function toExperienceView(row) {
@@ -124,7 +128,16 @@ function toMessageView(row, options = {}) {
   )
     ? 'MESSAGE'
     : legacyResultType || null;
+  const retryable = resultType === 'ERROR'
+    && ['failed', 'waiting_apply'].includes(task && task.status)
+    && Boolean(modelMetadata.request_message_id)
+    && db.get(
+      `SELECT id FROM ai_messages WHERE conversation_id = ? AND owner_id = ?
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [row.conversation_id, row.owner_id],
+    )?.id === row.id;
   let quickReplies = normalizeQuickReplies(modelMetadata.quick_replies);
+  const configuredModelSet = configuredModels();
   if (!quickReplies.length && modelMetadata.clarification) {
     quickReplies = normalizeQuickReplies(modelMetadata.clarification.options);
   }
@@ -138,6 +151,11 @@ function toMessageView(row, options = {}) {
     id: row.id,
     role: row.role,
     content: row.content,
+    attachments: (modelMetadata.attachment_ids || []).flatMap((id) => {
+      const upload = db.get('SELECT id, original_name FROM uploads WHERE id = ? AND owner_id = ?', [id, row.owner_id]);
+      return upload ? [{ id: upload.id, file_name: upload.original_name,
+        preview_url: `/api/v1/uploads/${upload.id}/preview` }] : [];
+    }),
     scope_type: row.scope_type,
     scope_label: row.scope_type ? SCOPE_LABEL[row.scope_type] || row.scope_type : '',
     scope_id: row.scope_id,
@@ -150,14 +168,22 @@ function toMessageView(row, options = {}) {
       ? Boolean(modelMetadata.awaiting_user)
       : ['CLARIFICATION_REQUIRED', 'PLAN_CONFIRMATION_REQUIRED'].includes(legacyResultType),
     quick_replies: quickReplies,
+    message_kind: modelMetadata.message_kind || null,
     clarification: modelMetadata.clarification || null,
     plan: modelMetadata.plan || null,
     error_code: modelMetadata.error_code || null,
+    retry_message_id: retryable ? row.id : null,
     created_at: row.created_at,
     // 展示当前回答来自哪个引擎/模型，便于确认配置是否生效
     model: {
-      provider: modelMetadata.provider || process.env.RESUME_LLM_PROVIDER || 'unconfigured',
-      model: modelMetadata.model || process.env.RESUME_LLM_MODEL || '',
+      provider: modelMetadata.provider || configuredProvider() || 'unconfigured',
+      model: modelMetadata.model || configuredModelSet.complex,
+      capability:
+        modelMetadata.capability
+        || modelMetadata.model_route
+        || modelMetadata.route
+        || null,
+      routing_reason: modelMetadata.routing_reason || null,
       prompt_version: modelMetadata.prompt_version || '',
       policy_version: modelMetadata.policy_version || '',
     },

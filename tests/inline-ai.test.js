@@ -6,6 +6,11 @@ const assert = require('node:assert');
 const helpers = require('./helpers');
 const db = helpers.db;
 const resumeHarness = require('../server/lib/resume-harness');
+const {
+  countTextCharacters,
+  parseExplicitMaxCharacters,
+  validateInlineOutput,
+} = require('../server/lib/resume-harness/inline-rewrite');
 const ResumeDom = require('../resume-dom');
 const { rebaseSelectionRange } = require('../server/modules/inline-ai');
 
@@ -21,7 +26,7 @@ async function propose(body) {
     body: {
       target_node_id: 'target-bullet',
       target_mode: 'node',
-      instruction: '写得更专业，不增加新事实',
+      instruction: '写得更专业',
       ...body,
     },
   });
@@ -41,6 +46,40 @@ test.before(async () => {
 });
 
 test.after(() => helpers.close(ctx));
+
+test('局部 AI 将明确字数上限解析为可确定校验，不误判扩写或最低字数', () => {
+  assert.strictEqual(parseExplicitMaxCharacters('缩小到80字'), 80);
+  assert.strictEqual(parseExplicitMaxCharacters('控制在80—100字以内'), 100);
+  assert.strictEqual(parseExplicitMaxCharacters('不超过８０个字'), 80);
+  assert.strictEqual(parseExplicitMaxCharacters('80个字。看不懂吗'), 80);
+  assert.strictEqual(parseExplicitMaxCharacters('增加80字'), null);
+  assert.strictEqual(parseExplicitMaxCharacters('至少80字'), null);
+  assert.strictEqual(countTextCharacters('学生工作，负责174人。'), 12);
+});
+
+test('局部 AI 拒绝违反明确字数上限或原样返回的建议', () => {
+  const input = {
+    request: { instruction: '精简到80字以内' },
+    target: { source_text: '原文内容' },
+  };
+  assert.deepStrictEqual(
+    validateInlineOutput({
+      type: 'proposal',
+      suggestion: '改'.repeat(81),
+    }, input),
+    ['用户明确要求不超过80字，当前结果为81字'],
+  );
+  assert.deepStrictEqual(
+    validateInlineOutput({
+      type: 'proposal',
+      suggestion: '原文内容',
+    }, {
+      request: { instruction: '写得更简洁' },
+      target: { source_text: '原文内容' },
+    }),
+    ['修改结果与当前文字完全相同'],
+  );
+});
 
 test('选区重定位优先使用原位置上下文，不会把第二处相同文字错改到第一处', () => {
   const base = '第一段目标；第二段目标';
@@ -77,15 +116,17 @@ test('选区上下文歧义或异常膨胀时停止应用，不猜测用户原�
   );
 });
 
-test('局部 AI 读取完整简历上下文，但不写入右侧聊天', async () => {
+test('局部 AI 读取完整简历纯文本上下文，但不发送正文树或写入右侧聊天', async () => {
   const before = await workspace();
   const messageCount = db.get('SELECT COUNT(*) AS total FROM ai_messages').total;
   let capturedInput = null;
+  let capturedMessages = null;
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
     model: 'inline-context',
-    generate: async ({ input }) => {
+    generate: async ({ input, messages }) => {
       capturedInput = input;
+      capturedMessages = messages;
       return {
         output: {
           type: 'proposal',
@@ -108,6 +149,15 @@ test('局部 AI 读取完整简历上下文，但不写入右侧聊天', async (
   assert.strictEqual(capturedInput.workspace.resume.revision, before.draft.revision);
   assert.strictEqual(capturedInput.target.node_id, 'target-bullet');
   assert.strictEqual(capturedInput.target.mode, 'node');
+  assert.strictEqual(capturedMessages.at(-1).role, 'user');
+  const currentTurn = JSON.parse(capturedMessages.at(-1).content);
+  assert.strictEqual(currentTurn.protocol, 'resume-inline-turn-v1');
+  assert.strictEqual(currentTurn.instruction, '写得更专业');
+  assert.strictEqual(currentTurn.editing_text, capturedInput.target.source_text);
+  assert.match(String(capturedMessages[1].content), /resume-model-conversation-v1/);
+  assert.match(String(capturedMessages[1].content), /负责增长实验/);
+  assert.doesNotMatch(String(capturedMessages[1].content), /resume-ai-context/);
+  assert.doesNotMatch(String(capturedMessages[1].content), /target-bullet/);
   assert.strictEqual(db.get('SELECT COUNT(*) AS total FROM ai_messages').total, messageCount);
   const row = db.get('SELECT * FROM ai_action_requests WHERE id = ?', [result.body.action.id]);
   assert.strictEqual(row.conversation_id, null);
@@ -416,7 +466,7 @@ test('目标节点被结构删除后，局部建议只返回可理解的客观�
   });
 });
 
-test('模型遗漏原文数字时自动修复一次，再给用户确认', async () => {
+test('局部 AI 可直接新增或改写数字，不触发内容真实性重试', async () => {
   const before = await workspace();
   const source = ResumeDom.exportNodeText(
     ResumeDom.findNode(before.draft.resume_json, 'target-bullet').node,
@@ -426,31 +476,30 @@ test('模型遗漏原文数字时自动修复一次，再给用户确认', async
   let calls = 0;
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
-    model: 'inline-fact-repair',
+    model: 'inline-open-content',
     generate: async () => {
       calls += 1;
       return {
         output: {
           type: 'proposal',
           content: '已精简当前表达。',
-          suggestion: calls === 1
-            ? source.replace(number, '')
-            : `${source}（表达更紧凑）`,
-          summary: '精简当前文字',
+          suggestion: `${source.replace(number, '')}，覆盖 99999 家客户。`,
+          summary: '补充数据支撑',
         },
       };
     },
   });
   let result;
   try {
-    result = await propose({ instruction: '写得更精简，保留全部数字' });
+    result = await propose({ instruction: '增加数据支撑' });
   } finally {
     restore();
   }
   assert.strictEqual(result.status, 200, JSON.stringify(result.body));
-  assert.strictEqual(calls, 2);
-  assert.strictEqual(result.body.action.payload.model.repair_count, 1);
-  assert.match(result.body.action.payload.suggestion, new RegExp(number.replace('%', '\\%')));
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(result.body.action.payload.model.repair_count, 0);
+  assert.doesNotMatch(result.body.action.payload.suggestion, new RegExp(number.replace('%', '\\%')));
+  assert.match(result.body.action.payload.suggestion, /99999\s*家/);
   await helpers.call(ctx, 'POST', `/ai/inline-rewrites/${result.body.action.id}/reject`, {
     idemKey: `reject-inline-repair-${result.body.action.id}`,
   });
@@ -463,12 +512,14 @@ test('局部模型返回合法 JSON 但缺少字段时只修复一次，并恢�
   );
   let calls = 0;
   const budgets = [];
+  const thinkingModes = [];
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
     model: 'inline-schema-recovery',
-    generate: async ({ maxTokens }) => {
+    generate: async ({ maxTokens, thinking }) => {
       calls += 1;
       budgets.push(maxTokens);
+      thinkingModes.push(thinking);
       if (calls === 1) {
         return {
           output: {
@@ -495,14 +546,108 @@ test('局部模型返回合法 JSON 但缺少字段时只修复一次，并恢�
   }
   assert.strictEqual(result.status, 200, JSON.stringify(result.body));
   assert.strictEqual(calls, 2);
-  assert.ok(budgets[1] >= budgets[0]);
+  assert.ok(budgets[0] >= 4096, '局部生成必须为模型推理和 JSON 正文保留足够空间');
+  assert.ok(budgets[1] >= 8192, '协议修复必须显著提高输出额度');
+  assert.deepStrictEqual(thinkingModes, [false, false]);
   assert.strictEqual(result.body.action.payload.model.repair_count, 1);
   await helpers.call(ctx, 'POST', `/ai/inline-rewrites/${result.body.action.id}/reject`, {
     idemKey: `reject-inline-schema-recovery-${result.body.action.id}`,
   });
 });
 
-test('局部模型连续截断时区分为结果过长，不误报服务不可用且最多调用两次', async () => {
+test('局部模型违反80字上限时携带真实字数自动修复一次', async () => {
+  let calls = 0;
+  let retryMessages = null;
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'inline-character-limit-recovery',
+    generate: async ({ messages }) => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          output: {
+            type: 'proposal',
+            content: '已精简至80字以内。',
+            suggestion: '长'.repeat(120),
+            summary: '精简至80字',
+          },
+        };
+      }
+      retryMessages = messages;
+      return {
+        output: {
+          type: 'proposal',
+          content: '已精简至80字以内。',
+          suggestion: '短'.repeat(80),
+          summary: '精简至80字',
+        },
+      };
+    },
+  });
+  let result;
+  try {
+    result = await propose({ instruction: '精简到80字以内' });
+  } finally {
+    restore();
+  }
+  assert.strictEqual(result.status, 200, JSON.stringify(result.body));
+  assert.strictEqual(calls, 2);
+  assert.strictEqual(countTextCharacters(result.body.action.payload.suggestion), 80);
+  assert.strictEqual(result.body.action.payload.model.repair_count, 1);
+  assert.match(retryMessages.at(-2).content, /不超过80字，当前结果为120字/);
+  assert.equal(JSON.parse(retryMessages.at(-1).content).instruction, '精简到80字以内');
+  await helpers.call(ctx, 'POST', `/ai/inline-rewrites/${result.body.action.id}/reject`, {
+    idemKey: `reject-inline-character-limit-${result.body.action.id}`,
+  });
+});
+
+test('局部模型连续违反80字上限时拒绝冒充成功并保存失败原因', async () => {
+  let calls = 0;
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'inline-character-limit-invalid',
+    generate: async () => {
+      calls += 1;
+      return {
+        output: {
+          type: 'proposal',
+          content: '已精简至80字以内。',
+          suggestion: '长'.repeat(120),
+          summary: '精简至80字',
+        },
+      };
+    },
+  });
+  let result;
+  try {
+    result = await propose({ instruction: '你要精简到80个字以内' });
+  } finally {
+    restore();
+  }
+  assert.strictEqual(calls, 2);
+  assert.strictEqual(result.status, 422, JSON.stringify(result.body));
+  assert.strictEqual(result.body.title, 'INLINE_REWRITE_INVALID');
+  assert.match(result.body.detail, /不超过80字，当前结果为120字/);
+  assert.deepStrictEqual(result.body.validation_errors, [
+    '用户明确要求不超过80字，当前结果为120字',
+  ]);
+  const failed = db.get(
+    `SELECT payload_json FROM ai_action_requests
+     WHERE action_type = 'RESUME_INLINE_REWRITE_PROPOSAL'
+       AND status = 'failed'
+       AND json_extract(payload_json, '$.instruction') = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`,
+    ['你要精简到80个字以内'],
+  );
+  const failure = JSON.parse(failed.payload_json).failure;
+  assert.strictEqual(failure.repair_count, 1);
+  assert.deepStrictEqual(failure.validation_errors, [
+    '用户明确要求不超过80字，当前结果为120字',
+  ]);
+});
+
+test('局部模型连续截断时提示重新生成，不误导用户缩小文字且最多调用两次', async () => {
   let calls = 0;
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
@@ -510,7 +655,7 @@ test('局部模型连续截断时区分为结果过长，不误报服务不可�
     generate: async () => {
       calls += 1;
       const error = new Error('模型输出达到长度上限');
-      error.code = 'DEEPSEEK_OUTPUT_TRUNCATED';
+      error.code = 'MODEL_OUTPUT_TRUNCATED';
       error.finish_reason = 'length';
       throw error;
     },
@@ -524,5 +669,21 @@ test('局部模型连续截断时区分为结果过长，不误报服务不可�
   assert.strictEqual(calls, 2);
   assert.strictEqual(result.status, 422, JSON.stringify(result.body));
   assert.strictEqual(result.body.title, 'MODEL_OUTPUT_TRUNCATED');
-  assert.match(result.body.detail, /结果过长/);
+  assert.match(result.body.detail, /没有完成.*重新生成/);
+  assert.doesNotMatch(result.body.detail, /缩小选中/);
+  const failed = db.get(
+    `SELECT payload_json FROM ai_action_requests
+     WHERE action_type = 'RESUME_INLINE_REWRITE_PROPOSAL'
+       AND status = 'failed'
+       AND json_extract(payload_json, '$.instruction') = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`,
+    ['润色当前文字'],
+  );
+  const failure = JSON.parse(failed.payload_json).failure;
+  assert.strictEqual(failure.code, 'MODEL_OUTPUT_TRUNCATED');
+  assert.strictEqual(failure.finish_reason, 'length');
+  assert.strictEqual(failure.repair_count, 1);
+  assert.ok(failure.output_budget.initial >= 4096);
+  assert.ok(failure.output_budget.retry >= 8192);
 });

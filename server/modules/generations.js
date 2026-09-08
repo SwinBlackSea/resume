@@ -411,10 +411,10 @@ const routes = [
 
 /** 步骤 → 界面文案（与前端运行日志一致）。 */
 const STEP_LABELS = {
-  queued: '正在校验资料与岗位',
-  analyze_job: '正在校验资料与岗位',
+  queued: '正在读取资料与岗位',
+  analyze_job: '正在读取资料与岗位',
   compose_resume: '正在重组简历内容',
-  validate_facts: '正在检查内容是否真实',
+  validate_document: '正在检查文档结构',
   render_html: '正在排版简历',
   render_artifacts: '正在渲染 PDF 与 DOCX',
   validate_artifacts: '正在校验导出文件',

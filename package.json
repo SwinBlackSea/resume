@@ -1,8 +1,8 @@
 {
   "name": "resume-planet",
-  "version": "2.11.0",
+  "version": "2.14.1",
   "private": true,
-  "description": "简历星球 · AI Native 简历工作台（PRD v2.11.0 / TECH v2.11.0）",
+  "description": "简历星球 · AI Native 简历工作台（PRD v2.14.1 / TECH v2.14.1）",
   "type": "commonjs",
   "engines": {
     "node": ">=22.5"

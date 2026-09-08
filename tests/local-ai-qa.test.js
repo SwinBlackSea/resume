@@ -8,6 +8,7 @@ const { JSDOM } = require('jsdom');
 
 const helpers = require('./helpers');
 const ResumeDom = require('../resume-dom');
+const db = require('../server/lib/db');
 const resumeHarness = require('../server/lib/resume-harness');
 
 let ctx;
@@ -106,9 +107,9 @@ function inlineProposalClient(transform, observe) {
   return {
     provider: 'test',
     model: 'local-ai-qa-inline',
-    generate: async ({ input }) => {
+    generate: async ({ input, messages }) => {
       assert.ok(input.target, '局部 AI 请求必须锁定一个文字目标');
-      if (observe) observe(input);
+      if (observe) observe(input, messages);
       const suggestion = await transform(input);
       if (suggestion && suggestion.type === 'message') {
         return {
@@ -180,6 +181,7 @@ async function proposeInline(project, {
   targetMode = 'node',
   selection,
   expectedRevision,
+  previousActionId,
 } = {}) {
   const workspace = await helpers.call(ctx, 'GET', `/projects/${project.projectId}`);
   const response = await helpers.call(
@@ -192,6 +194,7 @@ async function proposeInline(project, {
         target_node_id: targetId,
         target_mode: targetMode,
         ...(selection ? { selection } : {}),
+        ...(previousActionId ? { previous_action_id: previousActionId } : {}),
         expected_revision: expectedRevision ?? workspace.body.draft.revision,
         conversation_id: workspace.body.conversation && workspace.body.conversation.id,
       },
@@ -579,12 +582,14 @@ test('局部建议生成后目标节点被全局 AI 删除，只报告客观不�
   }
 });
 
-test('继续调整只保留同一位置的最新局部建议，旧建议不能再误应用', async () => {
+test('继续调整以上一轮候选为直接输入，只保留同一位置的最新局部建议', async () => {
   const project = await createProject('adjust');
   let calls = 0;
+  const inputs = [];
   const restore = resumeHarness.setModelClientForTests(
-    inlineProposalClient(() => {
+    inlineProposalClient((input) => {
       calls += 1;
+      inputs.push(input);
       return calls === 1
         ? '第一版局部建议，服务120家客户。'
         : '第二版局部建议，服务120家客户。';
@@ -596,9 +601,23 @@ test('继续调整只保留同一位置的最新局部建议，旧建议不能�
     });
     const second = await proposeInline(project, {
       instruction: '继续调整为第二版，保留120家客户',
+      previousActionId: first.body.action.id,
     });
     assert.strictEqual(first.status, 200, JSON.stringify(first.body));
     assert.strictEqual(second.status, 200, JSON.stringify(second.body));
+    assert.strictEqual(
+      inputs[1].target.source_text,
+      '第一版局部建议，服务120家客户。',
+    );
+    assert.strictEqual(
+      inputs[1].request.adjustment.previous_action_id,
+      first.body.action.id,
+    );
+    assert.strictEqual(inputs[1].request.adjustment.round, 1);
+    assert.strictEqual(
+      second.body.action.payload.iteration_base_text,
+      '第一版局部建议，服务120家客户。',
+    );
 
     const oldResult = await applyInline(first.body.action);
     assert.strictEqual(oldResult.status, 409, JSON.stringify(oldResult.body));
@@ -612,6 +631,277 @@ test('继续调整只保留同一位置的最新局部建议，旧建议不能�
       '第二版局部建议，服务120家客户。',
     );
   } finally {
+    restore();
+  }
+});
+
+test('局部 AI 五轮调整按真实 user/assistant 顺序透传，不重复发送正文树', async () => {
+  const project = await createProject('five-turn-conversation');
+  let calls = 0;
+  let latestMessages = null;
+  const instructions = [
+    '先精简一些',
+    '再自然一点',
+    '突出成果',
+    '不要太夸张',
+    '还是太多了',
+  ];
+  const suggestions = instructions.map((_, index) =>
+    `第${index + 1}版建议，保留120家客户和核心成果。`);
+  const restore = resumeHarness.setModelClientForTests(
+    inlineProposalClient(
+      () => suggestions[calls++],
+      (_input, messages) => {
+        latestMessages = messages;
+      },
+    ),
+  );
+  try {
+    let previousActionId = null;
+    for (const instruction of instructions) {
+      const result = await proposeInline(project, {
+        instruction,
+        previousActionId,
+      });
+      assert.strictEqual(result.status, 200, JSON.stringify(result.body));
+      previousActionId = result.body.action.id;
+    }
+    assert.deepStrictEqual(
+      latestMessages.slice(2, -1).map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+      [
+        { role: 'user', content: instructions[0] },
+        { role: 'assistant', content: suggestions[0] },
+        { role: 'user', content: instructions[1] },
+        { role: 'assistant', content: suggestions[1] },
+        { role: 'user', content: instructions[2] },
+        { role: 'assistant', content: suggestions[2] },
+        { role: 'user', content: instructions[3] },
+        { role: 'assistant', content: suggestions[3] },
+      ],
+    );
+    const currentTurn = JSON.parse(latestMessages.at(-1).content);
+    assert.strictEqual(currentTurn.protocol, 'resume-inline-turn-v1');
+    assert.strictEqual(currentTurn.instruction, instructions[4]);
+    assert.strictEqual(currentTurn.editing_text, suggestions[3]);
+    assert.match(String(latestMessages[1].content), /负责产品规划与项目推进/);
+    assert.match(String(latestMessages[1].content), /负责跨部门协作/);
+    assert.doesNotMatch(String(latestMessages[1].content), /"children"/);
+    assert.doesNotMatch(String(latestMessages[1].content), /summary-section/);
+  } finally {
+    restore();
+  }
+});
+
+test('136字真实文本继续精简时，原样返回会自动恢复为实际变化结果', async () => {
+  const previousSuggestion = '硕士研究生，现任上海东海职业技术学院班主任/辅导员，负责174名学生的思想教育、日常管理与突发事项处理；兼任学院党支部宣传委员，具备党员发展、支部建设、宣传运营和材料撰写经验。此前拥有银行对公客户与企业风险管理经历，兼具学生工作温度、组织执行力、沟通协调力和数据分析意识。';
+  const shorterSuggestion = '硕士研究生，现任上海东海职业技术学院班主任/辅导员，负责174名学生思想教育、日常管理与突发事项处理；兼任党支部宣传委员，具备党员发展、支部建设、宣传及材料撰写经验。曾从事银行对公业务与企业风险管理，兼具组织执行、沟通协调和数据分析能力。';
+  const project = await createProject('real-compression-chain', (document, ids) => {
+    ResumeDom.findNode(document, ids.summaryId).node.text =
+      `${previousSuggestion}具备高校与金融复合背景。`;
+    return document;
+  });
+  let calls = 0;
+  let recoveryMessages = null;
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'real-compression-chain',
+    generate: async ({ input, messages }) => {
+      calls += 1;
+      const suggestion = calls === 1
+        ? previousSuggestion
+        : calls === 2
+          ? input.target.source_text
+          : shorterSuggestion;
+      if (calls === 3) recoveryMessages = messages;
+      return {
+        output: {
+          type: 'proposal',
+          content: '已继续精简当前表达。',
+          suggestion,
+          summary: '继续精简',
+        },
+      };
+    },
+  });
+  try {
+    const first = await proposeInline(project, {
+      instruction: '在保留原意的前提下整理表达',
+    });
+    assert.strictEqual(first.status, 200, JSON.stringify(first.body));
+    assert.strictEqual(Array.from(first.body.action.payload.suggestion).length, 136);
+
+    const adjusted = await proposeInline(project, {
+      instruction: '继续精简',
+      previousActionId: first.body.action.id,
+    });
+    assert.strictEqual(adjusted.status, 200, JSON.stringify(adjusted.body));
+    assert.strictEqual(calls, 3);
+    assert.strictEqual(adjusted.body.action.payload.iteration_base_text, previousSuggestion);
+    assert.ok(
+      Array.from(adjusted.body.action.payload.suggestion).length
+        < Array.from(previousSuggestion).length,
+    );
+    assert.match(
+      recoveryMessages.at(-2).content,
+      /修改结果与当前文字完全相同[\s\S]*不得再次原样返回/,
+    );
+    assert.equal(JSON.parse(recoveryMessages.at(-1).content).instruction, '继续精简');
+    assert.deepStrictEqual(
+      adjusted.body.action.payload.model.attempts.map((attempt) => ({
+        attempt: attempt.attempt,
+        suggestion_characters: attempt.suggestion_characters,
+        unchanged: attempt.unchanged,
+      })),
+      [
+        { attempt: 1, suggestion_characters: 136, unchanged: true },
+        {
+          attempt: 2,
+          suggestion_characters: Array.from(shorterSuggestion).length,
+          unchanged: false,
+        },
+      ],
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('局部继续调整暂时失败后可重试，仍以上一版候选为基础', async () => {
+  const project = await createProject('adjust-retry');
+  let first;
+  const firstRestore = resumeHarness.setModelClientForTests(
+    inlineProposalClient(() => '上一版候选，服务120家客户。'),
+  );
+  try {
+    first = await proposeInline(project, {
+      instruction: '先生成上一版，保留120家客户',
+    });
+    assert.strictEqual(first.status, 200, JSON.stringify(first.body));
+  } finally {
+    firstRestore();
+  }
+
+  const failedRestore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'adjustment-timeout',
+    generate: async () => {
+      const error = new Error('模拟继续调整超时');
+      error.code = 'MODEL_TIMEOUT';
+      throw error;
+    },
+  });
+  try {
+    const failed = await proposeInline(project, {
+      instruction: '再自然一些',
+      previousActionId: first.body.action.id,
+    });
+    assert.strictEqual(failed.status, 422, JSON.stringify(failed.body));
+    assert.strictEqual(failed.body.title, 'MODEL_UNAVAILABLE');
+    assert.strictEqual(
+      db.get(
+        'SELECT status FROM ai_action_requests WHERE id = ?',
+        [first.body.action.id],
+      ).status,
+      'awaiting_confirmation',
+      '继续调整失败后应恢复上一版，不能让一次异常淘汰可用建议',
+    );
+  } finally {
+    failedRestore();
+  }
+
+  let observedSource = null;
+  const retryRestore = resumeHarness.setModelClientForTests(
+    inlineProposalClient((input) => {
+      observedSource = input.target.source_text;
+      return '重试后的候选，服务120家客户。';
+    }),
+  );
+  try {
+    const retried = await proposeInline(project, {
+      instruction: '再自然一些',
+      previousActionId: first.body.action.id,
+    });
+    assert.strictEqual(retried.status, 200, JSON.stringify(retried.body));
+    assert.strictEqual(observedSource, '上一版候选，服务120家客户。');
+  } finally {
+    retryRestore();
+  }
+});
+
+test('较早的继续调整失败时，不会恢复上一版并覆盖较新的有效调整', async () => {
+  const project = await createProject('adjust-failure-order');
+  let first;
+  const firstRestore = resumeHarness.setModelClientForTests(
+    inlineProposalClient(() => '上一版候选，服务120家客户。'),
+  );
+  try {
+    first = await proposeInline(project, {
+      instruction: '生成上一版',
+    });
+    assert.strictEqual(first.status, 200, JSON.stringify(first.body));
+  } finally {
+    firstRestore();
+  }
+
+  let releaseOlder;
+  let markOlderStarted;
+  const olderPending = new Promise((resolve) => { releaseOlder = resolve; });
+  const olderStarted = new Promise((resolve) => { markOlderStarted = resolve; });
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'adjustment-failure-order',
+    generate: async ({ input }) => {
+      if (input.request.instruction === '较早调整') {
+        markOlderStarted();
+        await olderPending;
+        const error = new Error('较早调整稍后失败');
+        error.code = 'MODEL_TIMEOUT';
+        throw error;
+      }
+      return {
+        output: {
+          type: 'proposal',
+          content: '较新的调整已完成。',
+          suggestion: '较新的有效候选，服务120家客户。',
+          summary: '采用较新调整',
+        },
+      };
+    },
+  });
+  try {
+    const olderRequest = proposeInline(project, {
+      instruction: '较早调整',
+      previousActionId: first.body.action.id,
+    });
+    await olderStarted;
+    const newer = await proposeInline(project, {
+      instruction: '较新调整',
+      previousActionId: first.body.action.id,
+    });
+    releaseOlder();
+    const older = await olderRequest;
+
+    assert.strictEqual(newer.status, 200, JSON.stringify(newer.body));
+    assert.strictEqual(older.status, 422, JSON.stringify(older.body));
+    assert.strictEqual(
+      db.get(
+        'SELECT status FROM ai_action_requests WHERE id = ?',
+        [first.body.action.id],
+      ).status,
+      'superseded',
+    );
+    assert.strictEqual(
+      db.get(
+        'SELECT status FROM ai_action_requests WHERE id = ?',
+        [newer.body.action.id],
+      ).status,
+      'awaiting_confirmation',
+    );
+  } finally {
+    releaseOlder();
     restore();
   }
 });
@@ -698,7 +988,7 @@ test('模型暂时失败后可原地重试，失败请求不会留下可确认�
       calls += 1;
       if (calls === 1) {
         const error = new Error('模拟模型超时');
-        error.code = 'DEEPSEEK_TIMEOUT';
+        error.code = 'MODEL_TIMEOUT';
         throw error;
       }
       return {
@@ -880,6 +1170,378 @@ test('生成中切换到另一处时只展示新位置结果，迟到结果会�
   }
 });
 
+test('画布在语义节点旁显示通用 +/-，模块标题的增加操作明确区分两种结果', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const origin = ctx.base.replace('/api/v1', '');
+  const dom = new JSDOM(html, {
+    runScripts: 'dangerously',
+    resources: 'usable',
+    url: `${origin}/`,
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.sessionStorage.setItem('resumeGuideSeen', '1');
+      window.fetch = (url, options) => fetch(new URL(url, origin), options);
+      window.EventSource = class {
+        addEventListener() {}
+        close() {}
+      };
+      window.requestAnimationFrame = (callback) => setTimeout(callback, 0);
+    },
+  });
+  try {
+    await wait(1200);
+    const document = dom.window.document;
+    const semanticIndex = dom.window.ResumeDom.buildSemanticIndex(
+      dom.window.WS.draft.resume_json,
+    );
+    const titleEntry = [...semanticIndex.entries.values()].find((entry) => {
+      const capability = dom.window.ResumeDom.manualStructureCapabilities(
+        dom.window.WS.draft.resume_json,
+        entry.node_id,
+      );
+      return capability && capability.add && capability.add.length === 2;
+    });
+    const title = titleEntry
+      && document.querySelector(`[data-node-id="${titleEntry.node_id}"]`);
+    assert.ok(title);
+    const tools = document.querySelector('#node-structure-tools');
+    assert.strictEqual(tools.classList.contains('show'), false);
+    assert.strictEqual(tools.parentElement, document.body);
+    title.dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
+    await wait(10);
+    assert.strictEqual(tools.classList.contains('show'), true);
+    assert.strictEqual(tools.parentElement, document.querySelector('#resume-document'));
+    assert.strictEqual(tools.dataset.editorOnly, 'true');
+    assert.strictEqual(dom.window.getComputedStyle(tools).position, 'absolute');
+
+    document.querySelector('#node-structure-add').click();
+    const menu = document.querySelector('#node-structure-menu');
+    assert.strictEqual(menu.classList.contains('show'), true);
+    assert.deepStrictEqual(
+      [...menu.querySelectorAll('button')].map((button) => button.textContent),
+      ['增加模块内容', '新增同级模块', '取消'],
+    );
+
+    document.querySelector('#node-structure-remove').click();
+    assert.match(menu.textContent, /确认删除整个模块/);
+    await wait(280);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test('点击页面内 + 保持实际悬停的稳定节点，不因按钮坐标靠近其他标题而换目标', async () => {
+  let firstTitleId;
+  let secondTitleId;
+  const project = await createProject('visible-structure-anchor', (document, meta) => {
+    const [firstSection, secondSection] = document.root.children;
+    firstSection.semantic = { kind: 'section' };
+    secondSection.semantic = { kind: 'section' };
+    firstTitleId = `first-title-${meta.suffix}`;
+    secondTitleId = `second-title-${meta.suffix}`;
+    firstSection.children.unshift({
+      id: firstTitleId,
+      type: 'element',
+      tag: 'h2',
+      text: '职业概况',
+      editable: true,
+      semantic: { kind: 'section_title' },
+    });
+    secondSection.children.unshift({
+      id: secondTitleId,
+      type: 'element',
+      tag: 'h2',
+      text: '核心匹配优势',
+      editable: true,
+      semantic: { kind: 'section_title' },
+    });
+    return document;
+  });
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const origin = ctx.base.replace('/api/v1', '');
+  const requests = [];
+  const dom = new JSDOM(html, {
+    runScripts: 'dangerously',
+    resources: 'usable',
+    url: `${origin}/`,
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.sessionStorage.setItem('resumeGuideSeen', '1');
+      window.fetch = (url, options = {}) => {
+        const parsed = new URL(url, origin);
+        const method = String(options.method || 'GET').toUpperCase();
+        if (parsed.pathname === '/api/v1/projects' && method === 'GET') {
+          return Promise.resolve(new Response(JSON.stringify({
+            items: [{ id: project.projectId }],
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }));
+        }
+        if (
+          parsed.pathname.endsWith('/resume-draft/node-actions')
+          && method === 'POST'
+        ) {
+          requests.push(JSON.parse(options.body || '{}'));
+        }
+        return fetch(parsed, options);
+      };
+      window.EventSource = class {
+        addEventListener() {}
+        close() {}
+      };
+      window.requestAnimationFrame = (callback) => setTimeout(callback, 0);
+    },
+  });
+  try {
+    await wait(1000);
+    const document = dom.window.document;
+    const firstTitle = document.querySelector(`[data-node-id="${firstTitleId}"]`);
+    const secondTitle = document.querySelector(`[data-node-id="${secondTitleId}"]`);
+    const tools = document.querySelector('#node-structure-tools');
+    assert.ok(firstTitle);
+    assert.ok(secondTitle);
+
+    firstTitle.getBoundingClientRect = () => ({
+      top: 100, bottom: 130, left: 80, right: 500, width: 420, height: 30,
+    });
+    secondTitle.getBoundingClientRect = () => ({
+      top: 200, bottom: 230, left: 80, right: 500, width: 420, height: 30,
+    });
+    tools.getBoundingClientRect = () => ({
+      top: 98, bottom: 132, left: 508, right: 572, width: 64, height: 34,
+    });
+
+    // 模拟缩放/滚动使工具坐标靠近其他标题；真实悬停仍明确指向第二个标题。
+    secondTitle.dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
+    document.querySelector('#node-structure-add').click();
+    const addSection = [...document.querySelectorAll('#node-structure-menu button')]
+      .find((button) => button.textContent === '新增同级模块');
+    assert.ok(addSection);
+    addSection.click();
+    await wait(500);
+
+    assert.strictEqual(requests.length, 1);
+    assert.strictEqual(requests[0].node_id, secondTitleId);
+    assert.strictEqual(requests[0].action, 'add_section_after');
+  } finally {
+    dom.window.close();
+  }
+});
+
+test('新增或编辑后的聚焦节点无需刷新即可确认删除，失焦保存不会提前销毁菜单', async () => {
+  let titleId;
+  let sectionId;
+  const project = await createProject('focused-structure-delete', (document, meta) => {
+    const section = document.root.children[0];
+    sectionId = section.id;
+    section.semantic = { kind: 'section' };
+    titleId = `summary-title-${meta.suffix}`;
+    section.children.unshift({
+      id: titleId,
+      type: 'element',
+      tag: 'h2',
+      attributes: { class: 'editable' },
+      text: '职业概况',
+      editable: true,
+      label: '职业概况模块标题',
+      semantic: { kind: 'section_title' },
+    });
+    return document;
+  });
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const origin = ctx.base.replace('/api/v1', '');
+  let nodeActionRequests = 0;
+  const dom = new JSDOM(html, {
+    runScripts: 'dangerously',
+    resources: 'usable',
+    url: `${origin}/`,
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.sessionStorage.setItem('resumeGuideSeen', '1');
+      window.fetch = (url, options = {}) => {
+        const parsed = new URL(url, origin);
+        const method = String(options.method || 'GET').toUpperCase();
+        if (parsed.pathname === '/api/v1/projects' && method === 'GET') {
+          return Promise.resolve(new Response(JSON.stringify({
+            items: [{ id: project.projectId }],
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }));
+        }
+        if (
+          parsed.pathname.endsWith('/resume-draft/node-actions')
+          && method === 'POST'
+        ) {
+          nodeActionRequests += 1;
+        }
+        return fetch(parsed, options);
+      };
+      window.EventSource = class {
+        addEventListener() {}
+        close() {}
+      };
+      window.requestAnimationFrame = (callback) => setTimeout(callback, 0);
+    },
+  });
+  try {
+    await wait(1000);
+    const document = dom.window.document;
+    let title = document.querySelector(`[data-node-id="${titleId}"]`);
+    assert.ok(title);
+
+    // 先形成一次真实自动保存，使 inlineSaveChain 持有历史成功结果。
+    // 此后未修改的失焦必须只等待保存完成，不能复用该结果触发重渲染。
+    title.setAttribute('data-manual-empty', 'true');
+    title.setAttribute('data-empty-placeholder', '输入模块标题');
+    title.focus();
+    title.textContent = '职业概况（已编辑）';
+    title.dispatchEvent(new dom.window.InputEvent('input', {
+      bubbles: true,
+      inputType: 'insertText',
+      data: '（已编辑）',
+    }));
+    assert.strictEqual(title.hasAttribute('data-manual-empty'), false);
+    await wait(850);
+
+    title = document.querySelector(`[data-node-id="${titleId}"]`);
+    title.dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
+    document.querySelector('#node-structure-remove').click();
+    const menu = document.querySelector('#node-structure-menu');
+    const confirm = [...menu.querySelectorAll('button')]
+      .find((button) => /确认删除整个模块/.test(button.textContent));
+    assert.ok(confirm);
+
+    const mouseDown = new dom.window.MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+    });
+    assert.strictEqual(confirm.dispatchEvent(mouseDown), false);
+
+    // 强制模拟浏览器把焦点移到确认按钮；即使发生失焦，菜单也不得被旧保存结果清空。
+    confirm.focus();
+    await wait(30);
+    assert.strictEqual(confirm.isConnected, true);
+    assert.strictEqual(menu.classList.contains('show'), true);
+
+    confirm.click();
+    await wait(500);
+    assert.strictEqual(nodeActionRequests, 1);
+
+    const latest = await helpers.call(ctx, 'GET', `/projects/${project.projectId}`);
+    assert.strictEqual(latest.status, 200, JSON.stringify(latest.body));
+    assert.strictEqual(
+      ResumeDom.findNode(latest.body.draft.resume_json, sectionId),
+      null,
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
+test('就地改写继续调整始终以上一版为基线，失败时恢复可应用的上一版', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const origin = ctx.base.replace('/api/v1', '');
+  const requests = [];
+  const dom = new JSDOM(html, {
+    runScripts: 'dangerously',
+    resources: 'usable',
+    url: `${origin}/`,
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.sessionStorage.setItem('resumeGuideSeen', '1');
+      window.fetch = (url, options = {}) => {
+        const parsed = new URL(url, origin);
+        const method = String(options.method || 'GET').toUpperCase();
+        if (parsed.pathname.endsWith('/ai/inline-rewrites') && method === 'POST') {
+          const body = JSON.parse(options.body || '{}');
+          requests.push(body);
+          const index = requests.length;
+          if (index === 3) {
+            return Promise.resolve(new Response(JSON.stringify({
+              title: 'INLINE_REWRITE_INVALID',
+              detail: 'AI 连续两次原样返回，本次未生成修改建议',
+            }), {
+              status: 422,
+              headers: { 'content-type': 'application/problem+json' },
+            }));
+          }
+          return Promise.resolve(new Response(JSON.stringify({
+            type: 'proposal',
+            result_type: 'PROPOSAL',
+            content: index === 1 ? '第一版已准备好。' : '第二版已准备好。',
+            action: {
+              id: `adjustment-ui-${index}`,
+              status: 'awaiting_confirmation',
+              payload: {
+                target_mode: body.target_mode,
+                target_node_id: body.target_node_id,
+                base_node_text: '草稿原文',
+                iteration_base_text: index === 2 ? '第一版候选文字' : undefined,
+                suggestion: index === 1 ? '第一版候选文字' : '第二版候选文字',
+                summary: `第${index}版`,
+              },
+            },
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }));
+        }
+        if (/\/ai\/inline-rewrites\/[^/]+\/reject$/.test(parsed.pathname) && method === 'POST') {
+          return Promise.resolve(new Response(JSON.stringify({ status: 'rejected' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }));
+        }
+        return fetch(parsed, options);
+      };
+      window.EventSource = class {
+        addEventListener() {}
+        close() {}
+      };
+      window.requestAnimationFrame = (callback) => setTimeout(callback, 0);
+    },
+  });
+  try {
+    await wait(1200);
+    const document = dom.window.document;
+    document.querySelector('#target-bullet').click();
+    document.querySelector('.rewrite-action').click();
+    document.querySelector('#local-ai-input').value = '先写得更专业';
+    document.querySelector('#local-ai-generate').click();
+    await wait(40);
+    assert.strictEqual(document.querySelector('#local-ai-after').textContent, '第一版候选文字');
+
+    document.querySelector('#local-ai-adjust').click();
+    assert.strictEqual(document.querySelector('#local-ai-source').textContent, '第一版候选文字');
+    document.querySelector('#local-ai-input').value = '再自然一些';
+    document.querySelector('#local-ai-generate').click();
+    await wait(40);
+
+    assert.strictEqual(requests.length, 2);
+    assert.strictEqual(requests[1].previous_action_id, 'adjustment-ui-1');
+    assert.strictEqual(document.querySelector('#local-ai-before').textContent, '第一版候选文字');
+    assert.strictEqual(document.querySelector('#local-ai-after').textContent, '第二版候选文字');
+
+    document.querySelector('#local-ai-adjust').click();
+    document.querySelector('#local-ai-input').value = '继续精简';
+    document.querySelector('#local-ai-generate').click();
+    await wait(40);
+
+    assert.strictEqual(requests[2].previous_action_id, 'adjustment-ui-2');
+    assert.strictEqual(document.querySelector('#local-ai-preview').classList.contains('show'), true);
+    assert.strictEqual(document.querySelector('#local-ai-before').textContent, '第一版候选文字');
+    assert.strictEqual(document.querySelector('#local-ai-after').textContent, '第二版候选文字');
+    assert.notStrictEqual(document.querySelector('#local-ai-apply').style.display, 'none');
+    assert.match(document.querySelector('#local-ai-status').textContent, /上一版已保留/);
+    document.querySelector('#local-ai-close').click();
+    await wait(280);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test('生成中关闭浮层后迟到建议不会重新弹出，并会被自动取消', async () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const origin = ctx.base.replace('/api/v1', '');
@@ -1012,12 +1674,48 @@ test('就地改写界面对小白用户保持轻量：键盘可生成和关闭�
     const target = document.querySelector('#target-bullet');
     assert.ok(target, '演示简历应提供可发现的正文节点');
     target.click();
-    assert.strictEqual(document.querySelector('#selection-tools').classList.contains('show'), true);
+    const selectionTools = document.querySelector('#selection-tools');
+    assert.strictEqual(selectionTools.classList.contains('show'), true);
+    assert.strictEqual(selectionTools.getAttribute('role'), 'toolbar');
+    assert.strictEqual(selectionTools.getAttribute('aria-label'), 'AI 智能编写');
+    assert.ok(selectionTools.querySelector('.selection-ai-icon svg'));
     assert.match(document.querySelector('.rewrite-action').textContent, /就地改写/);
+    assert.strictEqual(
+      document.querySelector('#selection-ai-context'),
+      null,
+      '快捷工具条不重复展示正文摘要',
+    );
+    assert.ok(
+      !document.querySelector('.rewrite-action').textContent.includes(target.textContent.trim()),
+      '操作按钮不得混入整段选中文字',
+    );
+    document.querySelector('#resume-document').click();
+    assert.strictEqual(
+      selectionTools.classList.contains('show'),
+      false,
+      '点击简历页面空白处应关闭快捷工具条',
+    );
+    target.click();
+    assert.strictEqual(selectionTools.classList.contains('show'), true);
+
+    document.querySelector('[data-local-intent="简洁"]').click();
+    let popover = document.querySelector('#local-ai-popover');
+    let input = document.querySelector('#local-ai-input');
+    assert.strictEqual(popover.classList.contains('show'), true);
+    assert.match(input.value, /更简洁/);
+    await wait(80);
+    assert.strictEqual(inlineCalls, 0, '快捷意图只应预填要求，不应直接生成');
+    document.querySelector('#local-ai-presets button').click();
+    assert.strictEqual(input.value, '写得更简洁有力');
+    await wait(80);
+    assert.strictEqual(inlineCalls, 0, '浮层预设也只应预填要求，不应直接生成');
+    document.querySelector('#local-ai-close').click();
+
+    target.click();
     document.querySelector('.rewrite-action').click();
 
-    const popover = document.querySelector('#local-ai-popover');
-    const input = document.querySelector('#local-ai-input');
+    popover = document.querySelector('#local-ai-popover');
+    input = document.querySelector('#local-ai-input');
     assert.strictEqual(popover.classList.contains('show'), true);
     assert.strictEqual(popover.getAttribute('role'), 'dialog');
     assert.strictEqual(document.querySelector('#local-ai-status').getAttribute('role'), 'status');
@@ -1025,6 +1723,9 @@ test('就地改写界面对小白用户保持轻量：键盘可生成和关闭�
       document.querySelector('#local-ai-status').getAttribute('aria-live'),
       'polite',
     );
+    assert.ok(document.querySelector('.local-ai-glyph svg'));
+    assert.strictEqual(document.querySelector('#local-ai-title').textContent, 'AI 智能编写');
+    assert.match(document.querySelector('#local-ai-source-meta').textContent, /\d+ 字/);
     assert.match(document.querySelector('#local-ai-scope').textContent, /只修改当前这处文字/);
     assert.strictEqual(document.querySelector('#assistant-panel').classList.contains('open'), false);
 

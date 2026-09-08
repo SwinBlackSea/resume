@@ -7,7 +7,7 @@
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
-const { nowIso } = require('./util');
+const { nowIso, uuidv7 } = require('./util');
 const {
   archivedPayload,
   compactLegacyEvent,
@@ -220,7 +220,7 @@ function compactResumeChangeEvents(database) {
   const rows = database
     .prepare(
       `SELECT id, change_type, scope_type, scope_id, before_json, after_json,
-              snapshot_version_id, reverted_at, created_at
+              snapshot_version_id, reverted_at, undo_expired_at, redo_invalidated_at, created_at
        FROM resume_change_events`,
     )
     .all();
@@ -249,7 +249,7 @@ function compactResumeChangeEvents(database) {
       if (isArchivedPayload(beforePayload) || isArchivedPayload(afterPayload)) return;
 
       const createdAt = Date.parse(row.created_at || '');
-      const canArchive = Boolean(row.snapshot_version_id || row.reverted_at)
+      const canArchive = Boolean(row.snapshot_version_id || row.undo_expired_at || row.redo_invalidated_at)
         && Number.isFinite(createdAt)
         && createdAt < cutoff;
       if (canArchive) {
@@ -307,13 +307,9 @@ function reconcileAiTaskLifecycle(database) {
     'UPDATE ai_tasks SET state_json = ?, status = ?, updated_at = ? WHERE id = ?',
   );
   tasks.forEach((task) => {
-    if (task.active_proposal_id) {
-      update.run(task.state_json || '{}', 'waiting_apply', nowIso(), task.id);
-      return;
-    }
     const messages = database
       .prepare(
-        `SELECT task_id, role, model_metadata_json
+        `SELECT id, task_id, role, model_metadata_json
          FROM ai_messages
          WHERE conversation_id = ?
          ORDER BY created_at ASC, id ASC`,
@@ -346,7 +342,9 @@ function reconcileAiTaskLifecycle(database) {
         && metadata.awaiting_user === true
       ) || metadata.result_type === 'CLARIFICATION_REQUIRED'
         || metadata.result_type === 'PLAN_CONFIRMATION_REQUIRED';
-      const recoveredStatus = clarifying ? 'clarifying' : 'completed';
+      const recoveredStatus = clarifying ? 'clarifying'
+        : task.active_proposal_id ? 'waiting_apply'
+          : metadata.result_type === 'ERROR' ? 'failed' : 'conversing';
       update.run(
         JSON.stringify({
           ...state,
@@ -358,6 +356,23 @@ function reconcileAiTaskLifecycle(database) {
       );
       return;
     }
+    const interruptedAt = nowIso();
+    if (last && last.role === 'user') {
+      database.prepare(
+        `INSERT INTO ai_messages
+         (id, conversation_id, task_id, owner_id, role, content, scope_type, scope_id,
+          model_metadata_json, created_at)
+         VALUES (?, ?, ?, ?, 'assistant', ?, ?, ?, ?, ?)`,
+      ).run(
+        uuidv7(), task.conversation_id, task.id, task.owner_id,
+        '上次生成因服务重启而中断，正文未变。本轮要求已保留，可直接重试。',
+        task.scope_type, task.scope_id,
+        JSON.stringify({
+          task_id: task.id, result_type: 'ERROR', error_code: 'REQUEST_INTERRUPTED',
+          request_message_id: last.id,
+        }), interruptedAt,
+      );
+    }
     update.run(
       JSON.stringify({
         ...state,
@@ -368,7 +383,7 @@ function reconcileAiTaskLifecycle(database) {
           at: nowIso(),
         },
       }),
-      'failed',
+      task.active_proposal_id ? 'waiting_apply' : 'failed',
       nowIso(),
       task.id,
     );
@@ -414,6 +429,18 @@ function ensureResumeChangeHistorySchema(database) {
         ORDER BY draft_revision DESC, id DESC
         LIMIT -1 OFFSET 5
       );
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_resume_change_payload_retention
+    AFTER UPDATE OF undo_expired_at, redo_invalidated_at, snapshot_version_id ON resume_change_events
+    WHEN NEW.undo_expired_at IS NOT NULL OR NEW.redo_invalidated_at IS NOT NULL
+      OR NEW.snapshot_version_id IS NOT NULL
+    BEGIN
+      UPDATE resume_change_events
+      SET before_json = json_object('format', 'archived-change-v1',
+            'label', COALESCE(json_extract(NEW.before_json, '$.label'), '')),
+          after_json = json_object('format', 'archived-change-v1',
+            'label', COALESCE(json_extract(NEW.after_json, '$.label'), json_extract(NEW.before_json, '$.label'), ''))
+      WHERE id = NEW.id;
     END;
   `);
   database.exec(`
@@ -493,6 +520,9 @@ function getDb() {
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(fs.readFileSync(SCHEMA_PATH, 'utf8'));
   ensureResumeChangeHistorySchema(db);
+  if (!db.prepare('PRAGMA table_info(uploads)').all().some((column) => column.name === 'chat_conversation_id')) {
+    db.exec('ALTER TABLE uploads ADD COLUMN chat_conversation_id TEXT');
+  }
   // 兼容升级前已存在的本地数据库；正式环境由同名迁移补齐该列。
   const conversationColumns = db.prepare('PRAGMA table_info(ai_conversations)').all();
   if (!conversationColumns.some((column) => column.name === 'status')) {
@@ -596,6 +626,7 @@ function getDb() {
   migrateCurrentResumeDocuments(db);
   reconcileAiTaskLifecycle(db);
   compactResumeChangeEvents(db);
+  require('./ai-storage').compactStorage(db);
   return db;
 }
 
@@ -680,6 +711,7 @@ module.exports = {
   nextSequence,
   compactResumeChangeEvents,
   migrateCurrentResumeDocuments,
+  reconcileAiTaskLifecycle,
   reset,
   DB_PATH,
 };

@@ -194,6 +194,7 @@ test('预览文字修正后，单次确认应用完整可编辑简历', async ()
   assert.strictEqual(calls.apply.mode, undefined);
   assert.strictEqual(calls.apply.expected_draft_revision, workspace.draft.revision);
   await waitFor(() => !document.querySelector('#document-import-modal').classList.contains('show'));
+  await waitFor(() => document.querySelector('#toast').textContent.includes('已导入当前简历并保存历史版本'));
   dom.window.close();
 });
 
@@ -212,13 +213,19 @@ test('现有文字可直接修改并自动提交，不提供 Word 编辑模式',
   target.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 
   await waitFor(() => calls.transaction, 5000);
-  await waitFor(() => document.querySelector('#undo-bar').classList.contains('show'));
   assert.strictEqual(calls.transaction.expected_revision, workspace.draft.revision);
   assert.strictEqual(calls.transaction.operations[0].op, 'replace_text');
   assert.strictEqual(calls.transaction.operations[0].text, '用户直接修改后的文字');
   assert.strictEqual(calls.transaction.input_type, 'typing');
-  assert.ok(document.querySelector('#undo-bar').classList.contains('show'));
-  assert.match(document.querySelector('#inline-edit-hint').textContent, /已自动保存/);
+  assert.strictEqual(
+    document.querySelector('#undo-bar').classList.contains('show'),
+    false,
+    '直接改字后不再显示重复的黑色撤销提示条',
+  );
+  assert.strictEqual(document.querySelector('#undo-step').disabled, false);
+  assert.doesNotMatch(document.querySelector('#undo-step').title, /直接修改正文内容/);
+  assert.match(document.querySelector('#inline-edit-status').textContent, /已自动保存/);
+  assert.strictEqual(document.querySelector('#doc-toolbar').dataset.saveState, 'saved');
   assert.strictEqual(
     document.querySelector('#document-import-review-stage').classList.contains('active'),
     false,

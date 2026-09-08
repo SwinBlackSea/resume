@@ -3,7 +3,7 @@
  * 模型动作的可执行性预检。
  *
  * 这里验证的是通用动作协议，而不是某个简历模块或某种用户话术。
- * 最终写入仍由领域服务再次校验权限、revision、内容真实性与幂等。
+ * 最终写入仍由领域服务再次校验权限、revision、结构可执行性与幂等。
  */
 const ResumeDom = require('../../../resume-dom');
 const { hashJson } = require('../util');
@@ -12,8 +12,7 @@ const {
   normalizeChangeConstraints,
   evaluateChange,
 } = require('../resume-change-policy');
-const { materializeTargetFragments } = require('./target-fragments');
-const { flowConfirmationErrors } = require('./flow-policy');
+const { materializeTargetFragments, materializeTargetDocument } = require('./target-fragments');
 
 const ACTION_TYPES = new Set([
   'PROFILE_SAVE_PROPOSAL',
@@ -27,7 +26,7 @@ function proposalOf(action) {
     || {};
 }
 
-function validateResumeRewrite(action, input, index) {
+function validateResumeRewrite(action, input, index, diagnostics) {
   const errors = [];
   const proposal = proposalOf(action);
   const scopeType = input && input.scope && input.scope.type;
@@ -42,19 +41,24 @@ function validateResumeRewrite(action, input, index) {
     || proposal.resume_json;
   if (proposal.target_resume_fragments) {
     try {
+      const resume = input?.workspace?.resume;
+      const fragments = proposal.target_resume_fragments;
+      if (resume?.proposal_content && Array.isArray(fragments.changes)) {
+        // An already-deleted B node is an idempotent deletion only if its ID is
+        // known in this task's A/C. Unknown IDs and missing replacements fail.
+        fragments.changes = fragments.changes.filter((change) => !(
+          change.replacement_subtree === null
+          && !ResumeDom.findNode(resume.proposal_content, change.target_id)
+          && [resume.content, resume.task_base_content].some((reference) =>
+            reference && ResumeDom.findNode(reference, change.target_id))
+        ));
+      }
       const materialized = materializeTargetFragments(
         input && input.workspace && input.workspace.resume
           ? input.workspace.resume.proposal_content || input.workspace.resume.content
           : {},
         proposal.target_resume_fragments,
       );
-      proposal.target_resume_fragments = {
-        format: materialized.format,
-        changes: materialized.changes,
-        ...(materialized.insertions.length
-          ? { insertions: materialized.insertions }
-          : {}),
-      };
       if (
         targetDocument
         && typeof targetDocument === 'object'
@@ -70,6 +74,17 @@ function validateResumeRewrite(action, input, index) {
       proposal.target_resume_document = materialized.document;
       targetDocument = materialized.document;
     } catch (error) {
+      diagnostics.push({
+        action_index: index,
+        code: error.code || 'TARGET_FRAGMENTS_INVALID',
+        ...Object.fromEntries(
+          ['target_id', 'ancestor_target_id', 'parent_id', 'after_id',
+            'change_index', 'insertion_index', 'changed_child_ids',
+            'removed_child_ids', 'added_child_ids']
+            .filter((key) => error[key] !== undefined)
+            .map((key) => [key, error[key]]),
+        ),
+      });
       errors.push(`actions[${index}] 的目标子树无效：${error.message}`);
       return errors;
     }
@@ -93,10 +108,9 @@ function validateResumeRewrite(action, input, index) {
     let nextResume;
     let simpleFocusedTextRewrite = false;
     if (targetDocument && typeof targetDocument === 'object') {
-      nextResume = ResumeDom.toResumeDocument(
-        targetDocument,
-        { allowLegacyAiScope: false },
-      );
+      nextResume = proposal.target_resume_fragments
+        ? ResumeDom.toResumeDocument(targetDocument, { allowLegacyAiScope: false })
+        : materializeTargetDocument(currentResume, targetDocument);
       if (operations.length) {
         const compiled = compileResumeOperations(currentResume, operations);
         if (hashJson(compiled.document) !== hashJson(nextResume)) {
@@ -151,7 +165,7 @@ function validateResumeRewrite(action, input, index) {
   return errors;
 }
 
-function validateExecutableResponse(response, input) {
+function validateExecutableResponse(response, input, diagnostics = []) {
   const errors = [];
   const actions = Array.isArray(response && response.actions) ? response.actions : [];
   const resultType = String(response && response.result_type || '');
@@ -178,7 +192,7 @@ function validateExecutableResponse(response, input) {
       return;
     }
     if (action.type === 'RESUME_REWRITE_PROPOSAL') {
-      errors.push(...validateResumeRewrite(action, input, index));
+      errors.push(...validateResumeRewrite(action, input, index, diagnostics));
       return;
     }
     if (action.type === 'PROFILE_SAVE_PROPOSAL') {
@@ -201,7 +215,6 @@ function validateExecutableResponse(response, input) {
       }
     }
   });
-  if (!errors.length) errors.push(...flowConfirmationErrors(response, input));
   return errors;
 }
 

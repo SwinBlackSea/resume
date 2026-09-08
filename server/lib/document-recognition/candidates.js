@@ -574,7 +574,9 @@ function buildPositionedDomDocument(pages, semanticValue = {}) {
           position: 'absolute',
           left: percent(bbox.x, width),
           top: percent(bbox.y, height),
-          width: percent(Math.max(Number(bbox.width || 0), width - Number(bbox.x || 0)), width),
+          // Use the text's own box. Extending every line to the page edge makes
+          // a left column cover same-baseline dates/contact fields on the right.
+          width: percent(Math.max(1, Number(bbox.width) || width - Number(bbox.x || 0)), width),
           margin: '0',
           'font-size': `${Number(Math.max(7, Number(bbox.height || 10) * 0.82).toFixed(2))}px`,
           'line-height': '1.12',
@@ -1067,18 +1069,16 @@ function buildContentCandidate({
   pageScene,
 }) {
   const ordered = orderedBlocks(blocks, semantic);
-  if (pageScene && pageScene.has_text_layer && Array.isArray(pageScene.pages)) {
-    const domDocument = buildPageSceneDomDocument(pageScene, ordered, semantic);
+  // DOCX 已经提供确定性的段落、表格、run 字号/粗细/颜色和分页结构。
+  // 由 DOCX 转出的 PDF text layer 只用于几何校准，不能反过来覆盖原生样式：
+  // 某些 PDF 字体会把粗体子集报告为 Regular，造成标题等内容静默丢失粗体。
+  if (nativeDocument && Array.isArray(nativeDocument.pages)) {
+    const domDocument = buildNativeDomDocument(nativeDocument, geometryPages, semantic);
     return {
       format,
       plain_text: ordered.map((block) => block.text).join('\n'),
       blocks: ordered,
-      structure: nativeDocument || null,
-      page_scene: {
-        version: pageScene.version,
-        render_dpi: pageScene.render_dpi,
-        text_node_count: pageScene.text_node_count,
-      },
+      structure: nativeDocument,
       resume_json: {
         basics: {},
         headline: '',
@@ -1094,13 +1094,18 @@ function buildContentCandidate({
       },
     };
   }
-  if (nativeDocument && Array.isArray(nativeDocument.pages)) {
-    const domDocument = buildNativeDomDocument(nativeDocument, geometryPages, semantic);
+  if (pageScene && pageScene.has_text_layer && Array.isArray(pageScene.pages)) {
+    const domDocument = buildPageSceneDomDocument(pageScene, ordered, semantic);
     return {
       format,
       plain_text: ordered.map((block) => block.text).join('\n'),
       blocks: ordered,
-      structure: nativeDocument,
+      structure: nativeDocument || null,
+      page_scene: {
+        version: pageScene.version,
+        render_dpi: pageScene.render_dpi,
+        text_node_count: pageScene.text_node_count,
+      },
       resume_json: {
         basics: {},
         headline: '',
@@ -1259,6 +1264,11 @@ function buildContentCandidate({
 
 function buildLayoutCandidate({ pages, semantic, format, nativeDocument, pageScene }) {
   const firstPage = pages[0] || { width: 595.28, height: 841.89 };
+  const usePageScene = Boolean(
+    pageScene
+    && pageScene.has_text_layer
+    && !nativeDocument,
+  );
   const nativeSection = nativeDocument && nativeDocument.section;
   const nativeWidth = nativeSection ? Number(nativeSection.width || 11906) / 20 : null;
   const nativeHeight = nativeSection ? Number(nativeSection.height || 16838) / 20 : null;
@@ -1318,10 +1328,10 @@ function buildLayoutCandidate({ pages, semantic, format, nativeDocument, pageSce
         title_style: { rule: true, size: 12, color: '#1d1d1f' },
       },
       constraints: { keep_with_next: true },
-      assets: pageScene && pageScene.has_text_layer
+      assets: usePageScene
         ? { scene_background_artifact_ids: [] }
         : {},
-      layout: pageScene && pageScene.has_text_layer
+      layout: usePageScene
         ? 'imported-scene'
         : (nativeDocument
         ? 'imported-native'
@@ -1329,10 +1339,10 @@ function buildLayoutCandidate({ pages, semantic, format, nativeDocument, pageSce
           ? 'imported-positioned'
           : (columns === 2 ? 'imported-two-column' : 'imported-single-column'))),
       imported: true,
-      fidelity: pageScene && pageScene.has_text_layer
+      fidelity: usePageScene
         ? 'rendered-page-scene'
         : (nativeDocument ? 'native-structure' : 'positioned-text'),
-      page_scene_version: pageScene && pageScene.has_text_layer ? pageScene.version : null,
+      page_scene_version: usePageScene ? pageScene.version : null,
       visual_style: semantic.layout.visual_style || '',
     },
     pages: pages.map((page) => ({

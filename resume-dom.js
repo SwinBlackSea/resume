@@ -10,7 +10,8 @@
   const AGGREGATE_VERSION = 'resume-aggregate-v2';
   const TEMPLATE_DOCUMENT_VERSION = 'template-document-v1';
   const BINDINGS_VERSION = 'layout-bindings-v1';
-  const AI_CONTEXT_VERSION = 'resume-ai-context-v1';
+  const AI_CONTEXT_VERSION = 'resume-ai-context-v2';
+  const AI_PRESENTATION_CONTEXT_VERSION = 'resume-ai-context-v3';
   const MAX_DEPTH = 40;
   const MAX_NODES = 5000;
   const SEMANTIC_KINDS = new Set([
@@ -954,6 +955,42 @@
       : clone(fallback);
   }
 
+  // 页面尺寸统一换算为pt，供画布与HTML/PDF/DOCX使用；数字沿用文档声明单位。
+  function pageLengthPt(value, unit = 'pt') {
+    const match = String(value == null ? '' : value).trim()
+      .match(/^(\d+(?:\.\d+)?|\.\d+)\s*(pt|px|mm|cm|in)?$/i);
+    if (!match) return null;
+    const factors = { pt: 1, px: 0.75, mm: 72 / 25.4, cm: 72 / 2.54, in: 72 };
+    const factor = factors[String(match[2] || unit).toLowerCase()];
+    return factor ? Number(match[1]) * factor : null;
+  }
+
+  function resolvePageLayout(documentValue, fallback = {}) {
+    const source = documentValue && (documentValue.resume_document || documentValue) || {};
+    const page = source.page_setup || {};
+    const sizes = {
+      A3: [841.89, 1190.55], A4: [595.28, 841.89], A5: [419.53, 595.28],
+      LETTER: [612, 792], LEGAL: [612, 1008],
+    };
+    const size = sizes[String(page.size || fallback.size || 'A4').toUpperCase()] || sizes.A4;
+    let width = pageLengthPt(page.width, page.unit) || size[0];
+    let height = pageLengthPt(page.height, page.unit) || size[1];
+    const landscape = (page.orientation || fallback.orientation) === 'landscape';
+    if ((landscape && width < height) || (!landscape && width > height)) {
+      [width, height] = [height, width];
+    }
+    const margins = {};
+    const explicitMargins = {};
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      const declared = pageLengthPt((page.margins || page.margin || {})[side], page.unit);
+      if (declared !== null) explicitMargins[side] = declared;
+      margins[side] = declared === null
+        ? (pageLengthPt((fallback.margins || {})[side], fallback.unit) ?? 18 * 72 / 25.4)
+        : declared;
+    }
+    return { width, height, margins, explicitMargins, landscape };
+  }
+
   /**
    * 当前唯一持久化模型。旧字段只参与读取，输出不再包含模板、槽位绑定或 legacy 正文字段。
    */
@@ -1309,6 +1346,10 @@
         const text = String(operation.text == null ? '' : operation.text)
           .replace(/\r\n?/g, '\n');
         replaceNodeTextPreservingStructure(found.node, text, targetId);
+        if (text && found.node.attributes) {
+          delete found.node.attributes['data-manual-empty'];
+          delete found.node.attributes['data-empty-placeholder'];
+        }
         document = normalizeDocument(found.document);
         return;
       }
@@ -1959,28 +2000,46 @@
 
   /**
    * 给模型使用的只读语义投影。完整 ResumeDocument 仍是唯一事实对象；
-   * 此投影只在单次请求内生成，省略坐标、CSS、背景和资源，保留稳定 ID、
-   * 语义父子关系、编辑边界和全部可见文字。
+   * 此投影只在单次请求内生成。v2用于轻量估算；v3保留展示字段，
+   * 只省略资源字节和编辑器临时属性，不压缩或改写正文。
    */
-  function toAiContextDocument(documentValue) {
+  function toAiContextDocument(documentValue, options = {}) {
     const source = documentValue
       && documentValue.root
       && documentValue.schema_version !== RESUME_DOCUMENT_VERSION
       ? { dom_document: documentValue }
       : documentValue;
     const document = toResumeDocument(source);
-    let nodeCount = 0;
-    let textChars = 0;
+    const withPresentation = options.includePresentation === true;
 
     function compactNode(node) {
       if (!node || isEditorOnly(node)) return null;
+      // 全局协议沿用真实文档字段，避免把推导的kind/level回写成结构变化。
+      if (withPresentation) {
+        if (node.type === 'text') {
+          return { id: node.id, type: 'text', value: String(node.value || '') };
+        }
+        const result = { id: node.id, type: 'element', tag: node.tag };
+        for (const key of ['text', 'semantic', 'editable', 'label', 'format']) {
+          if (node[key] !== undefined) result[key] = clone(node[key]);
+        }
+        if (Object.keys(node.style || {}).length) result.style = clone(node.style);
+        const attributes = Object.fromEntries(
+          Object.entries(node.attributes || {}).filter(([name, value]) =>
+            !/^data-(?:editor|manual|empty|ai-scope|resume-editable)/.test(name)
+            && !/^\s*(?:data:|blob:)/i.test(String(value))),
+        );
+        if (Object.keys(attributes).length) result.attributes = attributes;
+        if ((node.children || []).length) {
+          result.children = node.children.map(compactNode).filter(Boolean);
+        }
+        return result;
+      }
       const kind = semanticKind(node);
-      if (kind === 'decoration') return null;
+      if (kind === 'decoration' && !withPresentation) return null;
       if (node.type === 'text') {
         const text = String(node.value || '');
         if (!text) return null;
-        nodeCount += 1;
-        textChars += text.length;
         return { id: node.id, kind: 'inline', text };
       }
 
@@ -1994,46 +2053,60 @@
       const result = {
         id: node.id,
         kind,
-        tag: node.tag,
       };
+      const heading = /^h([1-6])$/.exec(String(node.tag || ''));
+      const tagCarriesMeaning = [
+        'inline',
+        'list',
+        'table_cell',
+        'figure',
+        'separator',
+        'unknown',
+      ].includes(kind);
+      if (tagCarriesMeaning && node.tag) result.tag = node.tag;
       if (semantic.subtype) result.subtype = semantic.subtype;
       if (semantic.group_id) result.group_id = semantic.group_id;
       if (semantic.level) result.level = semantic.level;
+      else if (heading) result.level = Number(heading[1]);
       if (semantic.continuation) result.continuation = true;
       if (node.editable) result.editable = true;
-      if (node.label) result.label = node.label;
+      if (node.label && (!node.editable || node.text === undefined)) {
+        result.label = node.label;
+      }
 
-      if (presentationOnly) {
+      if (presentationOnly && !withPresentation) {
         const text = exportNodeText(node);
         if (text) {
           result.text = text;
-          textChars += text.length;
         }
       } else {
         if (node.text !== undefined) {
           result.text = String(node.text || '');
-          textChars += result.text.length;
         }
         const children = visibleChildren.map(compactNode).filter(Boolean);
         if (children.length) result.children = children;
       }
-      nodeCount += 1;
       return result;
     }
 
     return {
-      schema_version: AI_CONTEXT_VERSION,
-      source_schema_version: RESUME_DOCUMENT_VERSION,
+      schema_version: withPresentation ? AI_PRESENTATION_CONTEXT_VERSION : AI_CONTEXT_VERSION,
       root: compactNode(document.root),
-      page_setup: {
+      page_setup: withPresentation ? clone(document.page_setup) : {
         size: document.page_setup && document.page_setup.size || 'A4',
         orientation: document.page_setup && document.page_setup.orientation || 'portrait',
         max_pages: document.page_setup && document.page_setup.max_pages || null,
       },
-      stats: {
-        node_count: nodeCount,
-        text_chars: textChars,
-      },
+      ...(withPresentation ? {
+        styles: clone(document.styles),
+        annotations: clone(document.annotations),
+        // 只提供资源描述；图片/字体字节仍由完整文档持有。
+        assets: (document.assets || []).map((asset) => Object.fromEntries(
+          ['id', 'type', 'mime_type', 'name', 'label', 'description', 'width', 'height']
+            .filter((key) => asset[key] !== undefined)
+            .map((key) => [key, clone(asset[key])]),
+        )),
+      } : {}),
     };
   }
 
@@ -2063,6 +2136,196 @@
         visit(child, String(node.id), childIndex, depth + 1));
     })(document.root, null, 0, 0);
     return { document, entries };
+  }
+
+  const MANUAL_REPEATABLE_KINDS = new Set([
+    'section',
+    'paragraph',
+    'list_item',
+    'entry',
+    'group',
+    'table',
+    'table_row',
+    'table_cell',
+    'list',
+  ]);
+
+  function nearestSemanticAncestor(found, kinds) {
+    const accepted = kinds instanceof Set ? kinds : new Set(kinds || []);
+    return found.ancestors
+      .slice()
+      .reverse()
+      .find((ancestor) => accepted.has(semanticKind(ancestor))) || null;
+  }
+
+  function fixedSceneInfo(found) {
+    const chain = found.ancestors.concat(found.node);
+    const page = chain.find((node) => rawHasClass(node, 'imported-scene-page'));
+    const fixed = Boolean(
+      page || chain.some((node) => rawHasClass(node, 'imported-scene-resume')
+        || rawHasClass(node, 'imported-positioned-resume')
+        || rawHasClass(node, 'imported-positioned-page')
+        || (node.style && ['absolute', 'fixed'].includes(node.style.position))),
+    );
+    return {
+      fixed,
+      backgroundContainsText: Boolean(
+        page
+        && String(page.attributes && page.attributes['data-background-contains-text'] || '')
+          === 'true',
+      ),
+    };
+  }
+
+  // A paragraph may only be the editable anchor inside a repeated visual unit.
+  // Do not mistake its formatting/content wrapper for the unit being duplicated.
+  function manualRepeatUnit(found) {
+    if (['list_item', 'entry', 'section', 'table_row', 'table', 'list'].includes(semanticKind(found.node))) return found.node;
+    let wrapper = null;
+    for (const ancestor of found.ancestors.slice().reverse()) {
+      const kind = semanticKind(ancestor);
+      if (['section', 'page', 'document', 'header'].includes(kind)) break;
+      if (['list_item', 'entry', 'table_row'].includes(kind)) return ancestor;
+      if (!wrapper && kind === 'group' && !['tbody', 'thead', 'tfoot'].includes(ancestor.tag)) wrapper = ancestor;
+    }
+    return wrapper || found.node;
+  }
+
+  // A merged cell can connect several rows. Copy/delete the closed row group,
+  // never leave rowspan pointing into a different row or split a merged cell.
+  function manualRowGroup(document, row) {
+    const found = findNode(document, row.id);
+    const rows = found && found.parent && found.parent.children || [];
+    let first = rows.findIndex((item) => item.id === row.id);
+    let last = first;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      rows.forEach((item, index) => {
+        if (semanticKind(item) !== 'table_row') return;
+        const end = Math.min(rows.length - 1, Math.max(index, ...(item.children || []).map((cell) => {
+          const span = Number((cell.attributes && cell.attributes.rowspan) ?? 1);
+          return span === 0 ? rows.length - 1 : index + Math.max(1, span || 1) - 1;
+        })));
+        if (index <= last && end >= first && (index < first || end > last)) {
+          first = Math.min(first, index); last = Math.max(last, end); changed = true;
+        }
+      });
+    }
+    return rows.slice(first, last + 1).filter((item) => semanticKind(item) === 'table_row');
+  }
+
+  /**
+   * 画布 +/- 只暴露语义上确定、可逆的结构动作。
+   *
+   * 标题的 “+” 有两种不同结果，因此显式返回两个选项；正文节点的 “+”
+   * 始终表示在下方增加同级内容。固定坐标 PDF 的新增会造成版面重叠；
+   * 页面底图带原文字时，删除覆盖文字也不能让原内容真正消失。
+   */
+  function manualStructureCapabilities(documentValue, nodeId) {
+    const document = toResumeDocument(documentValue);
+    const found = findNode(document, String(nodeId || ''));
+    if (!found || found.node.type !== 'element' || found.node.editable !== true) return null;
+    const kind = semanticKind(found.node);
+    const header = nearestSemanticAncestor(found, ['header']);
+    if (header || ['document_title', 'inline', 'layout_line', 'decoration'].includes(kind)) {
+      return null;
+    }
+    const fixedScene = fixedSceneInfo(found);
+    const fixedLayout = fixedScene.fixed;
+    if (kind === 'section_title') {
+      const section = nearestSemanticAncestor(found, ['section']);
+      if (!section) return null;
+      return {
+        node_id: found.node.id,
+        kind,
+        fixed_layout: fixedLayout,
+        add: [{
+          action: 'add_section_content',
+          label: '增加模块内容',
+          enabled: !fixedLayout,
+        }, {
+          action: 'add_section_after',
+          label: '新增同级模块',
+          enabled: !fixedLayout,
+        }],
+        remove: {
+          action: 'remove',
+          label: '删除整个模块',
+          target_id: section.id,
+          enabled: !fixedScene.backgroundContainsText,
+        },
+      };
+    }
+    if (!MANUAL_REPEATABLE_KINDS.has(kind)) return null;
+    const unit = manualRepeatUnit(found);
+    const unitFound = findNode(document, unit.id);
+    const unitKind = semanticKind(unit);
+    const targets = unitKind === 'table_row' ? manualRowGroup(document, unit) : [unit];
+    const targetIds = targets.map((node) => node.id);
+    let removeTargetId = unit.id;
+    let removeTargetIds = targetIds;
+    if (unitKind === 'list_item' && unitFound.parent && semanticKind(unitFound.parent) === 'list') {
+      const visibleItems = (unitFound.parent.children || [])
+        .filter((child) => semanticKind(child) === 'list_item');
+      if (visibleItems.length === 1) {
+        removeTargetId = unitFound.parent.id;
+        removeTargetIds = [removeTargetId];
+      }
+    }
+    let removeWholeTable = false;
+    if (unitKind === 'table_row') {
+      const table = nearestSemanticAncestor(unitFound, ['table']);
+      const allRows = [];
+      (function collect(node) {
+        if (!node || (node !== table && semanticKind(node) === 'table')) return;
+        if (semanticKind(node) === 'table_row') { allRows.push(node.id); return; }
+        (node.children || []).forEach(collect);
+      })(table);
+      if (table && allRows.length && allRows.every((id) => targetIds.includes(id))) {
+        removeTargetId = table.id; removeTargetIds = [table.id]; removeWholeTable = true;
+      }
+    }
+    const insideUnit = unit.id !== found.node.id;
+    const unitLabel = unitKind === 'table_row'
+      ? (targets.length > 1 ? `整组${targets.length}行（含合并单元格）` : '整行')
+      : (unitKind === 'list_item' ? '整条内容' : '整组内容');
+    const addLabel = unitKind === 'table_row' ? '在下方增加'+unitLabel
+      : insideUnit ? '增加'+unitLabel
+        : kind === 'section' ? '新增同级模块'
+          : kind === 'list_item' ? '增加一条内容' : '增加同级内容';
+    const remove = {
+      action: 'remove',
+      label: removeWholeTable ? '删除整个表格' : insideUnit ? '删除'+unitLabel
+        : kind === 'section' ? '删除整个模块'
+          : kind === 'list_item' ? '删除这条内容' : '删除这段内容',
+      target_id: removeTargetId,
+      target_ids: removeTargetIds,
+      enabled: !fixedScene.backgroundContainsText,
+    };
+    return {
+      node_id: found.node.id,
+      target_id: unit.id,
+      target_ids: targetIds,
+      kind,
+      fixed_layout: fixedLayout,
+      add: [{
+        action: 'add_sibling',
+        label: addLabel,
+        enabled: !fixedLayout,
+      }, ...(insideUnit ? [{
+        action: 'add_content_sibling',
+        label: unitKind === 'table_row' ? '仅增加单元格内段落' : '仅增加内部段落',
+        enabled: !fixedLayout,
+      }] : [])],
+      remove,
+      remove_choices: [remove, ...(insideUnit ? [{
+        action: 'remove_content',
+        label: unitKind === 'table_row' ? '仅删除单元格内这段文字' : '仅删除内部这段文字',
+        target_id: found.node.id,
+        enabled: !fixedScene.backgroundContainsText,
+      }] : [])],
+    };
   }
 
   function escapeHtml(text) {
@@ -2119,6 +2382,8 @@
       this.rootElement = rootElement;
       this.options = options || {};
       this.document = null;
+      this.rootStyleProperties = [];
+      this.rootDocumentClasses = [];
     }
 
     createNode(node) {
@@ -2150,6 +2415,30 @@
 
     render(documentValue) {
       this.document = normalizeDocument(documentValue);
+      // 根节点也属于完整文档：不能只渲染children而忽略整份简历的样式。
+      this.rootStyleProperties.forEach((name) => this.rootElement.style.removeProperty(name));
+      const hasPages = this.document.root.children.some((node) =>
+        node.semantic && node.semantic.kind === 'page');
+      const source = documentValue.resume_document || documentValue;
+      this.pageLayout = source.page_setup && !hasPages ? resolvePageLayout(source) : null;
+      const pageStyle = {};
+      if (this.pageLayout) {
+        pageStyle.width = `${this.pageLayout.width}pt`;
+        pageStyle['min-height'] = `${this.pageLayout.height}pt`;
+        pageStyle['box-sizing'] = 'border-box';
+        Object.entries(this.pageLayout.explicitMargins).forEach(([side, value]) => {
+          pageStyle[`padding-${side}`] = `${value}pt`;
+        });
+      }
+      const rootStyle = { ...pageStyle, ...safeStyle(this.document.root.style || {}) };
+      Object.entries(rootStyle).forEach(([name, value]) =>
+        this.rootElement.style.setProperty(name, value));
+      this.rootStyleProperties = Object.keys(rootStyle);
+      this.rootDocumentClasses.forEach((name) => this.rootElement.classList.remove(name));
+      this.rootDocumentClasses = String(
+        this.document.root.attributes && this.document.root.attributes.class || '',
+      ).split(/\s+/).filter((name) => name && !this.rootElement.classList.contains(name));
+      this.rootDocumentClasses.forEach((name) => this.rootElement.classList.add(name));
       const fragment = this.rootElement.ownerDocument.createDocumentFragment();
       (this.document.root.children || []).forEach((node) => fragment.appendChild(this.createNode(node)));
       this.rootElement.replaceChildren(fragment);
@@ -2160,6 +2449,7 @@
     }
 
     elementFor(nodeId) {
+      if (this.document && String(this.document.root.id) === String(nodeId)) return this.rootElement;
       const cssApi = this.rootElement.ownerDocument.defaultView
         && this.rootElement.ownerDocument.defaultView.CSS;
       const escaped = cssApi && cssApi.escape
@@ -2176,11 +2466,14 @@
     TEMPLATE_DOCUMENT_VERSION,
     BINDINGS_VERSION,
     AI_CONTEXT_VERSION,
+    AI_PRESENTATION_CONTEXT_VERSION,
     ALLOWED_TAGS,
     SEMANTIC_KINDS,
     normalizeDocument,
     ensureDocument,
     toResumeDocument,
+    pageLengthPt,
+    resolvePageLayout,
     applyDocumentOperations,
     attachDocument,
     createResumeAggregate,
@@ -2201,6 +2494,7 @@
     semanticKind,
     toAiContextDocument,
     buildSemanticIndex,
+    manualStructureCapabilities,
     plainText,
     exportNodeText,
     toRenderBlocks,

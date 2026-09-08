@@ -116,13 +116,16 @@ test('中央简历画布：结构与正文 100% 一致', () => {
   const protoResume = proto.querySelector('#resume-document');
   const appResume = app.querySelector('#resume-document');
   assert.ok(appResume, '前端必须渲染简历正文');
-  assert.strictEqual(
-    appResume.getAttribute('class'),
-    protoResume.getAttribute('class'),
-    '简历根元素的模板 class 必须一致',
+  const documentClasses = app.defaultView.WS.draft.resume_json.root.attributes.class || '';
+  assert.deepStrictEqual(
+    new Set(appResume.classList),
+    new Set([...protoResume.classList, ...documentClasses.split(/\s+/).filter(Boolean)]),
+    '画布保留宿主 class，同时应用当前文档的根 class',
   );
+  const canvas = appResume.cloneNode(true);
+  canvas.className = protoResume.className;
   assert.strictEqual(
-    signature(appResume),
+    signature(canvas),
     signature(protoResume),
     '简历画布结构与正文必须与原型逐字一致',
   );
@@ -182,10 +185,8 @@ test('岗位浮层：覆盖情况与要求条目一致', () => {
 test('简历画布无需编辑模式切换，历史版本入口保持一致', () => {
   assert.strictEqual(app.querySelector('#edit-document-button'), null);
   assert.strictEqual(app.querySelector('#manual-edit-toolbar'), null);
-  assert.match(
-    app.querySelector('#inline-edit-hint').textContent,
-    /点击文字可直接修改.*增删区块请告诉 AI/,
-  );
+  assert.strictEqual(app.querySelector('#inline-edit-hint'), null);
+  assert.ok(app.querySelector('#inline-edit-status.visually-hidden'));
   assert.deepStrictEqual(
     texts(app, '.top-actions .history-open'),
     texts(proto, '.top-actions .history-open'),
@@ -198,12 +199,88 @@ test('移动端在简历工具栏提供可见的历史版本入口', () => {
   assert.match(mobileEntry.textContent, /^历史 · \d+$/);
   assert.match(
     APP_HTML,
-    /@media\(max-width:760px\)[\s\S]*?\.mobile-history-open\{display:block\}/,
+    /@media\(max-width:760px\)[\s\S]*?\.doc-tools \.mobile-history-open\{display:inline-flex!important\}/,
     '移动端媒体查询必须显示历史版本入口',
   );
   mobileEntry.click();
   assert.ok(app.querySelector('#history-modal').classList.contains('show'));
   assert.ok(app.querySelector('#history-list').classList.contains('active'));
+});
+
+test('简历编辑栏在画布内保持悬浮，并在滚动后进入紧凑状态', async () => {
+  const toolbar = app.querySelector('#doc-toolbar');
+  const canvas = app.querySelector('.canvas');
+  assert.ok(toolbar);
+  assert.strictEqual(toolbar.getAttribute('role'), 'toolbar');
+  assert.match(APP_HTML, /\.doc-toolbar\{position:sticky;top:var\(--doc-toolbar-top,12px\)/);
+  assert.match(
+    APP_HTML,
+    /\.app\{height:100vh;min-height:0;[^}]*overflow:hidden\}/,
+    '桌面工作区必须锁定视口高度，避免正文把网格整体撑高',
+  );
+  assert.match(
+    APP_HTML,
+    /\.canvas\{[^}]*min-height:0;[^}]*overflow:auto;/,
+    '中间画布必须成为真实滚动容器，sticky 才能跟随简历滚动',
+  );
+  assert.match(
+    APP_HTML,
+    /@media\(max-width:760px\)\{\.app\{height:auto;[^}]*overflow:visible\}/,
+    '移动端必须恢复页面滚动，不能沿用桌面锁屏布局',
+  );
+  assert.ok(toolbar.querySelector('#undo-step svg'));
+  assert.ok(toolbar.querySelector('#redo-step svg'));
+  assert.ok(toolbar.querySelector('#zoom-button svg'));
+  assert.strictEqual(toolbar.querySelector('#zoom-value').textContent, '100%');
+  assert.strictEqual(app.querySelector('#resume-zoom-stage').dataset.zoom, '1');
+  assert.strictEqual(
+    app.querySelector('#resume-document').parentElement,
+    app.querySelector('#resume-zoom-stage'),
+  );
+  assert.deepStrictEqual(
+    texts(app, '#zoom-menu button'),
+    ['75%', '90%', '100%', '110%', '125%', '150%', '适应宽度'],
+  );
+  assert.ok(toolbar.querySelector('#zoom-menu [data-zoom="1"]').classList.contains('active'));
+  assert.ok(toolbar.querySelector('#document-import-button svg'));
+  assert.ok(toolbar.querySelector('.mobile-history-open svg'), '刷新历史数量后不应丢失图标');
+  assert.match(
+    APP_HTML,
+    /\.doc-toolbar-mark\{[^}]*background:transparent/,
+    '文档图标不应使用容易误解为状态的常驻灰底',
+  );
+  assert.match(
+    APP_HTML,
+    /\.history-step-controls\{[^}]*background:transparent/,
+    '撤销与重做只在可用按钮悬停时显示背景',
+  );
+
+  canvas.scrollTop = 64;
+  canvas.dispatchEvent(new app.defaultView.Event('scroll', { bubbles: false }));
+  await waitFor(() => toolbar.classList.contains('is-floating'));
+  assert.strictEqual(toolbar.dataset.state, 'floating');
+
+  canvas.scrollTop = 0;
+  canvas.dispatchEvent(new app.defaultView.Event('scroll', { bubbles: false }));
+  await waitFor(() => !toolbar.classList.contains('is-floating'));
+  assert.strictEqual(toolbar.dataset.state, 'expanded');
+
+  const zoom = toolbar.querySelector('#zoom-button');
+  zoom.click();
+  assert.strictEqual(zoom.getAttribute('aria-expanded'), 'true');
+  toolbar.querySelector('#zoom-menu [data-zoom=".75"]').click();
+  assert.strictEqual(toolbar.querySelector('#zoom-value').textContent, '75%');
+  assert.ok(zoom.querySelector('svg'), '切换缩放后不应销毁按钮图标');
+  assert.strictEqual(zoom.getAttribute('aria-expanded'), 'false');
+  zoom.click();
+  toolbar.querySelector('#zoom-menu [data-zoom="1.5"]').click();
+  assert.strictEqual(toolbar.querySelector('#zoom-value').textContent, '150%');
+  assert.ok(toolbar.querySelector('#zoom-menu [data-zoom="1.5"]').classList.contains('active'));
+  assert.strictEqual(app.querySelector('#resume-zoom-stage').dataset.zoom, '1.5');
+  assert.strictEqual(app.querySelector('#resume-document').style.transform, 'scale(1.5)');
+  const page = app.defaultView.ResumeDom.resolvePageLayout(app.defaultView.WS.draft.resume_json);
+  assert.strictEqual(app.querySelector('#resume-zoom-stage').style.width,
+    Math.ceil(page.width * 96 / 72 * 1.5) + 'px');
 });
 
 test('历史版本列表：保留原型内容并补充明确版本状态', () => {
@@ -310,6 +387,28 @@ test('AI 助手面板：保留全局入口并说明就地改写边界', () => {
   );
 });
 
+test('所有 AI 星光图标使用固定容器内的静态自包含 SVG', () => {
+  const icons = Array.from(app.querySelectorAll('.ai-spark-icon'));
+  assert.ok(icons.length >= 8, '主要 AI 入口都应使用统一星光图标');
+  icons.forEach((icon) => {
+    const svg = icon.querySelector(':scope > svg[viewBox="0 0 24 24"]');
+    assert.ok(svg, `图标缺少固定 viewBox：${icon.className}`);
+    assert.ok(svg.querySelector('.spark-main'));
+    assert.ok(svg.querySelector('.spark-mini'));
+    assert.strictEqual(svg.querySelector('use'), null, '不得再通过共享 symbol 渲染图形');
+  });
+  assert.strictEqual(app.querySelector('#ai-spark-symbol'), null);
+  assert.strictEqual(app.querySelector('.assistant-messages .ai-spark-icon'), null);
+  assert.ok(app.querySelector('.selection-ai-icon > svg[viewBox="0 0 24 24"]'));
+  assert.doesNotMatch(APP_HTML, /aiSparkBreathe|aiSparkTwinkle|selectionStarPulse|selectionStarTwinkle/);
+  assert.match(
+    APP_HTML,
+    /\.ai-spark-icon svg \*,\.selection-ai-icon svg \*\{animation:none!important;transform:none!important\}/,
+    '所有 AI 星光图标都必须保持静态',
+  );
+  assert.match(APP_HTML, /\.doc-toolbar button\{border:0!important\}/);
+});
+
 test('样式保留原型布局且不含旧内容关系选择器', () => {
   const appCss = APP_HTML.match(/<style>([\s\S]*?)<\/style>/)[1];
   for (const selector of [
@@ -327,4 +426,21 @@ test('样式保留原型布局且不含旧内容关系选择器', () => {
   for (const selector of ['.app{', '.context{', '.canvas{', '.assistant-panel{', '.resume{']) {
     assert.ok(appCss.includes(selector), `必须保留原型核心布局样式 ${selector}`);
   }
+});
+
+test('右侧 AI 区域可收缩为窄侧栏并记住选择', () => {
+  const panel = app.querySelector('#assistant-panel');
+  const button = app.querySelector('#assistant-collapse');
+  const shell = app.querySelector('.app');
+  assert.ok(button);
+  button.click();
+  assert.strictEqual(panel.classList.contains('collapsed'), true);
+  assert.strictEqual(shell.classList.contains('assistant-collapsed'), true);
+  assert.strictEqual(button.getAttribute('aria-expanded'), 'false');
+  assert.strictEqual(app.defaultView.localStorage.getItem('resumeAssistantCollapsed'), '1');
+  button.click();
+  assert.strictEqual(panel.classList.contains('collapsed'), false);
+  assert.strictEqual(shell.classList.contains('assistant-collapsed'), false);
+  assert.strictEqual(button.getAttribute('aria-expanded'), 'true');
+  assert.strictEqual(app.defaultView.localStorage.getItem('resumeAssistantCollapsed'), '0');
 });

@@ -123,7 +123,7 @@ test('DOCX 识别保留分页、表格、单元格和直接文字样式', () => 
   assert.strictEqual(layout.schema.layout, 'imported-native');
   assert.strictEqual(layout.schema.fidelity, 'native-structure');
 
-  const document = ResumeDom.ensureDocument(content.resume_json);
+  const document = ResumeDom.toResumeDocument(content.resume_json);
   assert.strictEqual(document.root.children.length, 2);
   const firstPage = document.root.children[0];
   assert.strictEqual(firstPage.attributes['data-layout-unit'], 'pt');
@@ -166,6 +166,67 @@ test('DOCX 识别保留分页、表格、单元格和直接文字样式', () => 
   assert.ok(timeline);
   assert.strictEqual(timeline.style['grid-template-columns'], 'auto minmax(0,1fr) auto');
   assert.strictEqual(timeline.style['column-gap'], '10pt');
+});
+
+test('DOCX 同时存在 PDF 几何文字层时仍以原生 run 样式为准', () => {
+  const { parsed, pages, semantic } = buildFixture();
+  const pageScene = {
+    version: 'page-scene-v1',
+    has_text_layer: true,
+    render_dpi: 120,
+    text_node_count: 1,
+    pages: [{
+      number: 1,
+      width: 595.3,
+      height: 841.9,
+      background_contains_text: false,
+      text_nodes: [{
+        text: '工作经历',
+        bbox: { x: 52.5, y: 120, width: 56, height: 20 },
+        spans: [{
+          text: '工作经历',
+          font_family: 'NotoSansSC-Regular',
+          font_size: 14,
+          color: '#18212B',
+          bold: false,
+        }],
+      }],
+    }],
+  };
+  const content = buildContentCandidate({
+    blocks: parsed.blocks,
+    pages,
+    semantic,
+    format: 'docx',
+    nativeDocument: parsed.document,
+    geometryPages: pages,
+    pageScene,
+  });
+  const layout = buildLayoutCandidate({
+    pages,
+    semantic,
+    format: 'docx',
+    nativeDocument: parsed.document,
+    pageScene,
+  });
+  const document = ResumeDom.toResumeDocument(content.resume_json);
+  const title = findNode(
+    document.root,
+    (node) => node.semantic
+      && node.semantic.kind === 'section_title'
+      && ResumeDom.exportNodeText(node) === '工作经历',
+  );
+
+  assert.ok(title);
+  assert.strictEqual(title.style['font-weight'], '700');
+  assert.match(title.attributes.class, /imported-heading/);
+  assert.deepStrictEqual(
+    ResumeDom.manualStructureCapabilities(document, title.id).add.map((item) => item.enabled),
+    [true, true],
+  );
+  assert.strictEqual(layout.schema.layout, 'imported-native');
+  assert.strictEqual(layout.schema.fidelity, 'native-structure');
+  assert.strictEqual(layout.schema.page_scene_version, null);
 });
 
 test('旧版 DOCX 导入草稿读取时自动升级为固定 pt 页面', () => {

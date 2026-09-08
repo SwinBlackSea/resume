@@ -506,6 +506,51 @@ function hydrateCompactFragments(base, normalized) {
   };
 }
 
+// 完整目标也遵循“未返回字段继承”，否则模型看不到的资源字节会丢失。
+// root 的 children 仍表达完整目标结构：显式数组决定增删和顺序。
+function materializeTargetDocument(baseValue, targetValue) {
+  const base = ResumeDom.toResumeDocument(baseValue);
+  if (!targetValue || !targetValue.root || typeof targetValue.root !== 'object') {
+    throw fragmentError('TARGET_DOCUMENT_ROOT_REQUIRED', '完整目标必须包含 root');
+  }
+  const target = deepClone(targetValue);
+  const result = {
+    ...deepClone(base),
+    root: hydrateCompactNode(target.root, indexNodes(base.root)),
+  };
+  function inheritRecord(before, after, preserveNull = false) {
+    if (after === null) return {};
+    if (!after || typeof after !== 'object' || Array.isArray(after)) return deepClone(after);
+    const next = before && typeof before === 'object' && !Array.isArray(before)
+      ? deepClone(before) : {};
+    for (const [key, value] of Object.entries(after)) {
+      if (value === null && !preserveNull && next[key] !== null) delete next[key];
+      else if (value && typeof value === 'object' && !Array.isArray(value)) {
+        next[key] = inheritRecord(next[key], value, preserveNull);
+      } else next[key] = deepClone(value);
+    }
+    return next;
+  }
+  for (const key of ['page_setup', 'styles']) {
+    if (Object.hasOwn(target, key)) {
+      result[key] = inheritRecord(base[key], target[key], key === 'page_setup');
+    }
+  }
+  for (const key of ['assets', 'annotations']) {
+    if (!Object.hasOwn(target, key)) continue;
+    if (!Array.isArray(target[key])) {
+      throw fragmentError('TARGET_DOCUMENT_METADATA_INVALID', `${key} 必须为数组`);
+    }
+    const existing = new Map((base[key] || []).filter((entry) => entry && entry.id)
+      .map((entry) => [entry.id, entry]));
+    result[key] = target[key].map((entry) =>
+      entry && entry.id && existing.has(entry.id)
+        ? inheritRecord(existing.get(entry.id), entry)
+        : deepClone(entry));
+  }
+  return ResumeDom.toResumeDocument(result, { allowLegacyAiScope: false });
+}
+
 function ownNodeSignature(node) {
   const own = deepClone(node);
   if (own && typeof own === 'object') delete own.children;
@@ -567,6 +612,10 @@ function assertMinimalTargets(base, normalized) {
     const replacement = change.replacement_subtree;
     if (replacement === null) return;
     const before = ResumeDom.findNode(base, change.target_id).node;
+    // The editable node, not an internal bold/span/run, is the actual editing
+    // unit. Its rich text may change without changing the paragraph's own fields.
+    // Final normalization still rejects any nested editable descendants.
+    if (before.editable === true && replacement.editable === true) return;
     if (ownNodeSignature(before) !== ownNodeSignature(replacement)) return;
 
     const beforeIds = directChildIds(before);
@@ -681,5 +730,6 @@ module.exports = {
   MAX_FRAGMENT_CHANGES,
   normalizeTargetFragments: normalizeFragments,
   materializeTargetFragments,
+  materializeTargetDocument,
   assertMinimalTargets,
 };

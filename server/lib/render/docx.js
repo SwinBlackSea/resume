@@ -115,12 +115,16 @@ function tableBlock(block) {
 }
 
 /** 构建 document.xml 主体。 */
-function buildDocumentXml(resume, template) {
+function buildDocumentXml(resume, template = {}) {
   const schema = template.schema || template;
   const accent = ((schema.typography && schema.typography.accent) || '#1d1d1f').replace('#', '');
   const attached = ResumeDom.attachDocument(resume);
   const rendered = ResumeDom.toRenderBlocks(attached.dom_document);
   const body = [];
+  const page = ResumeDom.resolvePageLayout(resume, {
+    margins: { top: 56.7, right: 59.55, bottom: 56.7, left: 59.55 },
+  });
+  const twips = (pt) => Math.round(pt * 20);
 
   // 页眉
   const title = (rendered.header && rendered.header.title)
@@ -166,8 +170,8 @@ function buildDocumentXml(resume, template) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:body>${body.join('')}<w:sectPr>
-<w:pgSz w:w="11906" w:h="16838"/>
-<w:pgMar w:top="1134" w:right="1191" w:bottom="1134" w:left="1191" w:header="851" w:footer="992" w:gutter="0"/>
+<w:pgSz w:w="${twips(page.width)}" w:h="${twips(page.height)}"${page.landscape ? ' w:orient="landscape"' : ''}/>
+<w:pgMar ${['top', 'right', 'bottom', 'left'].map((side) => `w:${side}="${twips(page.margins[side])}"`).join(' ')} w:header="851" w:footer="992" w:gutter="0"/>
 </w:sectPr></w:body></w:document>`;
 }
 

@@ -2,7 +2,11 @@
 
 const fs = require('node:fs');
 const sharp = require('sharp');
-const { createDeepSeekClient } = require('../deepseek-client');
+const { CAPABILITIES } = require('../model-client');
+const { createModelGateway } = require('../model-gateway');
+const {
+  DOCUMENT_SEMANTIC_RESPONSE_SCHEMA,
+} = require('../resume-harness/output-json-schema');
 
 const SYSTEM_PROMPT = [
   '你是简历文档结构识别器。',
@@ -43,7 +47,7 @@ function appendUnassignedSections(sections, readingOrder, blocksById, assigned) 
 function enabled() {
   if (process.env.NODE_ENV === 'test') return false;
   if (String(process.env.RESUME_DOCUMENT_AI_ENABLED || 'true').toLowerCase() === 'false') return false;
-  return Boolean(process.env.RESUME_LLM_API_KEY);
+  return Boolean(process.env.RESUME_MODEL_API_KEY || process.env.RESUME_LLM_API_KEY);
 }
 
 async function imagePart(preview) {
@@ -110,10 +114,10 @@ async function analyzeDocument({ blocks, previews }) {
       warning: 'AI_ANALYSIS_NOT_CONFIGURED',
     };
   }
-  const client = createDeepSeekClient({
-    temperature: 0.1,
+  const client = createModelGateway({
     maxTokens: Number(
       process.env.RESUME_DOCUMENT_AI_MAX_TOKENS
+      || process.env.RESUME_MODEL_MAX_TOKENS
       || process.env.RESUME_LLM_MAX_TOKENS
       || 10000,
     ),
@@ -142,6 +146,11 @@ async function analyzeDocument({ blocks, previews }) {
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content },
       ],
+      thinking: false,
+      temperature: 0.1,
+      outputSchema: DOCUMENT_SEMANTIC_RESPONSE_SCHEMA,
+      capability: CAPABILITIES.VISION,
+      routingReason: 'document_semantic_vision',
     });
     return {
       semantic: normalizeSemantic(result.output, blocks),
@@ -156,7 +165,7 @@ async function analyzeDocument({ blocks, previews }) {
     );
     return {
       semantic: normalizeSemantic({}, blocks),
-      model: `${client.provider}/${client.model}:unavailable`,
+      model: `${client.provider}/${client.models.vision}:unavailable`,
       warning: 'AI_ANALYSIS_UNAVAILABLE',
     };
   }

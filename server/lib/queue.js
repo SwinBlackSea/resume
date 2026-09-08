@@ -5,7 +5,7 @@
  * - 业务事务提交时把事件写入 outbox_events；独立 publisher 投递到队列，
  *   保证「数据库提交成功但队列暂时不可用」时任务不丢失（TECH §8.1、§18.2）。
  * - Worker 按 DAG 执行生成任务：
- *   analyze_job → compose_resume → validate_content → render_html →
+ *   analyze_job → compose_resume → validate_document → render_html →
  *   （render_pdf ∥ render_docx）→ validate_artifacts → finalize
  * - 每一步有独立超时与错误码；PDF 与 DOCX 中一个成功时整体为 partial（TECH §8.3）。
  */
@@ -14,7 +14,7 @@ const events = require('./events');
 const { uuidv7, nowIso, sha256, problem } = require('./util');
 const { composeResume, splitBullets } = require('./compose');
 const { analyzeJobText, matchJobWithProfile } = require('./job-analyzer');
-const { validateResumeJson, validateContentSafety } = require('./resume-schema');
+const { validateResumeJson } = require('./resume-schema');
 const { recognizeJobFiles } = require('./ocr');
 const documentRecognition = require('./document-recognition');
 const fs = require('node:fs');
@@ -26,9 +26,9 @@ const { renderHtml } = require('./render/html');
 const ResumeDom = require('../../resume-dom');
 
 const STEPS = [
-  { key: 'analyze_job', label: '正在校验资料与岗位', progress: 15 },
+  { key: 'analyze_job', label: '正在读取资料与岗位', progress: 15 },
   { key: 'compose_resume', label: '正在重组简历内容', progress: 35 },
-  { key: 'validate_facts', label: '正在检查内容是否可靠', progress: 50 },
+  { key: 'validate_document', label: '正在检查文档结构', progress: 50 },
   { key: 'render_html', label: '正在排版简历', progress: 62 },
   { key: 'render_artifacts', label: '正在渲染 PDF 与 DOCX', progress: 80 },
   { key: 'validate_artifacts', label: '正在校验导出文件', progress: 92 },
@@ -123,7 +123,7 @@ async function runGeneration(snapshotId) {
     error_code: null,
     error_message_safe: null,
   });
-  emitGeneration(snapshotId, { status: 'running', step: 'analyze_job', progress: 5, label: '正在校验资料与岗位' });
+  emitGeneration(snapshotId, { status: 'running', step: 'analyze_job', progress: 5, label: '正在读取资料与岗位' });
 
   const advance = (key) => {
     const step = stepOf(key);
@@ -166,23 +166,15 @@ async function runGeneration(snapshotId) {
       assets: resumeInput.assets,
     };
 
-    // ---- validate_facts ----
-    advance('validate_facts');
+    // ---- validate_document ----
+    advance('validate_document');
     const schemaCheck = validateResumeJson(resume);
     if (!schemaCheck.valid) {
       throw Object.assign(new Error('结构化简历未通过 Schema 校验'), {
-        code: 'FACT_VALIDATION_FAILED',
+        code: 'DOCUMENT_SCHEMA_INVALID',
         safe: schemaCheck.errors.join('；'),
       });
     }
-    const contentCheck = validateContentSafety(resume, facts);
-    if (!contentCheck.ok) {
-      throw Object.assign(new Error('存在用户没有提供的数据'), {
-        code: 'FACT_VALIDATION_FAILED',
-        safe: '部分内容包含你没有提供的数据，已停止生成',
-      });
-    }
-
     // ---- render_html ----
     advance('render_html');
     const htmlString = renderHtml({ resume, template: {}, ownerId: owner.id });
@@ -223,7 +215,6 @@ async function runGeneration(snapshotId) {
     const maxPages = resume.page_setup.max_pages || 2;
     const validation = {
       schema_valid: schemaCheck.valid,
-      content_issues: contentCheck.violations,
       validation_issues: validationIssues,
       pdf_pages: pdfResult.status === 'fulfilled' ? pdfResult.value.pages : null,
       page_limit: maxPages,

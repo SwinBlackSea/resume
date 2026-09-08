@@ -96,20 +96,25 @@ function sendProblem(res, err, requestId) {
 }
 
 /** 读取 JSON 请求体，带 1MB 限制。 */
-function readJsonBody(req) {
+function readJsonBody(req, maxBytes = 1_000_000) {
   return new Promise((resolve, reject) => {
-    let raw = '';
+    const chunks = [];
     let size = 0;
+    let exceeded = false;
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > 1_000_000) {
+      if (exceeded) return;
+      if (size > maxBytes) {
+        exceeded = true;
+        chunks.length = 0;
         reject(problem.badRequest('请求体过大'));
-        req.destroy();
         return;
       }
-      raw += chunk;
+      chunks.push(chunk);
     });
     req.on('end', () => {
+      if (exceeded) return;
+      const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw) return resolve({});
       try {
         const parsed = JSON.parse(raw);

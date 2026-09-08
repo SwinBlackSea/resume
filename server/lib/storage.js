@@ -38,4 +38,10 @@ function objectPath(key) {
   return path.join(OBJECTS_DIR, key);
 }
 
-module.exports = { objectKey, putObject, getObject, objectPath, OBJECTS_DIR };
+function removeObject(key) {
+  const target = path.resolve(OBJECTS_DIR, key);
+  if (!target.startsWith(path.resolve(OBJECTS_DIR) + path.sep)) throw new Error('非法对象路径');
+  fs.rmSync(target, { force: true });
+}
+
+module.exports = { objectKey, putObject, getObject, objectPath, removeObject, OBJECTS_DIR };

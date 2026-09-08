@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS uploads (
   sha256        TEXT NOT NULL DEFAULT '',
   status        TEXT NOT NULL DEFAULT 'uploading', -- uploading|quarantined|scanning|ready|failed
   expires_at    TEXT,
+  chat_conversation_id TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
@@ -174,7 +175,7 @@ CREATE TABLE IF NOT EXISTS ai_tasks (
   goal               TEXT NOT NULL DEFAULT '',
   state_json         TEXT NOT NULL DEFAULT '{}',
   active_proposal_id TEXT,
-  status             TEXT NOT NULL DEFAULT 'understanding', -- understanding|clarifying|planning|validated|waiting_apply|completed|failed|canceled
+  status             TEXT NOT NULL DEFAULT 'understanding', -- understanding|conversing|clarifying|planning|validated|waiting_apply|completed|failed|canceled
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL
 );

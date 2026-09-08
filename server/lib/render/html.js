@@ -40,10 +40,14 @@ function inlineSceneAssets(documentValue, ownerId) {
   return document;
 }
 
-function renderHtml({ resume, template, ownerId }) {
+function renderHtml({ resume, template = {}, ownerId }) {
   const schema = template.schema || template;
   const accent = (schema.typography && schema.typography.accent) || '#1d1d1f';
   const importedLayout = /^imported-(?:native|positioned|scene)$/.test(String(schema.layout || ''));
+  const page = ResumeDom.resolvePageLayout(resume, importedLayout
+    ? { margins: { top: 0, right: 0, bottom: 0, left: 0 } } : {});
+  const pageCss = `@page{size:${page.width}pt ${page.height}pt;margin:${
+    ['top', 'right', 'bottom', 'left'].map((side) => `${page.margins[side]}pt`).join(' ')}}`;
   const attached = ResumeDom.attachDocument(resume);
   const exportDocument = inlineSceneAssets(attached.dom_document, ownerId);
   const body = ResumeDom.renderToHtml(exportDocument, { forExport: true });
@@ -53,7 +57,7 @@ function renderHtml({ resume, template, ownerId }) {
 
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escape(title)} · 简历</title>
 <style>@page{size:A4;margin:${importedLayout ? '0' : '18mm'}}html,body{margin:${importedLayout ? '0' : 'initial'};padding:0}body{font-family:"Noto Sans SC","Microsoft YaHei",sans-serif;color:#414448;font-size:10.5pt;line-height:1.75}.resume-top h1,h1{font-size:22pt;letter-spacing:2px;margin:0}.resume-section h2,h2{font-size:12pt;color:${accent};border-bottom:1px solid #d1d1d6;padding-bottom:4pt;margin:18pt 0 8pt}.resume-top p,.contact{color:#5f6265;font-size:9pt;margin:6pt 0 14pt;border-bottom:1px solid ${accent};padding-bottom:10pt}.resume-row,.row{margin-top:10pt;font-weight:700;font-size:10pt}.resume-row .role,.row span{margin-left:10pt;font-weight:400;color:#4d5155}.resume-row time,.row time{float:right;font-weight:400;color:#73767a;font-size:9pt}ul{margin:6pt 0;padding-left:16px}li{white-space:pre-line}.imported-document-page{break-after:page;page-break-after:always;box-shadow:none!important}.imported-document-page:last-child{break-after:auto;page-break-after:auto}.imported-scene-background{display:block}.imported-scene-span{display:inline-block}.imported-paragraph span{margin-left:0}.imported-table{break-inside:avoid}</style>
-</head><body>${body}</body></html>`;
+<style>${pageCss}</style></head><body>${body}</body></html>`;
 }
 
 module.exports = { renderHtml, inlineSceneAssets };

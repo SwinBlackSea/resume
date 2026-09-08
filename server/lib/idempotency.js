@@ -6,6 +6,7 @@
  */
 const db = require('./db');
 const { uuidv7, nowIso } = require('./util');
+const { compactReplay } = require('./ai-storage');
 
 /**
  * 在幂等保护下执行 fn。
@@ -34,7 +35,7 @@ function withIdempotency(user, key, resourceType, fn) {
         key,
         resourceType,
         (result && result.id) || '',
-        JSON.stringify(result || {}),
+        JSON.stringify(compactReplay(result || {}, resourceType)),
         nowIso(),
       ],
     );

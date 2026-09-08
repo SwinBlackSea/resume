@@ -59,13 +59,29 @@ test('AI 澄清问题以克制的结果选项展示，并继续原任务', async
 
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const origin = ctx.base.replace('/api/v1', '');
+  let continuedBody = null;
   const dom = new JSDOM(html, {
     runScripts: 'dangerously',
     resources: 'usable',
     url: `${origin}/`,
     pretendToBeVisual: true,
     beforeParse(window) {
-      window.fetch = (url, options) => fetch(new URL(url, origin), options);
+      window.fetch = (url, options = {}) => {
+        const parsed = new URL(url, origin);
+        if (parsed.pathname.endsWith('/ai/messages') && options.method === 'POST') {
+          continuedBody = JSON.parse(options.body || '{}');
+          return Promise.resolve(new Response(JSON.stringify({
+            task_id: continuedBody.task_id,
+            result_type: 'MESSAGE',
+            awaiting_user: false,
+            actions: [],
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }));
+        }
+        return fetch(parsed, options);
+      };
       window.EventSource = class {
         addEventListener() {}
         close() {}
@@ -84,17 +100,12 @@ test('AI 澄清问题以克制的结果选项展示，并继续原任务', async
   assert.match(choices[0].textContent, /页面外观不变/);
   assert.strictEqual(dom.window.activeTaskId, proposed.body.task_id);
   choices[0].click();
-  assert.strictEqual(document.querySelector('#prompt').value, '保留排版，分别编辑');
+  assert.strictEqual(document.querySelector('#prompt').value, '');
   assert.strictEqual(dom.window.activeContext.scopeId, 'target-bullet');
-  const completed = await helpers.call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
-    body: {
-      content: '保留排版，分别编辑',
-      scope_type: 'RESUME_BLOCK',
-      scope_id: 'target-bullet',
-      task_id: proposed.body.task_id,
-    },
-  });
-  assert.strictEqual(completed.status, 200, JSON.stringify(completed.body));
+  assert.strictEqual(continuedBody.content, '保留排版，分别编辑');
+  assert.strictEqual(continuedBody.task_id, proposed.body.task_id);
+  assert.strictEqual(continuedBody.quick_reply_id, 'keep-layout');
+  await new Promise((resolve) => setTimeout(resolve, 80));
   dom.window.close();
 });
 
@@ -127,13 +138,29 @@ test('复杂请求的处理思路以自然对话和克制的快捷回复展示',
 
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const origin = ctx.base.replace('/api/v1', '');
+  let continuedBody = null;
   const dom = new JSDOM(html, {
     runScripts: 'dangerously',
     resources: 'usable',
     url: `${origin}/`,
     pretendToBeVisual: true,
     beforeParse(window) {
-      window.fetch = (url, options) => fetch(new URL(url, origin), options);
+      window.fetch = (url, options = {}) => {
+        const parsed = new URL(url, origin);
+        if (parsed.pathname.endsWith('/ai/messages') && options.method === 'POST') {
+          continuedBody = JSON.parse(options.body || '{}');
+          return Promise.resolve(new Response(JSON.stringify({
+            task_id: continuedBody.task_id,
+            result_type: 'MESSAGE',
+            awaiting_user: false,
+            actions: [],
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }));
+        }
+        return fetch(parsed, options);
+      };
       window.EventSource = class {
         addEventListener() {}
         close() {}
@@ -153,9 +180,12 @@ test('复杂请求的处理思路以自然对话和克制的快捷回复展示',
     [...card.querySelectorAll('.clarification-option')].map((button) => button.textContent),
     ['按这个思路修改', '调整要求'],
   );
-  card.querySelectorAll('.clarification-option')[1].click();
-  assert.strictEqual(document.querySelector('#prompt').value, '调整要求');
-  assert.strictEqual(dom.window.activeTaskId, proposed.body.task_id);
+  card.querySelectorAll('.clarification-option')[0].click();
+  assert.strictEqual(document.querySelector('#prompt').value, '');
+  assert.strictEqual(continuedBody.content, '按这个思路修改');
+  assert.strictEqual(continuedBody.task_id, proposed.body.task_id);
+  assert.strictEqual(continuedBody.quick_reply_id, 'option-1');
+  await new Promise((resolve) => setTimeout(resolve, 80));
   dom.window.close();
 });
 
@@ -405,7 +435,7 @@ test('段落改写时持续标记正文位置，并在思考期间锁定发送�
 
   assert.strictEqual(send.disabled, true);
   assert.strictEqual(send.classList.contains('is-thinking'), true);
-  assert.strictEqual(send.textContent, '思考中');
+  assert.strictEqual(send.textContent, '生成中');
   assert.strictEqual(send.getAttribute('aria-busy'), 'true');
   assert.strictEqual(target.classList.contains('ai-target-thinking'), true);
   assert.strictEqual(target.dataset.aiTargetLabel, 'AI 正在修改');
@@ -495,7 +525,13 @@ test('点击单一编辑节点内任一格式段落时只提供整体 AI 入口'
   assert.strictEqual(group.classList.contains('selected'), true);
   assert.strictEqual(firstParagraph.classList.contains('selected'), false);
   assert.strictEqual(document.querySelectorAll('#resume-document .selected').length, 1);
-  assert.match(document.querySelector('.rewrite-action').textContent, /整体能力模块/);
+  assert.strictEqual(document.querySelector('#selection-ai-context'), null);
+  assert.match(document.querySelector('#selection-tools').title, /整体能力模块/);
+  assert.strictEqual(
+    document.querySelector('.rewrite-action').textContent.trim(),
+    '就地改写',
+    '作用范围与操作名称应分层展示，不能把长内容塞进操作按钮',
+  );
 
   document.querySelector('.rewrite-action').click();
   assert.strictEqual(window.localAiState.targetNodeId, groupId);

@@ -228,3 +228,127 @@ test('全局 AI 用紧凑新增声明插入平级模块，并保留等待期间�
     manualText,
   );
 });
+
+test('富文本段落的紧凑文字片段不会在最终校验时被误判为整棵子树修改', async (t) => {
+  const ctx = await helpers.boot();
+  t.after(() => helpers.close(ctx));
+  const projectId = await helpers.defaultProject(ctx);
+  const before = (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body;
+  const richDocument = ResumeDom.toResumeDocument({
+    schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+    root: {
+      id: 'resume-root',
+      type: 'element',
+      tag: 'article',
+      semantic: { kind: 'document' },
+      children: [{
+        id: 'rich-section',
+        type: 'element',
+        tag: 'section',
+        semantic: { kind: 'section' },
+        children: [{
+          id: 'rich-paragraph',
+          type: 'element',
+          tag: 'p',
+          editable: true,
+          semantic: { kind: 'paragraph' },
+          attributes: { 'data-rich-text': 'true' },
+          children: [{
+            id: 'rich-bullet',
+            type: 'element',
+            tag: 'span',
+            semantic: { kind: 'decoration' },
+            text: '•',
+            children: [],
+          }, {
+            id: 'rich-copy',
+            type: 'element',
+            tag: 'span',
+            semantic: { kind: 'inline' },
+            text: '原始党建工作描述较长。',
+            children: [],
+          }],
+        }],
+      }],
+    },
+    page_setup: {},
+    styles: {},
+    assets: [],
+    annotations: [],
+  });
+  const replaced = await helpers.call(ctx, 'PATCH', `/projects/${projectId}/resume-draft`, {
+    body: {
+      expected_revision: before.draft.revision,
+      resume_json: richDocument,
+    },
+  });
+  assert.strictEqual(replaced.status, 200, JSON.stringify(replaced.body));
+
+  const restore = resumeHarness.setModelClientForTests({
+    provider: 'test',
+    model: 'compact-rich-text-fragment',
+    generate: async () => ({
+      output: {
+        type: 'proposal',
+        content: '已精简这段文字，保留原有样式。',
+        proposal: {
+          target_resume_fragments: {
+            format: 'resume-target-fragments-v2',
+            changes: [{
+              target_id: 'rich-paragraph',
+              replacement_subtree: {
+                id: 'rich-paragraph',
+                text: '•精简后的党建工作。',
+              },
+            }],
+            insertions: [],
+          },
+          change_constraints: {
+            content: 'modify',
+            content_order: 'preserve',
+            structure: 'preserve',
+            style: 'preserve',
+            allowed_region_ids: ['rich-paragraph'],
+          },
+        },
+      },
+      provider: 'test',
+      model: 'compact-rich-text-fragment',
+      finish_reason: 'stop',
+    }),
+  });
+  t.after(restore);
+
+  const proposed = await helpers.call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
+    body: {
+      content: '精简这段文字',
+      scope_type: 'RESUME_BLOCK',
+      scope_id: 'rich-paragraph',
+      scope_revision: replaced.body.revision,
+    },
+  });
+  assert.strictEqual(proposed.status, 200, JSON.stringify(proposed.body));
+  const action = proposed.body.actions.find(
+    (item) => item.action_type === 'RESUME_REWRITE_PROPOSAL',
+  );
+  assert.ok(action, JSON.stringify(proposed.body));
+  const replacement = action.payload.proposal.target_resume_fragments
+    .changes[0].replacement_subtree;
+  assert.deepStrictEqual(replacement, {
+    id: 'rich-paragraph',
+    text: '•精简后的党建工作。',
+  });
+
+  const applied = await helpers.call(ctx, 'POST', `/ai/actions/${action.id}/apply`, {
+    idemKey: `apply-rich-fragment-${action.id}`,
+    body: { expected_revision: action.expected_revision },
+  });
+  assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+  const after = (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body;
+  assert.strictEqual(
+    ResumeDom.exportNodeText(
+      ResumeDom.findNode(after.draft.resume_json, 'rich-paragraph').node,
+    ),
+    '•精简后的党建工作。',
+  );
+});

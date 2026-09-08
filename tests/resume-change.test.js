@@ -109,6 +109,8 @@ test('旧局部完整快照会压缩为节点差量，较早的已成版 payload
       after_json TEXT NOT NULL,
       snapshot_version_id TEXT,
       reverted_at TEXT,
+      undo_expired_at TEXT,
+      redo_invalidated_at TEXT,
       created_at TEXT NOT NULL
     )
   `);

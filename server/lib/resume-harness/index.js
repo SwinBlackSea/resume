@@ -1,6 +1,6 @@
 'use strict';
 
-const { createDeepSeekClient } = require('../deepseek-client');
+const { createModelGateway } = require('../model-gateway');
 const { buildHarnessInput, buildMessages } = require('./context-builder');
 const { buildConversationMemory, selectRecentMessages } = require('./memory-manager');
 const { runResumeHarness } = require('./orchestrator');
@@ -21,9 +21,7 @@ let testModelClient = null;
 
 function resolveModelClient() {
   if (testModelClient) return testModelClient;
-  const provider = String(process.env.RESUME_LLM_PROVIDER || '').toLowerCase();
-  if (provider === 'deepseek') return createDeepSeekClient();
-  throw new Error('未配置可用模型，请设置 RESUME_LLM_PROVIDER=deepseek');
+  return createModelGateway();
 }
 
 async function complete(input, options = {}) {
@@ -32,6 +30,7 @@ async function complete(input, options = {}) {
     modelClient: options.modelClient || resolveModelClient(),
     signal: options.signal,
     onActivity: options.onActivity,
+    onMemory: options.onMemory,
   });
 }
 
@@ -41,6 +40,7 @@ async function completeInlineRewrite(input, options = {}) {
     modelClient: options.modelClient || resolveModelClient(),
     signal: options.signal,
     onActivity: options.onActivity,
+    onMemory: options.onMemory,
   });
 }
 

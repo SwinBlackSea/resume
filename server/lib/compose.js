@@ -2,10 +2,9 @@
 /**
  * 根据用户资料和岗位信息重组简历。
  *
- * 资料、对话和当前简历是平级上下文。输出只保存最终内容与必要的校验提示，
+ * 资料、对话和当前简历是平级上下文。输出只保存最终内容，
  * 不建立资料到正文的绑定、来源引用或派生关系。
  */
-const { validateContentSafety } = require('./resume-schema');
 const ResumeDom = require('../../resume-dom');
 
 function splitBullets(description) {
@@ -90,11 +89,6 @@ function composeResume({ profileBasics, profileSummary, experiences = [], job, t
     },
   };
 
-  const userProvidedText = experiences
-    .filter((item) => !item.deleted_at)
-    .flatMap((item) => splitBullets(item.description))
-    .concat([profileSummary || '', JSON.stringify(profileBasics || {})]);
-  resume.validation_issues = validateContentSafety(resume, userProvidedText).violations;
   resume.generation_notes = buildGenerationNotes({ keywords, experience, projects });
   return ResumeDom.attachDocument(resume);
 }
@@ -108,7 +102,7 @@ function buildGenerationNotes({ keywords, experience, projects }) {
     (sum, item) => sum + ((item.bullets && item.bullets.length) || 0),
     0,
   );
-  notes.push(`已整理 ${totalBullets} 条经历内容，未自动补写用户没有提供的业绩。`);
+  notes.push(`已整理 ${totalBullets} 条经历内容。`);
   return notes.map((text) => ({ text }));
 }
 

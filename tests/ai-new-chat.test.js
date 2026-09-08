@@ -45,18 +45,17 @@ test('开始新对话保留三类工作区对象，并使旧未应用动作失�
   assert.deepStrictEqual(after.draft, immediatelyBefore.draft);
   assert.deepStrictEqual(after.versions, immediatelyBefore.versions);
   assert.strictEqual(after.job.id, immediatelyBefore.job.id);
-  assert.strictEqual(db.get('SELECT status FROM ai_conversations WHERE id = ?', [oldConversationId]).status, 'closed');
-  assert.strictEqual(db.get('SELECT status FROM ai_action_requests WHERE id = ?', [action.id]).status, 'rejected');
+  assert.strictEqual(db.get('SELECT status FROM ai_conversations WHERE id = ?', [oldConversationId]), null);
+  assert.strictEqual(db.get('SELECT status FROM ai_action_requests WHERE id = ?', [action.id]), null);
+  assert.strictEqual(db.get('SELECT COUNT(*) AS n FROM ai_messages WHERE conversation_id = ?', [oldConversationId]).n, 0);
+  assert.strictEqual(db.get('SELECT COUNT(*) AS n FROM ai_tasks WHERE conversation_id = ?', [oldConversationId]).n, 0);
 
   const oldView = await helpers.call(
     ctx,
     'GET',
     `/projects/${projectId}?conversation_id=${encodeURIComponent(oldConversationId)}`,
   );
-  assert.strictEqual(oldView.status, 200, JSON.stringify(oldView.body));
-  assert.strictEqual(oldView.body.conversation.id, oldConversationId);
-  assert.strictEqual(oldView.body.conversation.status, 'closed');
-  assert.ok(oldView.body.conversation.messages.length >= 2);
+  assert.strictEqual(oldView.status, 400, JSON.stringify(oldView.body));
 
   const cannotContinueClosed = await helpers.call(
     ctx,
