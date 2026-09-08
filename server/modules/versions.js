@@ -185,7 +185,7 @@ const routes = [
   {
     method: 'POST',
     pattern: '/projects/:id/versions',
-    handler: ({ params, body, user, req, requestId, ipHash }) =>
+    handler: ({ params, body, user, req, requestId, ipHash, versionKind = 'manual' }) =>
       withIdempotency(user, req.headers['idempotency-key'], 'resume_version', () =>
         db.tx(() => {
           const project = loadProject(params.id, user);
@@ -287,12 +287,13 @@ const routes = [
             `INSERT INTO resume_versions (id, project_id, owner_id, version_no, kind, name, base_version_id,
                profile_payload, template_payload, job_payload, resume_payload, change_summary_json,
                artifact_refs_json, generation_snapshot_id, status, created_by, created_at)
-             VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, '{}', NULL, 'complete', 'user', ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', NULL, 'complete', 'user', ?)`,
             [
               id,
               project.id,
               user.id,
               versionNo,
+              versionKind,
               name,
               draft.base_version_id,
               JSON.stringify({
@@ -591,4 +592,7 @@ const routes = [
   },
 ];
 
-module.exports = { routes, renderVersionArtifacts };
+// One snapshot implementation for manual saves and first AI generation.
+const saveDraftVersion = routes.find((route) => route.method === 'POST'
+  && route.pattern === '/projects/:id/versions').handler;
+module.exports = { routes, renderVersionArtifacts, saveDraftVersion };

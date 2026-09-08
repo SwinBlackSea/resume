@@ -151,7 +151,6 @@ function loadHistoryStacks(projectId, ownerId) {
   const undo = db.all(
     `SELECT * FROM resume_change_events
      WHERE project_id = ? AND owner_id = ?
-       AND snapshot_version_id IS NULL
        AND reverted_at IS NULL
        AND undo_expired_at IS NULL
      ORDER BY draft_revision DESC, id DESC
@@ -161,7 +160,6 @@ function loadHistoryStacks(projectId, ownerId) {
   const redo = db.all(
     `SELECT * FROM resume_change_events
      WHERE project_id = ? AND owner_id = ?
-       AND snapshot_version_id IS NULL
        AND reverted_at IS NOT NULL
        AND undo_expired_at IS NULL
        AND redo_invalidated_at IS NULL
@@ -225,12 +223,17 @@ function applyHistoryStep({ draft, event, direction, user, requestId, ipHash }) 
     resume: restored,
     revision,
   });
-  const remaining = db.get(
+  let remaining = db.get(
     `SELECT COUNT(*) AS total FROM resume_change_events
      WHERE project_id = ? AND owner_id = ?
        AND reverted_at IS NULL AND snapshot_version_id IS NULL`,
     [draft.project_id, user.id],
   ).total;
+  if (draft.base_version_id) {
+    const base = db.get('SELECT resume_payload FROM resume_versions WHERE id = ? AND owner_id = ?',
+      [draft.base_version_id, user.id]);
+    if (base) remaining = hashJson(ResumeDom.toResumeDocument(JSON.parse(base.resume_payload))) === hashJson(restored) ? 0 : 1;
+  }
   db.run('UPDATE resume_drafts SET has_unsnapshotted_changes = ? WHERE id = ?', [
     remaining ? 1 : 0,
     draft.id,
@@ -255,6 +258,33 @@ function applyHistoryStep({ draft, event, direction, user, requestId, ipHash }) 
 }
 
 const routes = [
+  {
+    method: 'GET',
+    pattern: '/projects/:id/resume-draft/download',
+    raw: true,
+    handler: ({ params, query, user, res }) => {
+      const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [params.id, user.id]);
+      if (!draft) throw problem.notFound('简历不存在');
+      if (Number(query.get('revision')) !== draft.revision) {
+        throw problem.conflict('REVISION_CONFLICT', '简历已变化，请刷新后重新下载');
+      }
+      const format = query.get('format');
+      if (!['pdf', 'docx'].includes(format)) throw problem.badRequest('支持 PDF 和 Word 下载');
+      const resume = ResumeDom.toResumeDocument(JSON.parse(draft.resume_json));
+      if (!ResumeDom.plainText(resume).trim()) throw problem.badRequest('简历还没有内容');
+      const render = format === 'pdf' ? require('../lib/render/pdf').renderPdf : require('../lib/render/docx').renderDocx;
+      const buffer = render({ resume, template: {} }).buffer;
+      const project = db.get('SELECT name FROM resume_projects WHERE id = ? AND owner_id = ?', [params.id, user.id]);
+      const name = require('./artifacts').safeFileName(project.name, format);
+      res.writeHead(200, {
+        'content-type': format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'content-length': buffer.length, 'content-disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(name),
+        'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+      });
+      res.end(buffer);
+      return { __handled: true };
+    },
+  },
   {
     method: 'GET',
     pattern: '/projects/:id/resume-draft',
@@ -635,7 +665,6 @@ const routes = [
         const event = db.get(
           `SELECT * FROM resume_change_events
            WHERE project_id = ? AND owner_id = ?
-             AND snapshot_version_id IS NULL
              AND reverted_at IS NULL
              AND undo_expired_at IS NULL
            ORDER BY draft_revision DESC, id DESC
@@ -662,7 +691,6 @@ const routes = [
         const event = db.get(
           `SELECT * FROM resume_change_events
            WHERE project_id = ? AND owner_id = ?
-             AND snapshot_version_id IS NULL
              AND reverted_at IS NOT NULL
              AND undo_expired_at IS NULL
              AND redo_invalidated_at IS NULL

@@ -1,8 +1,8 @@
 {
   "name": "resume-planet",
-  "version": "2.14.1",
+  "version": "2.15.0",
   "private": true,
-  "description": "简历星球 · AI Native 简历工作台（PRD v2.14.1 / TECH v2.14.1）",
+  "description": "简历星球 · AI Native 简历工作台（PRD v2.15.0 / TECH v2.15.0）",
   "type": "commonjs",
   "engines": {
     "node": ">=22.5"
@@ -13,7 +13,7 @@
     "test": "node --test tests/*.test.js",
     "test:ai": "node --test tests/ai-behavior.test.js",
     "test:policy": "node --test tests/policy.test.js",
-    "test:parity": "node --test tests/prototype-parity.test.js",
+    "test:ui": "node --test tests/workspace-ui.test.js tests/resume-first-flow.test.js",
     "setup:document-recognition": "python3 -m venv .runtime/document-recognition/venv && .runtime/document-recognition/venv/bin/python -m pip install -r server/lib/document-recognition/requirements.txt",
     "start:rule": "node server/index.js"
   },

@@ -154,6 +154,8 @@ function validateResumeRewrite(action, input, index, diagnostics) {
     const policyResult = evaluateChange(currentResume, nextResume, constraints);
     policyResult.errors.forEach((entry) => {
       errors.push(`actions[${index}] 与用户修改意图不一致：${entry.message}`);
+      diagnostics.push({ action_index: index, ...entry, declared_constraints: constraints,
+        actual_dimensions: policyResult.dimensions });
     });
   } catch (error) {
     errors.push(

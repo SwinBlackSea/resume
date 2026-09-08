@@ -60,6 +60,7 @@ function buildHarnessInput(options) {
       profile: profile || {},
       target_job: job || null,
       resume: resume || {},
+      ...(options.materials ? { materials: options.materials } : {}),
     },
     focus: lockedFocus,
     conversation: memory,

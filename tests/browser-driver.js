@@ -7,7 +7,13 @@ const { spawn } = require('node:child_process');
 const chrome = process.env.CHROME_BIN || path.join(os.homedir(),
   '.cache/ms-playwright/chromium-1187/chrome-linux/chrome');
 
-async function openBrowser(t, url) {
+async function openBrowser(t, url, { home = false } = {}) {
+  if (!home && !new URL(url).searchParams.has('project')) {
+    const target = new URL(url);
+    const projects = await (await fetch(new URL('api/v1/projects', target))).json();
+    target.searchParams.set('project', projects.items[0].id);
+    url = target.href;
+  }
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-structure-browser-'));
   const child = spawn(chrome, ['--headless=new', '--no-sandbox', '--disable-gpu',
     '--disable-dev-shm-usage', '--remote-debugging-port=0', `--user-data-dir=${directory}`, 'about:blank'],
@@ -73,7 +79,11 @@ async function openBrowser(t, url) {
   async function until(expression, timeout = 8000) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
-      if (await evaluate(expression)) return;
+      try {
+        if (await evaluate(`Boolean(document.body) && (${expression})`)) return;
+      } catch (error) {
+        if (!/Execution context was destroyed|Cannot find context|Inspected target navigated/.test(error.message)) throw error;
+      }
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
     throw new Error(`浏览器状态超时：${expression}\n${await evaluate('JSON.stringify({toast:document.querySelector("#toast").textContent,target:nodeStructureState&&nodeStructureState.nodeId,hovered:[...document.querySelectorAll(":hover")].map(e=>e.id||e.dataset.nodeId||e.className)})')}`);

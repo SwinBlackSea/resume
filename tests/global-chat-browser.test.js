@@ -160,7 +160,7 @@ test('真实浏览器：连续聊天、输入、长建议、重试、手改合�
     await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
     await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   }
-  await cdp('Page.navigate', { url: ctx.base.replace('/api/v1', '/') });
+  await cdp('Page.navigate', { url: ctx.base.replace('/api/v1', '/') + '?project=' + projectId });
   await until('Boolean(window.WS && WS.draft)');
   await evaluate(`document.querySelector("#prompt").value="中文候选尚未确认";
     document.querySelector("#prompt").dispatchEvent(new KeyboardEvent("keydown",

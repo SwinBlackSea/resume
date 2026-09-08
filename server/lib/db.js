@@ -212,7 +212,7 @@ function migrateContentRelations(database) {
 /**
  * 变更记录存储治理：
  * 1. 旧的局部文字变更从“双份完整简历”压缩为节点前后差量；
- * 2. 已成版或已撤销且超过保留期的 payload 只保留操作摘要。
+ * 2. 已失效且超过保留期的 payload 只保留操作摘要；成版不使撤销失效。
  *
  * 行本身不删除，仍可用于安全审计和数量统计；完整历史正文由不可变版本承载。
  */
@@ -249,7 +249,7 @@ function compactResumeChangeEvents(database) {
       if (isArchivedPayload(beforePayload) || isArchivedPayload(afterPayload)) return;
 
       const createdAt = Date.parse(row.created_at || '');
-      const canArchive = Boolean(row.snapshot_version_id || row.undo_expired_at || row.redo_invalidated_at)
+      const canArchive = Boolean(row.undo_expired_at || row.redo_invalidated_at)
         && Number.isFinite(createdAt)
         && createdAt < cutoff;
       if (canArchive) {
@@ -423,17 +423,16 @@ function ensureResumeChangeHistorySchema(database) {
         FROM resume_change_events
         WHERE project_id = NEW.project_id
           AND owner_id = NEW.owner_id
-          AND snapshot_version_id IS NULL
           AND reverted_at IS NULL
           AND undo_expired_at IS NULL
         ORDER BY draft_revision DESC, id DESC
         LIMIT -1 OFFSET 5
       );
     END;
-    CREATE TRIGGER IF NOT EXISTS trg_resume_change_payload_retention
-    AFTER UPDATE OF undo_expired_at, redo_invalidated_at, snapshot_version_id ON resume_change_events
+    DROP TRIGGER IF EXISTS trg_resume_change_payload_retention;
+    CREATE TRIGGER trg_resume_change_payload_retention
+    AFTER UPDATE OF undo_expired_at, redo_invalidated_at ON resume_change_events
     WHEN NEW.undo_expired_at IS NOT NULL OR NEW.redo_invalidated_at IS NOT NULL
-      OR NEW.snapshot_version_id IS NOT NULL
     BEGIN
       UPDATE resume_change_events
       SET before_json = json_object('format', 'archived-change-v1',
@@ -444,6 +443,10 @@ function ensureResumeChangeHistorySchema(database) {
     END;
   `);
   database.exec(`
+    UPDATE resume_change_events
+    SET undo_expired_at = COALESCE(undo_expired_at, created_at)
+    WHERE json_extract(before_json, '$.format') = 'archived-change-v1'
+      OR json_extract(after_json, '$.format') = 'archived-change-v1';
     WITH ranked AS (
       SELECT id,
              ROW_NUMBER() OVER (
@@ -451,8 +454,7 @@ function ensureResumeChangeHistorySchema(database) {
                ORDER BY draft_revision DESC, id DESC
              ) AS position
       FROM resume_change_events
-      WHERE snapshot_version_id IS NULL
-        AND reverted_at IS NULL
+      WHERE reverted_at IS NULL
         AND undo_expired_at IS NULL
     )
     UPDATE resume_change_events

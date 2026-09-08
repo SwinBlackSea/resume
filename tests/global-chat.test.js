@@ -276,6 +276,7 @@ test('Web 刷新后可直接重试，连续点击只发一次，保留输入草�
   const button = window.document.querySelector('.ai-retry-button');
   assert.ok(button);
   button.click(); button.click();
+  await until(() => requests.length > 0);
   assert.equal(requests.length, 1);
   assert.deepEqual(requests[0], {
     retry_message_id: failed.body.persisted_message_id, conversation_id: conversationId,
@@ -285,6 +286,7 @@ test('Web 刷新后可直接重试，连续点击只发一次，保留输入草�
   assert.equal(window.activeTaskId, failed.body.task_id);
   prompt.value = '再压缩一点';
   window.document.querySelector('.assistant-input .send').click();
+  await until(() => requests.length > 1);
   assert.equal(requests[1].task_id, failed.body.task_id);
   await until(() => !window.promptBusy);
 });

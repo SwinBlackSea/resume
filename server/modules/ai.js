@@ -21,6 +21,8 @@ const {
   isModelServiceError,
 } = require('../lib/model-client');
 const { loadChatImages, releaseClosedChatImages } = require('../lib/chat-images');
+const { loadDocumentMaterials, conversationMaterials } = require('../lib/input-materials');
+const { readMessageLinks } = require('../lib/job-links');
 const { diffWords } = require('../lib/polish');
 const { withIdempotency } = require('../lib/idempotency');
 const { createNodeDeltaPair, createStructureDeltaPair } = require('../lib/resume-change');
@@ -798,6 +800,7 @@ async function assembleInput({
         : [],
     },
     conversationMessages: history,
+    materials: conversationMaterials(ctx.conversation.id, user, ctx.project.id),
     attachments,
     imageHistory,
   });
@@ -1575,6 +1578,26 @@ function applyRewriteProposal({ user, project, draft, action, requestId, ipHash 
   });
 }
 
+function applyRewriteAndSaveFirst({ ctx, user, action, requestId, ipHash }) {
+  return db.tx(() => {
+    const firstGeneration = !ResumeDom.plainText(
+      ResumeDom.toResumeDocument(parseJson(ctx.draft.resume_json, {}))).trim()
+      && !db.get('SELECT id FROM resume_versions WHERE project_id = ? LIMIT 1', [ctx.project.id]);
+    const change = applyRewriteProposal({
+      user, project: ctx.project, draft: ctx.draft, action, requestId, ipHash,
+    });
+    if (firstGeneration) {
+      const version = require('./versions').saveDraftVersion({
+        params: { id: ctx.project.id }, body: { name: '首次生成' },
+        user, req: { headers: {} }, requestId, ipHash, versionKind: 'generated',
+      });
+      Object.assign(change, { version_id: version.id, draft_revision: version.draft_revision,
+        revision: version.draft_revision, version_created: true });
+    }
+    return change;
+  });
+}
+
 function applyProfileSave({ action, ctx, user, requestId, ipHash }) {
   const payload = parseJson(action.payload_json, {});
   if (payload.operation !== 'update_basics') {
@@ -1751,6 +1774,17 @@ const routes = [
       const ctx = loadContext(params.id, user, {
         conversationId: body.conversation_id || null,
       });
+      if (body.client_request_id) {
+        if (typeof body.client_request_id !== 'string' || body.client_request_id.length > 128) {
+          throw problem.badRequest('请求标识无效');
+        }
+        const previous = db.get(`SELECT id, task_id FROM ai_messages
+          WHERE conversation_id = ? AND owner_id = ? AND role = 'user'
+          AND json_extract(model_metadata_json, '$.client_request_id') = ? LIMIT 1`,
+        [ctx.conversation.id, user.id, body.client_request_id]);
+        if (previous) return { replayed: true, task_id: previous.task_id,
+          conversation_id: ctx.conversation.id, actions: [], rejected: [] };
+      }
       const busy = db.get(
         `SELECT id FROM ai_tasks WHERE conversation_id = ? AND owner_id = ?
          AND status IN ('understanding','planning','validated') LIMIT 1`,
@@ -1794,11 +1828,15 @@ const routes = [
           scope_type: retryRequest.scope_type,
           scope_id: retryRequest.scope_id,
           attachment_ids: requestMetadata.attachment_ids || [],
+          document_import_ids: requestMetadata.document_import_ids || [],
+          link_materials: requestMetadata.link_materials || null,
+          initial_generation: requestMetadata.initial_generation === true,
         };
       }
       const content = String(body.content || '');
-      if (!content.trim() && !(Array.isArray(body.attachment_ids) && body.attachment_ids.length)) {
-        throw problem.badRequest('请输入要求或添加图片');
+      if (!content.trim() && !(Array.isArray(body.attachment_ids) && body.attachment_ids.length)
+        && !(Array.isArray(body.document_import_ids) && body.document_import_ids.length)) {
+        throw problem.badRequest('请输入要求或添加文件');
       }
       const scopeType = body.scope_type || 'RESUME_DOCUMENT';
       const locked = validateLockedScope(ctx, scopeType, body.scope_id || null);
@@ -1809,6 +1847,12 @@ const routes = [
           ? ctx.draft.revision
           : null;
       const attachmentIds = body.attachment_ids === undefined ? [] : body.attachment_ids;
+      const documentIds = body.document_import_ids || [];
+      loadDocumentMaterials(documentIds, user, ctx.project.id, ctx.conversation.id);
+      if (Array.isArray(attachmentIds) && attachmentIds.length + documentIds.length > 8) {
+        throw problem.badRequest('每条消息最多附带 8 个文件');
+      }
+      let linkMaterials = retryRequest ? body.link_materials : null;
       const attachments = await loadChatImages(attachmentIds, user, ctx.conversation.id);
       // Image decoding yields to the event loop. Recheck ownership/liveness
       // and the conversation lock before creating any task or user message.
@@ -1818,6 +1862,18 @@ const routes = [
         AND status IN ('understanding','planning','validated') LIMIT 1`, [ctx.conversation.id, user.id])) {
         throw problem.conflict('TASK_BUSY', 'AI 正在处理上一条消息，请稍候或停止生成');
       }
+      // Home uploads acquire their conversation on first use. Recheck after
+      // asynchronous decoding so concurrent projects cannot claim the same file.
+      db.tx(() => {
+        for (const id of attachmentIds) {
+          const upload = db.get('SELECT chat_conversation_id FROM uploads WHERE id = ? AND owner_id = ?', [id, user.id]);
+          if (!upload || (upload.chat_conversation_id && upload.chat_conversation_id !== ctx.conversation.id)) {
+            throw problem.badRequest('图片属于另一段对话，请重新上传');
+          }
+          db.run('UPDATE uploads SET chat_conversation_id = ? WHERE id = ? AND owner_id = ?',
+            [ctx.conversation.id, id, user.id]);
+        }
+      });
       const task = resolveTask({ ctx, user, body, scopeType, scopeId, content, retry: Boolean(retryRequest) });
       const userMessageId = retryRequest ? retryRequest.id : uuidv7();
       if (!retryRequest) db.run(
@@ -1834,7 +1890,10 @@ const routes = [
           scopeType,
           scopeId,
           scopeRevision,
-          JSON.stringify({ task_id: task.id, attachment_ids: attachmentIds }),
+          JSON.stringify({ task_id: task.id, attachment_ids: attachmentIds,
+            document_import_ids: documentIds, link_materials: linkMaterials,
+            client_request_id: body.client_request_id || null,
+            initial_generation: body.initial_generation === true }),
           nowIso(),
         ],
       );
@@ -1849,6 +1908,13 @@ const routes = [
       const running = inflight.begin(`global:${user.id}:${ctx.conversation.id}`);
       try {
         updateTaskState(task, { phase: 'planning', active_run_id: runId }, 'planning');
+        if (linkMaterials === null) {
+          linkMaterials = await readMessageLinks(content, running.signal);
+          running.signal.throwIfAborted();
+          db.run(`UPDATE ai_messages SET model_metadata_json =
+            json_set(model_metadata_json, '$.link_materials', json(?)) WHERE id = ? AND owner_id = ?`,
+          [JSON.stringify(linkMaterials), userMessageId, user.id]);
+        }
         assembled = await assembleInput({
           ctx,
           user,
@@ -1873,7 +1939,8 @@ const routes = [
           last_model_resume_hash: assembled.llmInput.workspace.resume.content_hash,
           last_model_result_type: result.response.result_type,
         }, 'validated');
-        applied = db.tx(() => applyActions({
+        applied = db.tx(() => {
+          const proposals = applyActions({
           ctx, user, response: result.response, validation: result.validation,
           provider: result.provider, model: result.model,
           promptVersion: result.prompt_version, schemaVersion: result.schema_version,
@@ -1884,7 +1951,26 @@ const routes = [
           scopeType, scopeId, scopeRevision, currentText: assembled.currentText,
           editingBase: assembled.editingBase, proposalBaseResume: assembled.proposalBaseResume,
           parentProposal: assembled.parentProposal, task,
-        }));
+          });
+          // The homepage authorizes creation of the first blank document only.
+          // Reused/imported/current documents retain the explicit Apply boundary.
+          const initial = db.get(`SELECT id FROM ai_messages WHERE conversation_id = ?
+            AND owner_id = ? AND role = 'user'
+            AND json_extract(model_metadata_json, '$.initial_generation') = 1 LIMIT 1`,
+          [ctx.conversation.id, user.id]);
+          const liveDraft = db.get('SELECT * FROM resume_drafts WHERE id = ? AND owner_id = ?', [ctx.draft.id, user.id]);
+          const rewrite = proposals.executed.find((item) => item.action_type === 'RESUME_REWRITE_PROPOSAL');
+          if (initial && rewrite && liveDraft.revision === ctx.draft.revision
+            && !ResumeDom.plainText(ResumeDom.toResumeDocument(parseJson(liveDraft.resume_json, {}))).trim()
+            && !db.get('SELECT id FROM resume_versions WHERE project_id = ? LIMIT 1', [ctx.project.id])) {
+            const action = db.get('SELECT * FROM ai_action_requests WHERE id = ?', [rewrite.id]);
+            const change = applyRewriteAndSaveFirst({ ctx: { ...ctx, draft: liveDraft }, user, action, requestId, ipHash });
+            settleTaskAfterAction(action);
+            rewrite.status = 'applied';
+            proposals.initialVersionId = change.version_id;
+          }
+          return proposals;
+        });
       } catch (error) {
         const failureMessageId = db.tx(() => persistTaskFailure({
           ctx,
@@ -1957,6 +2043,7 @@ const routes = [
         clarification: result.response.clarification || null,
         plan: result.response.plan || null,
         saved: false,
+        initial_version_id: applied.initialVersionId || null,
       };
     },
   },
@@ -2033,14 +2120,7 @@ const routes = [
               '这条建议正在继续调整，请完成当前沟通后应用最新建议',
             );
           }
-          result = applyRewriteProposal({
-            user,
-            project: ctx.project,
-            draft: ctx.draft,
-            action,
-            requestId,
-            ipHash,
-          });
+          result = applyRewriteAndSaveFirst({ ctx, user, action, requestId, ipHash });
         } else if (action.action_type === 'PROFILE_SAVE_PROPOSAL') {
           result = applyProfileSave({ action, ctx, user, requestId, ipHash });
         } else if (action.action_type === 'JOB_SET_CURRENT_PROPOSAL') {

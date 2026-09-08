@@ -97,7 +97,7 @@ test('结构差量只撤销 AI 操作命中的节点，不覆盖其他区域的�
   );
 });
 
-test('旧局部完整快照会压缩为节点差量，较早的已成版 payload 会归档', () => {
+test('旧局部完整快照压缩为节点差量，只有撤销已失效的旧 payload 才归档', () => {
   const database = new DatabaseSync(':memory:');
   database.exec(`
     CREATE TABLE resume_change_events (
@@ -149,6 +149,7 @@ test('旧局部完整快照会压缩为节点差量，较早的已成版 payload
   );
 
   const previous = process.env.RESUME_CHANGE_PAYLOAD_RETENTION_DAYS;
+  database.prepare("UPDATE resume_change_events SET undo_expired_at = created_at WHERE id = 'old-versioned'").run();
   process.env.RESUME_CHANGE_PAYLOAD_RETENTION_DAYS = '7';
   try {
     const result = compactResumeChangeEvents(database);

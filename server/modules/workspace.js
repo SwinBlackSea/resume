@@ -1,7 +1,7 @@
 'use strict';
 /**
- * 工作区聚合：一次请求返回三栏所需的全部服务端状态（TECH §4.2）。
- * 个人信息、岗位信息、当前简历、历史版本与生成进度都在工作区内完成。
+ * 工作区聚合：返回当前简历、对话及按需材料所需的服务端状态。
+ * 保留既有资料接口与数据；界面围绕简历和对话，不要求先建资料档案。
  */
 const db = require('../lib/db');
 const { uuidv7, nowIso, problem } = require('../lib/util');
@@ -17,6 +17,7 @@ const {
   configuredProvider,
 } = require('../lib/model-client');
 const ResumeDom = require('../../resume-dom');
+const { withIdempotency } = require('../lib/idempotency');
 
 function toExperienceView(row) {
   const meta = JSON.parse(row.meta_json || '{}');
@@ -151,10 +152,16 @@ function toMessageView(row, options = {}) {
     id: row.id,
     role: row.role,
     content: row.content,
+    client_request_id: modelMetadata.client_request_id || null,
     attachments: (modelMetadata.attachment_ids || []).flatMap((id) => {
       const upload = db.get('SELECT id, original_name FROM uploads WHERE id = ? AND owner_id = ?', [id, row.owner_id]);
       return upload ? [{ id: upload.id, file_name: upload.original_name,
         preview_url: `/api/v1/uploads/${upload.id}/preview` }] : [];
+    }),
+    documents: (modelMetadata.document_import_ids || []).flatMap((id) => {
+      const item = db.get(`SELECT d.id, u.original_name FROM document_imports d
+        JOIN uploads u ON u.id = d.upload_id WHERE d.id = ? AND d.owner_id = ?`, [id, row.owner_id]);
+      return item ? [{ id: item.id, file_name: item.original_name }] : [];
     }),
     scope_type: row.scope_type,
     scope_label: row.scope_type ? SCOPE_LABEL[row.scope_type] || row.scope_type : '',
@@ -414,7 +421,12 @@ const routes = [
     handler: ({ user }) => ({
       items: db
         .all('SELECT * FROM resume_projects WHERE owner_id = ? ORDER BY created_at ASC', [user.id])
-        .map((row) => ({ id: row.id, name: row.name, revision: row.revision, status: row.status })),
+        .map((row) => {
+          const job = row.current_job_id && db.get('SELECT title, company FROM target_jobs WHERE id = ?', [row.current_job_id]);
+          const draft = db.get('SELECT revision, updated_at FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [row.id, user.id]);
+          return { id: row.id, name: row.name, revision: row.revision, status: row.status,
+            updated_at: draft?.updated_at || row.updated_at, job: job || null };
+        }),
     }),
   },
   {
@@ -445,13 +457,31 @@ const routes = [
   {
     method: 'POST',
     pattern: '/projects',
-    handler: ({ body, user }) =>
-      db.tx(() => {
+    handler: ({ body, user, req }) =>
+      withIdempotency(user, req.headers['idempotency-key'], 'resume_project', () => db.tx(() => {
+        let startingDocument = ResumeDom.toResumeDocument({
+          schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+          root: { id: 'resume-root', type: 'element', tag: 'article',
+            semantic: { kind: 'document' }, children: [] },
+        });
+        let startingJob = null;
+        if (body.copy_project_id) {
+          const original = db.get('SELECT * FROM resume_projects WHERE id = ? AND owner_id = ?', [body.copy_project_id, user.id]);
+          if (!original) throw problem.notFound('要复用的简历不存在');
+          const originalDraft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [original.id, user.id]);
+          if (!originalDraft || body.copy_draft_revision !== originalDraft.revision) {
+            throw problem.conflict('REVISION_CONFLICT', '原简历已变化，请保存并刷新后再制作另一份');
+          }
+          startingDocument = ResumeDom.toResumeDocument(JSON.parse(originalDraft.resume_json));
+          startingJob = original.current_job_id
+            ? db.get('SELECT * FROM target_jobs WHERE id = ? AND owner_id = ?', [original.current_job_id, user.id]) : null;
+        }
         const projectId = uuidv7();
+        const name = String(body.name || '新的简历').trim().slice(0, 120) || '新的简历';
         db.run(
           `INSERT INTO resume_projects (id, owner_id, name, revision, status, created_at, updated_at)
            VALUES (?, ?, ?, 1, 'active', ?, ?)`,
-          [projectId, user.id, body.name || '未命名简历项目', nowIso(), nowIso()],
+          [projectId, user.id, name, nowIso(), nowIso()],
         );
         const profileId = uuidv7();
         db.run(
@@ -462,8 +492,8 @@ const routes = [
         const draftId = uuidv7();
         db.run(
           `INSERT INTO resume_drafts (id, project_id, owner_id, resume_json, revision, has_unsnapshotted_changes, created_at, updated_at)
-           VALUES (?, ?, ?, '{}', 1, 0, ?, ?)`,
-          [draftId, projectId, user.id, nowIso(), nowIso()],
+           VALUES (?, ?, ?, ?, 1, 0, ?, ?)`,
+          [draftId, projectId, user.id, JSON.stringify(startingDocument), nowIso(), nowIso()],
         );
         const conversationId = uuidv7();
         db.run(
@@ -472,8 +502,26 @@ const routes = [
           [conversationId, projectId, user.id, nowIso(), nowIso()],
         );
         db.run('UPDATE resume_projects SET current_profile_id = ? WHERE id = ?', [profileId, projectId]);
-        return { id: projectId, name: body.name || '未命名简历项目' };
-      }),
+        if (startingJob) {
+          const jobId = uuidv7();
+          db.run(`INSERT INTO target_jobs
+            (id, project_id, owner_id, title, company, confirmed_text, ocr_text, analysis_json, revision, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'confirmed', ?, ?)`,
+          [jobId, projectId, user.id, startingJob.title, startingJob.company,
+            startingJob.confirmed_text, startingJob.ocr_text, startingJob.analysis_json, nowIso(), nowIso()]);
+          for (const file of db.all('SELECT * FROM job_files WHERE job_id = ? AND owner_id = ?',
+            [startingJob.id, user.id])) {
+            // Independent job-file records reuse immutable owner-owned bytes.
+            db.run(`INSERT INTO job_files
+              (id, job_id, owner_id, upload_id, sort_order, ocr_raw_text, ocr_confidence, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [uuidv7(), jobId, user.id, file.upload_id, file.sort_order,
+              file.ocr_raw_text, file.ocr_confidence, nowIso()]);
+          }
+          db.run('UPDATE resume_projects SET current_job_id = ? WHERE id = ?', [jobId, projectId]);
+        }
+        return { id: projectId, name, conversation_id: conversationId };
+      })),
   },
   {
     method: 'GET',

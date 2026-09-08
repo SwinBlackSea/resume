@@ -30,8 +30,7 @@ function protectedData(database) {
   const result = Object.fromEntries(tables.map((table) =>
     [table, hash(database.prepare(`SELECT * FROM ${table} ORDER BY id`).all())]));
   result.history_window = hash(database.prepare(
-    `SELECT * FROM resume_change_events WHERE snapshot_version_id IS NULL
-     AND undo_expired_at IS NULL
+    `SELECT * FROM resume_change_events WHERE undo_expired_at IS NULL
      AND (reverted_at IS NULL OR redo_invalidated_at IS NULL)
      ORDER BY id`,
   ).all());

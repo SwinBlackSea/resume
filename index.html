@@ -100,10 +100,65 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 @media(max-width:760px){#document-import-modal{padding:0}.document-import-trigger .wide{display:none}.document-import-trigger .compact{display:inline}.document-import-modal{width:100%;height:100%;max-height:none;border-radius:0}.document-import-modal .modal-head{padding:16px 17px 12px}.document-import-modal .modal-body{padding:14px 14px 18px}.document-import-drop{min-height:calc(100vh - 150px);padding:24px 18px}.document-import-review{grid-template-columns:1fr}.document-import-source,.document-import-result{height:430px}.document-import-result .resume{padding:30px 25px;zoom:.74!important}.document-import-modes{grid-template-columns:1fr}.document-import-actions{padding-bottom:max(4px,env(safe-area-inset-bottom))}.document-import-review-head{min-height:auto}.document-import-quality{align-items:flex-start;flex-wrap:wrap}.document-import-quality span{width:100%;margin-left:0}}
 </style>
 </head>
-<body>
+<style>
+/* Resume-first flow. Historical prototype is not a layout dependency. */
+[hidden]{display:none!important}
+.app{grid-template-columns:minmax(0,1fr) 390px}.context{display:none}.canvas{grid-column:1}.assistant-panel{grid-column:2}
+.topbar{grid-column:1/-1}.brand{cursor:pointer}.top-actions .generate{display:none}
+.home-view{max-width:850px;margin:0 auto;padding:52px 24px 80px}
+.home-brand{display:flex;align-items:center;gap:10px;color:#1d1d1f;font-size:18px;font-weight:700}
+.home-view h1{margin:70px 0 12px;font-size:38px;letter-spacing:-1.2px;color:#1d1d1f}
+.home-intro{color:#6e6e73;font-size:15px;line-height:1.8;margin-bottom:28px}
+.home-composer{border:1px solid #d9dce2;border-radius:22px;padding:20px;background:#fff;box-shadow:0 12px 40px #22334d0a}
+.home-composer:focus-within{border-color:#0071e3;box-shadow:0 0 0 3px #0071e310}
+.home-composer textarea{width:100%;min-height:155px;resize:vertical;border:0;outline:0;background:transparent;font:inherit;font-size:16px;line-height:1.7}
+.home-tools,.material-tools,.flow-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.home-tools button,.material-tools button,.flow-heading button{border:0;border-radius:10px;padding:9px 13px;background:#f2f3f6;color:#45464c;font:inherit;font-size:13px;cursor:pointer}
+.home-tools .primary{margin-left:auto;background:#0071e3;color:white;padding:11px 20px}
+.home-tools button:disabled{opacity:.5;cursor:wait}
+.flow-note{font-size:12px;color:#767982;line-height:1.7;margin:12px 0}
+.flow-error{color:#b3261e;background:#fff1ef;padding:12px;border-radius:10px;font-size:14px;line-height:1.7}
+.flow-file-list{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.flow-file{display:flex;gap:10px;align-items:center;padding:10px 12px;background:#f4f6f9;border-radius:10px;max-width:100%;font-size:12px}
+.flow-file span{overflow-wrap:anywhere}.flow-file button{border:0;background:transparent;font-size:18px;cursor:pointer}
+.flow-heading{margin-top:40px;justify-content:space-between}.flow-heading h2{font-size:16px;margin:0}
+.resume-list{display:grid;gap:10px;margin-top:16px}
+.resume-list button{display:flex;justify-content:space-between;text-align:left;gap:20px;padding:17px;background:white;border:1px solid #e3e5ea;border-radius:13px;cursor:pointer;font:inherit}
+.resume-list strong{display:block;font-size:14px}.resume-list small{display:block;margin-top:5px;color:#777;font-size:12px}
+.material-tools{padding:8px 12px;border-bottom:1px solid #e9eaed}.material-tools button{font-size:11px;padding:7px 9px}
+.target-job{padding:9px 14px;font-size:12px;line-height:1.6;color:#535b67;border-bottom:1px solid #edf0f3}
+.target-job button{border:0;background:transparent;color:#0071e3;cursor:pointer;font:inherit}
+.chat-image.document-file{width:auto;max-width:240px;height:auto;min-height:58px;padding:12px 22px 12px 10px;overflow-wrap:anywhere;font-size:12px}
+.resume-empty{padding:90px 28px;text-align:center;color:#777;line-height:1.9}
+.home-view .resume-list button:hover{border-color:#0071e3}
+body.home-mode .app{display:none}body:not(.home-mode) .home-view{display:none}
+.flow-heading a{color:#0071e3}.top-actions .resume-nav{display:inline-flex}
+@media(min-width:1161px){.app.assistant-collapsed{grid-template-columns:minmax(0,1fr) 56px}.assistant-panel.collapsed .material-tools,.assistant-panel.collapsed .target-job{display:none}}
+@media(min-width:761px) and (max-width:1160px){.app{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){.app{grid-template-columns:minmax(0,1fr)}.home-view{padding:24px 18px 50px}.home-view h1{font-size:29px;margin-top:44px}.top-actions .resume-nav{font-size:11px;padding:7px}.topbar .brand{font-size:0}.topbar .brand-mark{font-size:16px}.resume-list button{flex-direction:column;gap:4px}.home-tools button{font-size:12px;padding:9px}.home-tools .primary{padding:10px 14px}}
+@media(max-width:760px){.canvas{overflow:auto}.top-actions{gap:4px}.home-tools{flex-wrap:wrap}}
+</style>
+<body class="home-mode">
+<section class="home-view" id="home-view" aria-labelledby="home-title">
+  <div class="home-brand"><span class="brand-mark">简</span>简历星球</div>
+  <h1 id="home-title">从你的经历，到满意的简历</h1>
+  <p class="home-intro">粘贴岗位链接或描述，上传已有简历，也可以直接告诉我你的经历和求职目标。</p>
+  <div id="home-reuse" class="flow-note" hidden></div>
+  <div class="home-composer" id="home-composer">
+    <textarea id="home-prompt" aria-label="经历、求职目标和修改要求" placeholder="例如：我做了 3 年产品经理，想申请企业服务岗位。请结合下面的经历，帮我制作一份简洁的简历。"></textarea>
+    <div class="flow-file-list" id="home-attachments" aria-live="polite"></div>
+    <div class="home-tools"><button id="home-upload" type="button">＋ 上传简历 / 附件</button><button id="home-search" type="button">搜索岗位 ↗</button><button id="home-submit" class="primary" type="button">开始生成</button></div>
+    <input id="home-files" type="file" hidden multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp">
+  </div>
+  <p class="flow-note">附件上传后不会立即生成。Enter 提交，Shift＋Enter 换行。无需先填写资料或选择模板。</p>
+  <div id="home-error" class="flow-error" role="alert" hidden></div>
+  <div class="flow-heading"><h2>我的简历</h2><button id="reload-resumes" type="button">刷新列表</button></div>
+  <div class="resume-list" id="resume-list" aria-live="polite"></div>
+</section>
 <div class="app">
 <header class="topbar">
   <div class="brand"><span class="brand-mark">简</span>简历星球</div>
+  <div class="top-actions"><button class="soft-btn resume-nav" id="resume-list-button">我的简历</button><button class="soft-btn resume-nav" id="another-resume">制作另一份简历</button><button class="soft-btn resume-nav" id="preview-current">预览 / 下载</button></div>
   <div class="top-actions"><span class="save-state" id="save-state">已自动保存</span><button class="soft-btn save-version-btn" id="save-version-button" disabled>保存为版本</button><button class="soft-btn history-open">历史版本 · 3</button><button class="btn generate ai-entry ai-entry-primary"><span class="ai-spark-icon ai-spark-sm" aria-hidden="true"><svg viewBox="0 0 24 24"><path class="spark-main" d="m11 3 .72 3.04a6.35 6.35 0 0 0 4.72 4.72l3.04.72-3.04.72a6.35 6.35 0 0 0-4.72 4.72L11 21l-.72-3.08a6.35 6.35 0 0 0-4.72-4.72l-3.04-.72 3.04-.72a6.35 6.35 0 0 0 4.72-4.72L11 3Z" fill="currentColor"/><path class="spark-mini" d="m19 3 .25 1.05a2.25 2.25 0 0 0 1.7 1.7L22 6l-1.05.25a2.25 2.25 0 0 0-1.7 1.7L19 9l-.25-1.05a2.25 2.25 0 0 0-1.7-1.7L16 6l1.05-.25a2.25 2.25 0 0 0 1.7-1.7L19 3Z" fill="currentColor" opacity=".7"/></svg></span><span>生成简历</span></button><button class="icon-btn" aria-label="个人中心">陈</button></div>
 </header>
 
@@ -146,11 +201,13 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
     <div class="assistant-identity"><span class="ai-spark-icon ai-spark-lg assistant-ai-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path class="spark-main" d="m11 3 .72 3.04a6.35 6.35 0 0 0 4.72 4.72l3.04.72-3.04.72a6.35 6.35 0 0 0-4.72 4.72L11 21l-.72-3.08a6.35 6.35 0 0 0-4.72-4.72l-3.04-.72 3.04-.72a6.35 6.35 0 0 0 4.72-4.72L11 3Z" fill="currentColor"/><path class="spark-mini" d="m19 3 .25 1.05a2.25 2.25 0 0 0 1.7 1.7L22 6l-1.05.25a2.25 2.25 0 0 0-1.7 1.7L19 9l-.25-1.05a2.25 2.25 0 0 0-1.7-1.7L16 6l1.05-.25a2.25 2.25 0 0 0 1.7-1.7L19 3Z" fill="currentColor" opacity=".7"/></svg></span><span class="assistant-title"><b id="assistant-title">AI 简历助手</b><span>可以修改局部，也可以统筹整份简历</span></span></div>
     <div class="assistant-head-actions"><button id="new-chat-button" aria-label="开始新对话">＋ 新对话</button><button class="assistant-collapse" id="assistant-collapse" type="button" aria-label="收起 AI 助手" aria-expanded="true" title="收起 AI 助手"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="assistant-close" aria-label="关闭 AI 助手">×</button></div>
   </div>
+  <div class="target-job" id="current-target-job"></div>
+  <div class="material-tools"><button id="supplement-file">上传文件</button><button id="supplement-experience">补充经历</button><button id="supplement-job">提供或更换岗位</button></div>
   <div class="assistant-messages" id="chat-messages"><div class="bubble ai">你可以直接询问整份简历；点击文字旁的“就地改写”可快速润色。需要调整结构或联动其他内容时，在这里继续聊。</div></div>
   <div class="assistant-quick"><button>更简洁</button><button>突出工作成果</button><button>更符合岗位</button><button>检查是否夸张</button></div>
   <div class="scope-bar global" id="selection-context"><div class="scope-target"><span id="selection-label" role="button" tabindex="0" title="查看对应内容">@整份简历</span><button id="clear-selection" aria-label="改为针对整份简历" title="改为针对整份简历">×</button></div></div>
-  <div class="assistant-input" id="composer"><div id="chat-attachments" class="chat-images" aria-live="polite"></div><textarea id="prompt" rows="2" placeholder="告诉我你想怎么修改整份简历…"></textarea><div class="assistant-tools"><button class="attach" aria-label="添加聊天图片">＋ 图片</button><button class="mic" aria-label="语音输入">◉ 语音</button><button id="stop-ai-request" hidden aria-label="停止生成">停止生成</button><button class="send" aria-label="发送">发送</button></div></div>
-  <input type="file" id="file-input" hidden multiple accept="image/png,image/jpeg,image/webp">
+  <div class="assistant-input" id="composer"><div id="chat-attachments" class="chat-images" aria-live="polite"></div><textarea id="prompt" rows="2" placeholder="告诉我你想怎么修改整份简历…"></textarea><div class="assistant-tools"><button class="attach" aria-label="添加聊天文件或图片">＋ 附件</button><button class="mic" hidden aria-label="语音输入">◉ 语音</button><button id="stop-ai-request" hidden aria-label="停止生成">停止生成</button><button class="send" aria-label="发送">发送</button></div></div>
+  <input type="file" id="file-input" hidden multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp">
 </aside>
 <button class="assistant-toggle" aria-label="打开 AI 助手"><span class="ai-spark-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path class="spark-main" d="m11 3 .72 3.04a6.35 6.35 0 0 0 4.72 4.72l3.04.72-3.04.72a6.35 6.35 0 0 0-4.72 4.72L11 21l-.72-3.08a6.35 6.35 0 0 0-4.72-4.72l-3.04-.72 3.04-.72a6.35 6.35 0 0 0 4.72-4.72L11 3Z" fill="currentColor"/><path class="spark-mini" d="m19 3 .25 1.05a2.25 2.25 0 0 0 1.7 1.7L22 6l-1.05.25a2.25 2.25 0 0 0-1.7 1.7L19 9l-.25-1.05a2.25 2.25 0 0 0-1.7-1.7L16 6l1.05-.25a2.25 2.25 0 0 0 1.7-1.7L19 3Z" fill="currentColor" opacity=".7"/></svg></span><span>AI 助手</span></button>
 
@@ -258,12 +315,17 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus
 
 <div class="overlay" id="run-modal"><div class="modal" style="width:min(540px,100%)"><div class="agent-run"><span class="ai-spark-icon ai-spark-lg generation-ai-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path class="spark-main" d="m11 3 .72 3.04a6.35 6.35 0 0 0 4.72 4.72l3.04.72-3.04.72a6.35 6.35 0 0 0-4.72 4.72L11 21l-.72-3.08a6.35 6.35 0 0 0-4.72-4.72l-3.04-.72 3.04-.72a6.35 6.35 0 0 0 4.72-4.72L11 3Z" fill="currentColor"/><path class="spark-mini" d="m19 3 .25 1.05a2.25 2.25 0 0 0 1.7 1.7L22 6l-1.05.25a2.25 2.25 0 0 0-1.7 1.7L19 9l-.25-1.05a2.25 2.25 0 0 0-1.7-1.7L16 6l1.05-.25a2.25 2.25 0 0 0 1.7-1.7L19 3Z" fill="currentColor" opacity=".7"/></svg></span><h2>AI 正在生成新简历</h2><p id="generation-status">你可以关闭窗口，任务会继续运行</p><div class="run-log" id="run-log"><div class="run-step active"><i>1</i>正在读取资料与岗位</div><div class="run-step"><i>2</i>正在冻结本次输入</div><div class="run-step"><i>3</i>正在重组简历内容</div><div class="run-step"><i>4</i>正在渲染 PDF 与 DOCX</div><div class="run-step"><i>5</i>正在检查文档结构</div></div></div></div></div>
 <div class="toast" id="toast">已完成</div>
+<div class="overlay" id="resume-preview-modal"><div class="modal" style="width:min(920px,100%);max-height:94vh">
+  <div class="modal-head"><div><h2 id="resume-preview-title">简历预览</h2><p id="resume-preview-note">预览不会改变正文</p></div><button class="close" aria-label="关闭预览">×</button></div>
+  <div class="material-tools" id="resume-preview-downloads"><button data-download-format="pdf">下载 PDF</button><button data-download-format="docx">下载 Word</button></div>
+  <div style="overflow:auto;max-height:75vh;padding:24px;background:#f1f3f6"><article class="resume" id="resume-preview-document"></article></div>
+</div></div>
 
 <script src="resume-dom.js"></script>
 <script>
 /* =========================================================================
    简历星球 · 前端工作台
-   - 视觉与结构 100% 还原 index.prototype.backup.html
+   - 当前简历与 AI 对话，首页统一输入，项目独立保存
    - 所有数据来自后端 API（PRD/TECH 约束由服务端保证）
    - AI 只提出方案，界面只在后端真实执行后展示完成状态
    ========================================================================= */
@@ -332,9 +394,13 @@ function refresh(){
       rememberConversation(null);return api('/projects/'+PROJECT_ID);}
     throw error;
   }).then(function(data){
+    var keepEditing=inlineEditComposing||inlineTransactionsPending>0||
+      $$("#resume-document [data-resume-editable=true]").some(function(el){
+        return el.dataset.savedText!==undefined&&directElementText(el)!==el.dataset.savedText});
+    if(WS&&WS.draft&&Number(data.draft.revision)<Number(WS.draft.revision))data.draft=WS.draft;
     WS=data;
     if(data.conversation&&data.conversation.id)rememberConversation(data.conversation.id);
-    renderAll();return data;
+    renderAll({keepEditing:keepEditing});return data;
   });}
 
 /* ---------------- 待成版修改（草稿层，不自动进入历史） ---------------- */
@@ -347,14 +413,15 @@ function labelOfScope(scopeLabel,changeType){
 function syncPendingFromServer(){
   pendingChanges=(WS.draft.pending_changes||[]).map(function(c){
     return (c.after&&c.after.label)||labelOfScope(c.scope_label,c.change_type);});
+  if(WS.draft.has_unsnapshotted_changes&&!pendingChanges.length)pendingChanges.push('撤销或重做简历内容');
   refreshPendingUI();
 }
 function refreshPendingUI(){
-  var button=$("#save-version-button"),has=pendingChanges.length>0;
+  var button=$("#save-version-button"),has=Boolean(WS&&WS.draft&&WS.draft.has_unsnapshotted_changes);
   button.disabled=!has;button.classList.toggle("ready",has);
   $("#save-state").textContent=has?"草稿已自动保存":"已保存为版本";
 }
-function markUnsaved(change){if(change&&pendingChanges.indexOf(change)===-1)pendingChanges.push(change);refreshPendingUI()}
+function markUnsaved(change){if(WS&&WS.draft)WS.draft.has_unsnapshotted_changes=true;if(change&&pendingChanges.indexOf(change)===-1)pendingChanges.push(change);refreshPendingUI()}
 function removeLastPendingChange(){if(pendingChanges.length)pendingChanges.pop();refreshPendingUI()}
 function renderHistoryStepControls(){
   var draft=WS&&WS.draft||{},undo=draft.undo_stack||[],redo=draft.redo_stack||[];
@@ -381,8 +448,17 @@ function periodOf(item){
 function maskPhone(p){p=String(p||'');return p.length>=7?p.slice(0,3)+' **** '+p.slice(-4):p}
 function exps(type){return (WS.profile.experiences||[]).filter(function(e){return e.type===type})}
 
-function renderAll(){
-  renderContextCards();renderResume();renderProfileModal();renderJobModal();
+function renderAll(options){
+  $("#current-target-job").textContent=WS.job
+    ?'当前目标岗位：'+(WS.job.title||'已提供岗位')+(WS.job.company?' · '+WS.job.company:'')
+    :'未设置目标岗位 · 也可以先完成通用简历';
+  var candidate=(WS.conversation&&WS.conversation.messages||[]).flatMap(function(m){return m.actions||[]}).reverse().find(function(a){
+    return a.action_type==='JOB_SET_CURRENT_PROPOSAL'&&a.status==='awaiting_confirmation'});
+  if(candidate&&candidate.payload&&candidate.payload.title){
+    $("#current-target-job").textContent+='；识别到：'+candidate.payload.title+'（待确认，不会自动更换）';
+  }
+  $(".doc-toolbar-copy b").textContent=WS.project.name||'当前简历';
+  renderContextCards();if(!options||!options.keepEditing)renderResume();renderProfileModal();renderJobModal();
   renderChat();renderHistory();syncPendingFromServer();renderHistoryStepControls();
   updateHistoryCount();syncDocToolbarFloating();
 }
@@ -413,7 +489,7 @@ function renderContextCards(){
 
 var resumeDomRenderer=null;
 var inlineEditTarget=null,inlineEditTimer=null,inlineEditComposing=false;
-var inlineSaveChain=Promise.resolve();
+var inlineSaveChain=Promise.resolve(),inlineTransactionsPending=0;
 var localAiState=null,localAiRequestSeq=0,lastLocalSelection=null;
 var nodeStructureState=null,nodeStructureHideTimer=null,nodeStructureActionPending=false;
 var inlineSaveFailureCount=0;
@@ -483,6 +559,11 @@ function renderResume(){
   hideNodeStructureTools();
   if(!resumeDomRenderer)resumeDomRenderer=new ResumeDom.Renderer(doc);
   resumeDomRenderer.render(domDocument);
+  if(!domDocument.root.children.length){
+    var empty=document.createElement('div');empty.className='resume-empty';
+    empty.textContent='在右侧告诉我你的经历和目标，或上传已有简历。建议生成后可以预览，满意再应用。';
+    doc.appendChild(empty);
+  }
   hydrateImportedScene(doc);
   fitImportedPages(doc);
   syncResumeZoomLayout();
@@ -709,6 +790,7 @@ function runNodeStructureAction(action,chosenState){
 }
 function queueDocumentTransaction(operations,label,inputType,scopeId){
   var mutationId=uid();
+  inlineTransactionsPending++;
   setInlineEditStatus("正在自动保存…","saving");
   inlineSaveChain=inlineSaveChain.catch(function(){/* 上一次失败不阻断后续用户操作 */}).then(function(){
     return api('/projects/'+PROJECT_ID+'/resume-draft/transactions',{method:'POST',body:{
@@ -733,7 +815,7 @@ function queueDocumentTransaction(operations,label,inputType,scopeId){
       return refresh().then(function(){return null});
     }
     return null;
-  });
+  }).finally(function(){inlineTransactionsPending--});
   return inlineSaveChain;
 }
 function saveDirectElement(element,inputType){
@@ -1239,18 +1321,24 @@ var chatAttachments=[];
 function appendChatImages(container,items,removable){
   items.forEach(function(item){
     var frame=document.createElement('div');frame.className='chat-image';
+    if(item.document_import_id||item.isDocument){
+      frame.classList.add('document-file');
+      var label=document.createElement('div');label.textContent='▤ '+(item.file_name||item.name||'补充文件');
+      frame.appendChild(label);
+    }else{
     var image=document.createElement('img');image.alt=item.file_name||item.name||'聊天图片';
     image.src=item.preview_url?toApiUrl(item.preview_url):item.url;
     var link=document.createElement('a');link.href=image.src;link.target='_blank';link.rel='noopener';
     link.title='查看完整图片';link.style.cssText='display:block;width:100%;height:100%';
     link.appendChild(image);frame.appendChild(link);
+    }
     if(item.status&&item.status!=='ready'){
-      var status=document.createElement('span');status.textContent=item.status==='failed'?'上传失败':'上传中…';
+      var status=document.createElement('span');status.textContent=item.status==='failed'?'处理失败':item.status==='recognizing'?'识别中…':'上传中…';
       frame.appendChild(status);
     }
     if(removable){
       var remove=document.createElement('button');remove.type='button';remove.textContent='×';
-      remove.setAttribute('aria-label','移除图片');
+      remove.setAttribute('aria-label','移除附件');
       remove.onclick=function(){removeChatAttachment(item)};frame.appendChild(remove);
     }
     container.appendChild(frame);
@@ -1272,14 +1360,15 @@ function clearChatAttachments(){
 function addChatFiles(files){
   var list=Array.from(files||[]);
   if(!list.length)return;
-  if(list.some(function(file){return !['image/png','image/jpeg','image/webp'].includes(file.type)})){
-    toast('聊天支持 PNG、JPG、WEBP 图片；简历文件请使用“从文件导入”');return;
+  if(list.some(function(file){return !/\.(pdf|docx?|png|jpe?g|webp)$/i.test(file.name)})){
+    toast('支持 PDF、Word、PNG、JPG、WEBP 文件');return;
   }
-  if(chatAttachments.length+list.length>8){toast('每条消息最多添加 8 张图片');return}
+  if(chatAttachments.length+list.length>8){toast('每条消息最多添加 8 个附件');return}
   if(list.some(function(file){return file.size>20*1024*1024})){toast('单张图片不能超过 20 MB');return}
   var conversationId=WS.conversation&&WS.conversation.id,epoch=chatEpoch;
   list.forEach(function(file){
-    var item={name:file.name,url:URL.createObjectURL(file),status:'uploading'};
+    var item={name:file.name,url:URL.createObjectURL(file),status:'uploading',
+      isDocument:/\.(pdf|docx?)$/i.test(file.name)};
     chatAttachments.push(item);renderChatAttachments();
     api('/uploads',{method:'POST',body:{original_name:file.name,mime_type:file.type,size:file.size,
       chat_conversation_id:conversationId}}).then(function(upload){
@@ -1391,7 +1480,8 @@ function renderChat(){
   var msgs=(WS.conversation&&WS.conversation.messages)||[];
   if(!msgs.length)addBubble('ai','你可以直接询问整份简历；点击文字旁的“就地改写”可快速润色。需要调整结构或联动其他内容时，在这里继续聊。');
   msgs.forEach(function(m){
-    if(m.role==='user')appendChatImages(addBubble('user',m.content,scopeLabelOf(m)),m.attachments||[],false);
+    if(m.role==='user')appendChatImages(addBubble('user',m.content,scopeLabelOf(m)),
+      (m.attachments||[]).concat((m.documents||[]).map(function(d){return Object.assign({isDocument:true},d)})),false);
     else{
       var actions=m.actions||[];
       if(!actions.length){
@@ -1474,6 +1564,7 @@ function startNewChat(){
     method:'POST',idemKey:'new-chat-'+conversationId,body:{conversation_id:conversationId},
   }).then(function(result){
     rememberConversation(result.id);
+    preparingPrompt=null;
     clearChatAttachments();
     resetChatScope();
     return refresh();
@@ -1550,6 +1641,11 @@ function renderProposal(a,container){
   card.querySelector('.current-copy').textContent=beforeText;
   if(hasBase)card.querySelector('.base-copy').textContent=p.editing_base;
   card.querySelector('.suggestion-copy').textContent=afterText;
+  if(p.target_resume_document){
+    var previewButton=document.createElement('button');previewButton.textContent='预览整份简历';previewButton.className='preview-document';
+    previewButton.onclick=function(){showResumePreview(p.target_resume_document,'修改建议预览',false)};
+    card.querySelector('.proposal-actions').prepend(previewButton);
+  }
   if(afterText.length>360){
     var copy=card.querySelector('.suggestion-copy');
     copy.style.maxHeight='180px';copy.style.overflow='hidden';
@@ -1609,6 +1705,7 @@ function renderHistory(){
 /* ---------------- 作用范围与选区（PRD §6.6：一次只锁定一个范围） ---------------- */
 var selectedText=null,activeContext=null,tools=$("#selection-tools"),selectionToolsAnchor=null;
 var promptBusy=false,promptRequestSeq=0,activePromptRequest=0;
+var preparingPrompt=null;
 var remoteChatBusy=false,chatStatusTimer=null;
 function syncRemoteChatRun(){
   var running=((WS.conversation&&WS.conversation.tasks)||[]).some(function(task){
@@ -1641,6 +1738,13 @@ function watchRemoteChatRun(){
 }
 function stopChatGeneration(){
   if(!promptBusy)return;
+  if(preparingPrompt){
+    $("#prompt").value=preparingPrompt.text;
+    chatAttachments=preparingPrompt.items;renderChatAttachments();
+    preparingPrompt=null;abandonPromptUi();
+    try{sessionStorage.removeItem('resumeInitial:'+PROJECT_ID)}catch(_){}
+    toast('已停止本轮发送，附件仍保留');return;
+  }
   var button=$("#stop-ai-request"),epoch=chatEpoch,conversationId=WS.conversation&&WS.conversation.id;
   button.disabled=true;
   api('/projects/'+PROJECT_ID+'/ai/status?conversation_id='+encodeURIComponent(conversationId))
@@ -1824,13 +1928,15 @@ function restoreAssistantCollapsed(){
   setAssistantCollapsed(collapsed,false);
 }
 function focusAssistant(message){
+  var focusOrigin=document.activeElement;
   setAssistantCollapsed(false,true);
   $("#assistant-panel").classList.add("open","attention");
   if(message)addBubble("ai",message);
   setTimeout(function(){
     var panel=$("#assistant-panel"),prompt=$("#prompt");
     if(!panel||!prompt)return;
-    panel.classList.remove("attention");prompt.focus();
+    panel.classList.remove("attention");
+    if(document.activeElement===focusOrigin||document.activeElement===document.body)prompt.focus();
   },250);}
 $(".assistant-close").onclick=function(){$("#assistant-panel").classList.remove("open")};
 $("#assistant-collapse").onclick=function(){
@@ -1865,7 +1971,7 @@ $("#selection-label").addEventListener("keydown",function(e){
 
 /* ---------------- 发送消息：范围在发送时冻结（P0-17） ---------------- */
 function sendPrompt(options){
-  options=options&&(options.quickReplyId||options.retryMessageId)?options:{};
+  options=options&&(options.quickReplyId||options.retryMessageId||options.clientRequestId)?options:{};
   var retryMessageId=options.retryMessageId||null;
   var input=$("#prompt"),value=input.value,requestContext=activeContext;
   if((!retryMessageId&&!value.trim()&&!chatAttachments.length)||promptBusy)return;
@@ -1879,6 +1985,7 @@ function sendPrompt(options){
   var requestTaskId=activeTaskId;
   var requestEpoch=chatEpoch;
   var requestToken=++promptRequestSeq;activePromptRequest=requestToken;
+  preparingPrompt={text:value,items:requestImages};
   var parentProposalId=continuationContext&&continuationContext.scopeId===scopeId?continuationContext.parentProposalId:null;
   pendingResumeScopeId=scope==="RESUME_BLOCK"?scopeId:null;
   if(pendingResumeScopeId)proposalResumeScopeId=null;
@@ -1897,14 +2004,24 @@ function sendPrompt(options){
     setChatThinkingText(wait,'模型仍在处理，本轮要求已保留，请稍候…');
   },90000);
   function clearTimers(){clearTimeout(slowTimer);clearTimeout(killTimer);}
-  api('/projects/'+PROJECT_ID+'/ai/messages',{method:'POST',body:retryMessageId?{
+  return flushCurrentEdits().then(function(){
+    return prepareChatDocuments(requestImages,wait,function(){
+      if(requestEpoch!==chatEpoch||activePromptRequest!==requestToken)throw Object.assign(new Error('本轮已停止'),{code:'REQUEST_CANCELED'});
+    });
+  }).then(function(){
+    if(requestEpoch!==chatEpoch||activePromptRequest!==requestToken)throw Object.assign(new Error('本轮已停止'),{code:'REQUEST_CANCELED'});
+    preparingPrompt=null;
+    return api('/projects/'+PROJECT_ID+'/ai/messages',{method:'POST',body:retryMessageId?{
     retry_message_id:retryMessageId,conversation_id:WS.conversation&&WS.conversation.id
   }:{
     content:value,scope_type:scope,scope_id:scopeId,scope_revision:WS.draft.revision,
-    attachment_ids:requestImages.map(function(item){return item.id}),
+    attachment_ids:requestImages.filter(function(item){return !item.isDocument}).map(function(item){return item.id}),
+    document_import_ids:requestImages.filter(function(item){return item.isDocument}).map(function(item){return item.document_import_id}),
+    client_request_id:options.clientRequestId||uid(),
+    initial_generation:Boolean(options.clientRequestId),
     conversation_id:WS.conversation&&WS.conversation.id,
     task_id:requestTaskId,parent_proposal_id:parentProposalId,
-    quick_reply_id:options.quickReplyId||null}}).then(function(res){
+    quick_reply_id:options.quickReplyId||null}})}).then(function(res){
     clearTimers();wait.remove();
     if(requestEpoch!==chatEpoch||activePromptRequest!==requestToken)return;
     activeTaskId=res.task_id||requestTaskId||null;continuationContext=null;
@@ -1913,6 +2030,7 @@ function sendPrompt(options){
     proposalResumeScopeId=proposal&&(proposal.payload.proposal.scope_id||scopeId)||null;
     return refresh().then(function(){
       if(res.saved)toast('已更新个人资料，可撤销');
+      if(res.initial_version_id)toast('简历已生成，并自动保存了历史版本');
       (res.rejected||[]).forEach(function(r){
         if(r.reason==='REVISION_CONFLICT')toast('资料已变化，请重新确认');});
   });}).catch(function(e){
@@ -1920,6 +2038,7 @@ function sendPrompt(options){
     if(requestEpoch!==chatEpoch||activePromptRequest!==requestToken)return;
     activeTaskId=e&&e.payload&&e.payload.task_id||requestTaskId||null;continuationContext=null;
     if(e&&e.payload&&e.payload.persisted_message_id)return refresh();
+    if(!input.value)input.value=value;
     if(requestImages.length){
       requestImages.forEach(function(item){if(!chatAttachments.includes(item))chatAttachments.push(item)});
       renderChatAttachments();if(!input.value)input.value=value;
@@ -1933,6 +2052,7 @@ function sendPrompt(options){
     addBubble('ai',msg);}).finally(function(){
     requestImages.forEach(function(item){if(item.url&&!chatAttachments.includes(item))URL.revokeObjectURL(item.url)});
     if(activePromptRequest!==requestToken)return;
+    preparingPrompt=null;
     pendingResumeScopeId=null;if(!remoteChatBusy)setPromptPending(false);});}
 $(".assistant-input .send").onclick=sendPrompt;
 $("#stop-ai-request").onclick=stopChatGeneration;
@@ -2768,15 +2888,239 @@ var composer=$("#composer");
   if(n==="drop"&&e.dataTransfer.files.length){
     addChatFiles(e.dataTransfer.files);}})});
 
+/* ---------------- 统一输入与多份简历 ---------------- */
+var homeAttachments=[],homeProjectKey=uid(),homeStarting=false;
+var pageQuery=new URLSearchParams(location.search);
+function flowError(message){
+  $("#home-error").hidden=!message;$("#home-error").textContent=message||'';
+}
+function flushCurrentEdits(){
+  if(inlineEditComposing)return Promise.reject(new Error('请先完成当前文字输入'));
+  if(nodeStructureActionPending)return Promise.reject(new Error('简历正在保存，请稍候再离开'));
+  var failed=inlineSaveFailureCount;
+  var edits=$$("#resume-document [data-resume-editable=true]").filter(function(el){
+    return directElementText(el)!==String(el.dataset.savedText||'')});
+  return Promise.all(edits.map(function(el){return saveDirectElement(el,"typing")})).then(function(){
+    return inlineSaveChain;
+  }).then(function(){
+    if(failed!==inlineSaveFailureCount||edits.some(function(el){
+      return directElementText(el)!==String(el.dataset.savedText||'')})){
+      throw new Error('正文保存失败，已留在当前简历，请重试保存');
+    }
+  });
+}
+function navigateResume(query){
+  return flushCurrentEdits().then(function(){
+    var url=new URL(location.href);url.search=query;url.hash='';
+    location.assign(url.href);
+  }).catch(function(error){toast(error.message)});
+}
+window.addEventListener('beforeunload',function(event){
+  var dirty=inlineEditComposing||inlineTransactionsPending>0||nodeStructureActionPending||
+    $$("#resume-document [data-resume-editable=true]").some(function(el){
+      return el.dataset.savedText!==undefined&&directElementText(el)!==el.dataset.savedText});
+  if(dirty){event.preventDefault();event.returnValue='';}
+});
+var fullPreviewRenderer=null;
+function showResumePreview(resume,title,downloadable){
+  $("#resume-preview-title").textContent=title;
+  $("#resume-preview-note").textContent=downloadable?'当前已保存的简历；下载不会创建额外历史版本':'尚未应用 · 满意后关闭预览，点击“应用修改”';
+  $("#resume-preview-downloads").hidden=!downloadable;
+  if(!fullPreviewRenderer)fullPreviewRenderer=new ResumeDom.Renderer($("#resume-preview-document"));
+  fullPreviewRenderer.render(ResumeDom.toResumeDocument(resume));
+  hydrateImportedScene($("#resume-preview-document"));fitImportedPages($("#resume-preview-document"));
+  openModal("#resume-preview-modal");
+}
+$("#preview-current").onclick=function(){
+  flushCurrentEdits().then(function(){showResumePreview(WS.draft.resume_json,'当前简历预览',true)}).catch(function(e){toast(e.message)});
+};
+$$("[data-download-format]").forEach(function(button){button.onclick=function(){
+  button.disabled=true;
+  flushCurrentEdits().then(function(){
+    return fetch(API+'/projects/'+PROJECT_ID+'/resume-draft/download?format='+button.dataset.downloadFormat+'&revision='+WS.draft.revision);
+  }).then(function(response){
+    if(!response.ok)return response.json().then(function(error){throw new Error(error.detail||'下载失败')});
+    return response.blob();
+  }).then(function(blob){
+    var url=URL.createObjectURL(blob),link=document.createElement('a');
+    link.href=url;link.download=(WS.project.name||'简历')+'.'+button.dataset.downloadFormat;
+    document.body.appendChild(link);link.click();link.remove();
+    setTimeout(function(){URL.revokeObjectURL(url)},30000);
+  }).catch(function(e){toast(e.message)}).finally(function(){button.disabled=false});
+}});
+function showHomeFiles(){
+  var container=$("#home-attachments");container.replaceChildren();
+  homeAttachments.forEach(function(item){
+    var frame=document.createElement('div');frame.className='flow-file';
+    var label=document.createElement('span');
+    label.textContent=item.name+' · '+({uploading:'上传中…',ready:'已添加',failed:'上传失败'}[item.status]||item.status);
+    var remove=document.createElement('button');remove.textContent='×';remove.setAttribute('aria-label','移除 '+item.name);
+    remove.disabled=homeStarting;
+    remove.onclick=function(){
+      homeAttachments=homeAttachments.filter(function(x){return x!==item});
+      if(item.id)api('/uploads/'+item.id,{method:'DELETE'}).catch(function(){});
+      showHomeFiles();rememberHomeInput();
+    };
+    frame.append(label,remove);container.appendChild(frame);
+  });
+  $("#home-submit").disabled=homeStarting||homeAttachments.some(function(x){return x.status!=='ready'});
+}
+function rememberHomeInput(){
+  try{sessionStorage.setItem('resumeHomeInput',JSON.stringify({
+    text:$("#home-prompt").value,attachments:homeAttachments.filter(function(item){return item.status==='ready'}),
+    project_key:homeProjectKey
+  }))}catch(_){}
+}
+function addHomeFiles(files){
+  var list=Array.from(files||[]);
+  if(homeStarting)return;
+  if(homeAttachments.length+list.length>8){flowError('最多添加 8 个附件，可以在生成后继续补充');return}
+  if(list.some(function(f){return !/\.(pdf|docx?|png|jpe?g|webp)$/i.test(f.name)||f.size>20*1024*1024})){
+    flowError('支持 PDF、Word、图片；每个文件最多 20 MB');return;
+  }
+  flowError('');
+  list.forEach(function(file){
+    var item={name:file.name,status:'uploading',isDocument:/\.(pdf|docx?)$/i.test(file.name)};
+    homeAttachments.push(item);showHomeFiles();
+    api('/uploads',{method:'POST',body:{original_name:file.name,mime_type:file.type,size:file.size}}).then(function(upload){
+      item.id=upload.id;
+      return fetch(API+'/uploads/'+item.id+'/content',{method:'POST',body:file});
+    }).then(function(response){
+      if(!response.ok)throw new Error('附件上传失败，请移除后重试');
+      return api('/uploads/'+item.id+'/complete',{method:'POST'});
+    }).then(function(){
+      if(!homeAttachments.includes(item)){
+        return api('/uploads/'+item.id,{method:'DELETE'}).catch(function(){});
+      }
+      item.status='ready';item.preview_url=item.isDocument?null:'/api/v1/uploads/'+item.id+'/preview';
+      showHomeFiles();rememberHomeInput();
+    }).catch(function(error){item.status='failed';showHomeFiles();flowError(error.message)});
+  });
+}
+function loadResumeList(){
+  return api('/projects').then(function(list){
+    var container=$("#resume-list");container.replaceChildren();
+    (list.items||[]).slice().sort(function(a,b){return String(b.updated_at).localeCompare(String(a.updated_at))}).forEach(function(item){
+      var button=document.createElement('button');button.type='button';
+      var copy=document.createElement('span'),title=document.createElement('strong'),job=document.createElement('small');
+      title.textContent=item.name;job.textContent=item.job?(item.job.title||'已提供岗位')+' '+(item.job.company||''):'通用简历 · 未设置岗位';
+      copy.append(title,job);
+      var when=document.createElement('small');when.textContent=item.updated_at?fmtTime(item.updated_at)+' · 继续编辑':'继续编辑';
+      button.append(copy,when);button.onclick=function(){navigateResume('?project='+encodeURIComponent(item.id))};
+      container.appendChild(button);
+    });
+    if(!container.children.length)container.textContent='你的简历会保存在这里，随时回来继续编辑。';
+    return list;
+  });
+}
+function beginHomeGeneration(){
+  if(homeStarting)return;
+  var text=$("#home-prompt").value;
+  var reuse=$("#reuse-current")&&$("#reuse-current").checked;
+  if(!text.trim()&&!homeAttachments.length&&!reuse){flowError('告诉我你的经历或求职目标，也可以先添加一份简历');$("#home-prompt").focus();return}
+  if(homeAttachments.some(function(x){return x.status!=='ready'})){flowError('请等待附件上传完成，或移除失败的附件');return}
+  homeStarting=true;showHomeFiles();flowError('');$("#home-submit").textContent='正在准备…';
+  var body={name:text.trim().slice(0,32)||'新的简历'};
+  flushCurrentEdits().then(function(){
+    if(reuse){body.copy_project_id=WS.project.id;body.copy_draft_revision=WS.draft.revision}
+    return api('/projects',{method:'POST',idemKey:'home-'+homeProjectKey,body:body});
+  }).then(function(project){
+    if(text.trim()||homeAttachments.length){
+      var pending={content:text,attachments:homeAttachments,clientRequestId:'initial-'+homeProjectKey};
+      sessionStorage.setItem('resumeInitial:'+project.id,JSON.stringify(pending));
+    }
+    sessionStorage.removeItem('resumeHomeInput');
+    var url=new URL(location.href);url.search='?project='+encodeURIComponent(project.id);url.hash='';
+    location.assign(url.href);
+  }).catch(function(error){
+    flowError(error.message);homeStarting=false;showHomeFiles();$("#home-submit").textContent='开始生成';
+  });
+}
+function prepareChatDocuments(items,wait,guard){
+  return items.filter(function(item){return item.isDocument}).reduce(function(chain,item){
+    return chain.then(function(){
+      if(guard)guard();
+      if(wait)setChatThinkingText(wait,'正在读取附件：'+item.name+'…');
+      return item.document_import_id?api('/document-imports/'+item.document_import_id):
+        api('/projects/'+PROJECT_ID+'/document-imports',{method:'POST',idemKey:'chat-import-'+item.id,
+          body:{upload_id:item.id,entry_context:'chat'}});
+    }).then(function(result){
+      item.document_import_id=result.id;
+      var deadline=Date.now()+300000;
+      function poll(current){
+        if(guard)guard();
+        if(['ready','needs_review','applied'].includes(current.status)){
+          if(current.quality_report&&current.quality_report.safe_to_review===false)throw new Error('附件识别质量不足，请换清晰文件');
+          return;
+        }
+        if(current.status==='failed')throw new Error(current.error_message||'附件识别失败，请更换文件');
+        if(Date.now()>deadline)throw new Error('附件仍在处理中，请稍后重新发送；不会重复识别');
+        return new Promise(function(resolve){setTimeout(resolve,1200)}).then(function(){
+          return api('/document-imports/'+item.document_import_id);
+        }).then(poll);
+      }
+      return poll(result);
+    });
+  },Promise.resolve()).then(function(){if(wait)setChatThinkingText(wait,'正在生成…')});
+}
+$("#home-upload").onclick=function(){$("#home-files").click()};
+$("#home-files").onchange=function(){addHomeFiles(this.files);this.value=''};
+$("#home-submit").onclick=beginHomeGeneration;
+$("#home-prompt").addEventListener("input",rememberHomeInput);
+$("#home-prompt").addEventListener("keydown",function(e){
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();beginHomeGeneration()}});
+$("#home-prompt").addEventListener("paste",function(e){
+  var files=Array.from(e.clipboardData&&e.clipboardData.files||[]);
+  if(files.length){e.preventDefault();addHomeFiles(files)}});
+bindDropZone($("#home-composer"),addHomeFiles);
+$("#reload-resumes").onclick=function(){loadResumeList().catch(function(e){flowError(e.message)})};
+$("#home-search").onclick=function(){
+  var query=window.prompt('搜索什么岗位？将在新窗口打开岗位搜索，找到后把链接或描述贴回来。','');
+  if(query&&query.trim())window.open('https://www.bing.com/search?q='+encodeURIComponent(query+' 招聘 岗位'),'_blank','noopener,noreferrer');
+};
+$("#resume-list-button").onclick=function(){navigateResume('')};
+$("#another-resume").onclick=function(){navigateResume('?new_from='+encodeURIComponent(PROJECT_ID))};
+$(".brand").onclick=function(){navigateResume('')};
+$("#supplement-file").onclick=function(){$("#file-input").click()};
+$("#supplement-experience").onclick=function(){focusAssistant();$("#prompt").placeholder='直接告诉我新增的经历及希望放在哪里…'};
+$("#supplement-job").onclick=function(){focusAssistant();$("#prompt").placeholder='粘贴新岗位链接或描述，说明是否按这个岗位调整当前简历…'};
 /* ---------------- 启动 ---------------- */
 restoreAssistantCollapsed();
 function boot(){
-  return api('/projects').then(function(list){
-    if(!list.items||!list.items.length)throw new Error('没有可用的简历项目');
-    PROJECT_ID=list.items[0].id;restoreConversation();return refresh();})
+  var requested=pageQuery.get('project'),reuseId=pageQuery.get('new_from');
+  document.body.classList.toggle('home-mode',!requested);
+  return loadResumeList().then(function(list){
+    PROJECT_ID=requested||reuseId||(list.items&&list.items[0]&&list.items[0].id);
+    if(!PROJECT_ID)return;
+    restoreConversation();return refresh();})
     .then(function(){
-      setTimeout(function(){try{if(!sessionStorage.getItem("resumeGuideSeen"))openModal("#guide-modal")}catch(e){openModal("#guide-modal")}},350);})
+      if(!requested){
+        try{
+          var stored=JSON.parse(sessionStorage.getItem('resumeHomeInput')||'null');
+          if(stored){$("#home-prompt").value=stored.text||'';homeAttachments=stored.attachments||[];homeProjectKey=stored.project_key||homeProjectKey;showHomeFiles()}
+        }catch(_){}
+        if(reuseId&&WS){
+          $("#home-reuse").hidden=false;
+          $("#home-reuse").innerHTML='<label><input type="checkbox" id="reuse-current" checked> 使用「'+esc(WS.project.name)+'」作为起点（完整复制，原简历不变）</label>';
+        }
+        return;
+      }
+      var pending=null;
+      try{pending=JSON.parse(sessionStorage.getItem('resumeInitial:'+PROJECT_ID)||'null')}catch(_){}
+      if(pending){
+        if((WS.conversation.messages||[]).some(function(m){return m.client_request_id===pending.clientRequestId})){
+          sessionStorage.removeItem('resumeInitial:'+PROJECT_ID);return;
+        }
+        $("#prompt").value=pending.content||'';chatAttachments=pending.attachments||[];renderChatAttachments();
+        return sendPrompt({clientRequestId:pending.clientRequestId}).then(function(){
+          if((WS.conversation.messages||[]).some(function(m){return m.client_request_id===pending.clientRequestId})){
+            sessionStorage.removeItem('resumeInitial:'+PROJECT_ID);
+          }
+        });
+      }
+    })
     .catch(function(e){
+      if(!requested){flowError('暂时无法加载：'+e.message);return}
       var bar=document.createElement('div');bar.className='undo-bar show';
       var msg=document.createElement('span');msg.className='boot-error';
       msg.textContent='暂时无法连接服务：'+(e&&e.message?e.message:'未知错误')+' ｜ '+bootHint(e);

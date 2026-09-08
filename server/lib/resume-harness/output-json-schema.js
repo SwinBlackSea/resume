@@ -10,10 +10,13 @@ const GLOBAL_RESPONSE_SCHEMA = {
   schema: {
     type: 'object',
     properties: {
-      type: { type: 'string', enum: ['message', 'proposal'] },
+      type: { type: 'string', enum: ['message', 'proposal'],
+        description: 'message仅自然语言沟通，resume_proposal必须null且data_actions必须为空；任何简历、资料或岗位建议均用proposal，包括仅建议设置岗位而尚未生成正文。' },
       content: { type: 'string' },
-      awaiting_user: { type: 'boolean' },
-      message_kind: { type: ['string', 'null'] },
+      awaiting_user: { type: 'boolean',
+        description: '仅message可为true；proposal固定false，待用户应用的确认由界面负责。' },
+      message_kind: { type: ['string', 'null'],
+        description: 'proposal固定null；message可描述沟通类型。' },
       quick_replies: {
         type: 'array',
         maxItems: 3,

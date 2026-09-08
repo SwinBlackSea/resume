@@ -325,6 +325,31 @@ test('跨父节点移动通过同时替换两个父子树完成，不产生中�
   );
 });
 
+test('父子节点仅展示字段修改可确定性合并，完整覆盖与删除冲突仍拒绝', () => {
+  const before = documentFixture();
+  const changes = [
+    { target_id: 'resume-root', replacement_subtree: { id: 'resume-root', style: { 'font-size': '12pt' } } },
+    { target_id: 'summary-section', replacement_subtree: { id: 'summary-section', style: { 'margin-bottom': '18pt' } } },
+    { target_id: 'summary-title', replacement_subtree: { id: 'summary-title', style: { 'font-size': '16pt' } } },
+    { target_id: 'summary-body', replacement_subtree: { id: 'summary-body', style: { 'line-height': '1.8' } } },
+  ];
+  const result = materializeTargetFragments(before, { changes });
+  assert.equal(result.changes.length, 1);
+  assert.equal(result.changes[0].target_id, 'resume-root');
+  assert.deepStrictEqual(result.document, materializeTargetFragments(before, { changes: changes.slice().reverse() }).document);
+  assert.equal(ResumeDom.plainText(result.document), ResumeDom.plainText(before));
+  for (const change of changes) {
+    assert.deepStrictEqual(ResumeDom.findNode(result.document, change.target_id).node.style, change.replacement_subtree.style);
+  }
+  const conflicting = changes.map((change) => ({ ...change }));
+  conflicting[1].replacement_subtree = null;
+  assert.throws(() => materializeTargetFragments(before, { changes: conflicting }), /不能相互嵌套/);
+  conflicting[1].replacement_subtree = { id: 'summary-section', text: '覆盖全部内容' };
+  assert.throws(() => materializeTargetFragments(before, { changes: conflicting }), /不能相互嵌套/);
+  const ownNoop = [{ target_id: 'summary-section', replacement_subtree: { id: 'summary-section', style: {} } }, changes[3]];
+  assert.equal(materializeTargetFragments(before, { changes: ownNoop }).changes[0].target_id, 'summary-body');
+});
+
 test('目标子树拒绝嵌套区域、未知节点和替换根 ID 漂移', () => {
   const before = documentFixture();
   assert.throws(

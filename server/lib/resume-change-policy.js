@@ -338,7 +338,8 @@ function evaluateChange(beforeValue, afterValue, constraintsValue) {
     errors.push(policyError(
       'STYLE_NOT_ALLOWED',
       '本轮只允许保留原样式，但实际建议改变了显示属性',
-      { node_ids: Array.from(new Set(styleChanges.map((change) => change.node_id))) },
+      { node_ids: Array.from(new Set(styleChanges.map((change) => change.node_id))),
+        metadata: metadata.filter((key) => ['page_setup', 'styles', 'assets'].includes(key)) },
     ));
   }
   if (

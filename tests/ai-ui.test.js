@@ -11,6 +11,11 @@ const resumeHarness = require('../server/lib/resume-harness');
 
 let ctx;
 let projectId;
+async function waitRequest(predicate) {
+  const end = Date.now() + 2000;
+  while (!predicate() && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(predicate(), '保存完成后应发送且只发送一次请求');
+}
 
 test.before(async () => {
   ctx = await helpers.boot();
@@ -102,6 +107,7 @@ test('AI 澄清问题以克制的结果选项展示，并继续原任务', async
   choices[0].click();
   assert.strictEqual(document.querySelector('#prompt').value, '');
   assert.strictEqual(dom.window.activeContext.scopeId, 'target-bullet');
+  await waitRequest(() => continuedBody);
   assert.strictEqual(continuedBody.content, '保留排版，分别编辑');
   assert.strictEqual(continuedBody.task_id, proposed.body.task_id);
   assert.strictEqual(continuedBody.quick_reply_id, 'keep-layout');
@@ -182,6 +188,7 @@ test('复杂请求的处理思路以自然对话和克制的快捷回复展示',
   );
   card.querySelectorAll('.clarification-option')[0].click();
   assert.strictEqual(document.querySelector('#prompt').value, '');
+  await waitRequest(() => continuedBody);
   assert.strictEqual(continuedBody.content, '按这个思路修改');
   assert.strictEqual(continuedBody.task_id, proposed.body.task_id);
   assert.strictEqual(continuedBody.quick_reply_id, 'option-1');
@@ -254,7 +261,7 @@ test('AI 沟通区展示 A、B、C，并且只有当前建议可操作', async (
   );
   assert.deepStrictEqual(
     [...proposalCards[1].querySelectorAll('.proposal-actions button')].map((button) => button.textContent),
-    ['应用修改', '继续调整', '暂不使用'],
+    ['预览整份简历', '应用修改', '继续调整', '暂不使用'],
   );
   dom.window.close();
 });
@@ -442,6 +449,7 @@ test('段落改写时持续标记正文位置，并在思考期间锁定发送�
 
   send.click();
   prompt.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await waitRequest(() => aiCalls > 0);
   assert.strictEqual(aiCalls, 1, '处理中不得重复发送');
 
   resolveAi(new Response(JSON.stringify({

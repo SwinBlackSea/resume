@@ -1,11 +1,7 @@
 'use strict';
 /**
- * 原型结构一致性测试。
- * v2.2 已按最新 PRD 移除“来源/待确认事实/资料到正文使用关系”，
- * 当前简历支持现有文字轻量直改，结构和样式调整交由 AI 提案，
- * 因此只比对仍然有效的布局、正文和稳定交互，不再要求旧业务文案逐字相同。
- * 做法：分别解析「原型静态 DOM」与「前端加载真实数据后渲染的 DOM」，
- * 对关键区域生成结构签名（标签 + id + class + 文本）并逐项比对。
+ * 真实工作区行为测试。原型不再是测试依赖；保留正文、编辑、
+ * 缩放、历史比较、资料隔离、响应式和聊天收缩的行为断言。
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -16,32 +12,8 @@ const { JSDOM } = require('jsdom');
 const helpers = require('./helpers');
 
 const ROOT = path.join(__dirname, '..');
-const PROTOTYPE_HTML = fs.readFileSync(path.join(ROOT, 'index.prototype.backup.html'), 'utf8');
 const APP_HTML = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-
-/** 原型中存在的关键 id；其余 id 属于实现增强（用于精确定位内容），比对时忽略。 */
-const KEY_IDS = new Set(['target-bullet', 'scale-bullet']);
-
-/** 生成结构签名：标签 + id + class + 文本，忽略空白与内联样式值。 */
-function signature(node) {
-  if (node.nodeType === 3) {
-    const text = node.textContent.replace(/\s+/g, ' ').trim();
-    return text ? `t(${text})` : '';
-  }
-  if (node.nodeType !== 1) return '';
-  const tag = node.tagName.toLowerCase();
-  let id = node.getAttribute('id');
-  if (id && !KEY_IDS.has(id)) id = null;
-  const cls = (node.getAttribute('class') || '').split(/\s+/).filter(Boolean);
-  const head = [tag, id ? `#${id}` : '', cls.length ? `.${cls.join('.')}` : ''].join('');
-  const children = Array.from(node.childNodes).map(signature).filter(Boolean);
-  return children.length ? `${head}[${children.join(',')}]` : head;
-}
-
-/** 取容器下所有匹配元素的签名列表。 */
-function signatures(root, selector) {
-  return Array.from(root.querySelectorAll(selector)).map(signature);
-}
+const ResumeDom = require('../resume-dom');
 
 function texts(root, selector) {
   return Array.from(root.querySelectorAll(selector)).map((el) =>
@@ -60,24 +32,26 @@ async function waitFor(predicate, timeout = 3000) {
 
 let ctx;
 let origin;
-let proto;
 let app;
 
 test.before(async () => {
   ctx = await helpers.boot();
   origin = ctx.base.replace('/api/v1', '');
-  proto = new JSDOM(PROTOTYPE_HTML).window.document;
-  app = await loadApp(origin);
+  app = await loadApp(origin, await helpers.defaultProject(ctx));
 });
 
-test.after(() => helpers.close(ctx));
+test.after(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  if (app) app.defaultView.close();
+  helpers.close(ctx);
+});
 
-function loadApp(base) {
+function loadApp(base, projectId) {
   return new Promise((resolve, reject) => {
     const dom = new JSDOM(APP_HTML, {
       runScripts: 'dangerously',
       resources: 'usable',
-      url: base + '/',
+      url: base + '/?project=' + projectId,
       pretendToBeVisual: true,
       beforeParse(window) {
         window.fetch = (u, o) => fetch(new URL(u, base), o);
@@ -93,54 +67,42 @@ function loadApp(base) {
   });
 }
 
-test('顶栏与品牌区文案一致', () => {
-  assert.deepStrictEqual(texts(app, '.brand'), texts(proto, '.brand'));
-  assert.deepStrictEqual(texts(app, '.top-actions .btn, .top-actions .soft-btn, .top-actions .icon-btn'),
-    texts(proto, '.top-actions .btn, .top-actions .soft-btn, .top-actions .icon-btn'));
+test('顶栏提供已有简历、独立制作、保存、历史和下载入口', () => {
+  assert.match(app.querySelector('.brand').textContent, /简历星球/);
+  for (const id of ['resume-list-button', 'another-resume', 'save-version-button', 'preview-current']) {
+    assert.ok(app.querySelector('#' + id));
+  }
+  assert.match(app.querySelector('.history-open').textContent, new RegExp(String(app.defaultView.WS.versions.length)));
 });
 
-test('左侧资料卡片文案与状态一致', () => {
-  assert.deepStrictEqual(
-    texts(app, '#profile-card strong, #profile-card p'),
-    texts(proto, '#profile-card strong, #profile-card p'),
-    '个人信息摘要必须一致',
-  );
-  assert.deepStrictEqual(
-    texts(app, '#job-card strong, #job-card p, #job-card .info-status'),
-    texts(proto, '#job-card strong, #job-card p, #job-card .info-status'),
-    '岗位信息卡片必须一致',
-  );
+test('资料不再占据固定左栏，目标岗位由真实项目状态展示', () => {
+  assert.equal(app.defaultView.getComputedStyle(app.querySelector('.context')).display, 'none');
+  assert.ok(app.querySelector('#current-target-job').textContent.includes(app.defaultView.WS.job.title));
+  assert.deepEqual(texts(app, '.material-tools button').slice(0, 3), ['上传文件', '补充经历', '提供或更换岗位']);
 });
 
-test('中央简历画布：结构与正文 100% 一致', () => {
-  const protoResume = proto.querySelector('#resume-document');
+test('中央画布保留实际文档的正文、节点身份和根样式', () => {
   const appResume = app.querySelector('#resume-document');
   assert.ok(appResume, '前端必须渲染简历正文');
   const documentClasses = app.defaultView.WS.draft.resume_json.root.attributes.class || '';
-  assert.deepStrictEqual(
-    new Set(appResume.classList),
-    new Set([...protoResume.classList, ...documentClasses.split(/\s+/).filter(Boolean)]),
-    '画布保留宿主 class，同时应用当前文档的根 class',
-  );
-  const canvas = appResume.cloneNode(true);
-  canvas.className = protoResume.className;
-  assert.strictEqual(
-    signature(canvas),
-    signature(protoResume),
-    '简历画布结构与正文必须与原型逐字一致',
-  );
+  assert.ok(appResume.classList.contains('resume'));
+  for (const name of documentClasses.split(/\s+/).filter(Boolean)) assert.ok(appResume.classList.contains(name));
+  const doc = app.defaultView.WS.draft.resume_json;
+  const expected = new JSDOM('<article></article>');
+  new ResumeDom.Renderer(expected.window.document.querySelector('article')).render(doc);
+  assert.equal(appResume.textContent, expected.window.document.querySelector('article').textContent);
+  assert.deepEqual(Array.from(appResume.querySelectorAll('[data-node-id]'), (node) => node.dataset.nodeId),
+    Array.from(expected.window.document.querySelectorAll('[data-node-id]'), (node) => node.dataset.nodeId));
+  expected.window.close();
 });
 
-test('AI 建议标记与可编辑段落一致', () => {
-  assert.deepStrictEqual(
-    signatures(app, '#resume-document .ai-marker'),
-    signatures(proto, '#resume-document .ai-marker'),
-  );
-  assert.strictEqual(
-    app.querySelectorAll('#resume-document .editable').length,
-    proto.querySelectorAll('#resume-document .editable').length,
-    '可编辑段落数量必须一致',
-  );
+test('每个文字编辑入口对应真实 editable 节点，不能嵌套', () => {
+  const nodes = app.querySelectorAll('#resume-document [data-resume-editable=true]');
+  assert.ok(nodes.length > 0);
+  for (const node of nodes) {
+    assert.equal(ResumeDom.findNode(app.defaultView.WS.draft.resume_json, node.dataset.nodeId).node.editable, true);
+    assert.equal(node.querySelector('[data-resume-editable=true]'), null);
+  }
 });
 
 test('个人信息浮层不再展示来源或待确认事实关系', () => {
@@ -148,38 +110,19 @@ test('个人信息浮层不再展示来源或待确认事实关系', () => {
   assert.doesNotMatch(app.querySelector('#profile-modal').textContent, /识别自|当前简历使用/);
 });
 
-test('个人信息浮层：分类与经历条目一致', () => {
-  assert.deepStrictEqual(
-    texts(app, '#profile-modal .record-title b'),
-    texts(proto, '#profile-modal .record-title b'),
-    '资料分类必须一致',
-  );
-  assert.deepStrictEqual(
-    texts(app, '#profile-modal .experience-head b'),
-    texts(proto, '#profile-modal .experience-head b'),
-    '经历条目必须一致',
-  );
+test('存量个人信息按需界面仍显示真实经历', () => {
+  const text = app.querySelector('#profile-modal').textContent;
+  for (const experience of app.defaultView.WS.profile.experiences.filter((item) => item.type === 'work')) {
+    assert.ok(text.includes(experience.organization));
+  }
+  assert.ok(app.querySelectorAll('#profile-modal .record-title b').length >= 3);
 });
 
-test('岗位浮层：覆盖情况与要求条目一致', () => {
-  assert.deepStrictEqual(
-    texts(app, '#job-modal .coverage-summary'),
-    texts(proto, '#job-modal .coverage-summary'),
-    '覆盖度摘要必须一致',
-  );
-  assert.deepStrictEqual(
-    texts(app, '#job-modal .record-title'),
-    texts(proto, '#job-modal .record-title'),
-  );
-  assert.deepStrictEqual(
-    texts(app, '#job-modal .requirement-list li'),
-    texts(proto, '#job-modal .requirement-list li'),
-    '岗位要求条目与状态必须一致',
-  );
-  assert.deepStrictEqual(
-    texts(app, '#job-modal .keyword-chips span'),
-    texts(proto, '#job-modal .keyword-chips span'),
-  );
+test('存量岗位浮层读取当前岗位的关键词与要求', () => {
+  const analysis = app.defaultView.WS.job.analysis;
+  assert.deepEqual(texts(app, '#job-modal .keyword-chips span'), Array.from(analysis.keywords));
+  assert.ok(app.querySelector('#job-modal .coverage-summary'));
+  for (const item of analysis.responsibilities) assert.ok(app.querySelector('#job-modal').textContent.includes(item.text));
 });
 
 test('简历画布无需编辑模式切换，历史版本入口保持一致', () => {
@@ -187,10 +130,7 @@ test('简历画布无需编辑模式切换，历史版本入口保持一致', ()
   assert.strictEqual(app.querySelector('#manual-edit-toolbar'), null);
   assert.strictEqual(app.querySelector('#inline-edit-hint'), null);
   assert.ok(app.querySelector('#inline-edit-status.visually-hidden'));
-  assert.deepStrictEqual(
-    texts(app, '.top-actions .history-open'),
-    texts(proto, '.top-actions .history-open'),
-  );
+  assert.equal(app.querySelector('.top-actions .history-open').textContent, '历史版本 · ' + app.defaultView.WS.versions.length);
 });
 
 test('移动端在简历工具栏提供可见的历史版本入口', () => {
@@ -283,22 +223,11 @@ test('简历编辑栏在画布内保持悬浮，并在滚动后进入紧凑状�
     Math.ceil(page.width * 96 / 72 * 1.5) + 'px');
 });
 
-test('历史版本列表：保留原型内容并补充明确版本状态', () => {
-  assert.deepStrictEqual(
-    texts(app, '#history-list .history-day'),
-    texts(proto, '#history-list .history-day'),
-    '日期分组必须一致',
-  );
-  assert.deepStrictEqual(
-    texts(app, '#history-list .version-row-copy b'),
-    texts(proto, '#history-list .version-row-copy b'),
-    '版本标题必须一致',
-  );
-  assert.deepStrictEqual(
-    texts(app, '#history-list .version-row-copy em'),
-    texts(proto, '#history-list .version-row-copy em'),
-    '版本摘要必须一致',
-  );
+test('历史版本列表显示真实版本与状态', () => {
+  assert.ok(texts(app, '#history-list .history-day').length >= 1);
+  assert.deepStrictEqual(texts(app, '#history-list .version-row-copy b'),
+    Array.from(app.defaultView.WS.versions, (version) => version.name));
+  assert.equal(texts(app, '#history-list .version-row-copy em').length, app.defaultView.WS.versions.length);
   assert.deepStrictEqual(
     texts(app, '#history-list .version-kind'),
     ['手动保存', '手动保存', 'AI 生成'],
@@ -355,15 +284,12 @@ test('历史详情与比较复用完整 Resume DOM，并提供安全继续选项
   app.querySelector('#cancel-restore-version').click();
 });
 
-test('生成进度浮层与引导浮层文案一致', () => {
-  assert.deepStrictEqual(
-    texts(app, '.run-log .run-step'),
-    texts(proto, '.run-log .run-step'),
-  );
-  assert.deepStrictEqual(
-    texts(app, '#guide-modal .guide-step'),
-    texts(proto, '#guide-modal .guide-step'),
-  );
+test('不再弹出先填资料的引导，首页提供统一输入与非自动提交附件', () => {
+  assert.equal(app.querySelector('#guide-modal').classList.contains('show'), false);
+  assert.ok(app.querySelector('#home-prompt'));
+  assert.ok(app.querySelector('#home-files').accept.includes('.docx'));
+  assert.equal(app.querySelector('#home-submit').textContent, '开始生成');
+  assert.match(app.querySelector('#home-view').textContent, /上传后不会立即生成/);
 });
 
 test('AI 助手面板：保留全局入口并说明就地改写边界', () => {
@@ -379,11 +305,11 @@ test('AI 助手面板：保留全局入口并说明就地改写边界', () => {
   );
   assert.deepStrictEqual(
     texts(app, '.assistant-quick button'),
-    texts(proto, '.assistant-quick button'),
+    ['更简洁', '突出工作成果', '更符合岗位', '检查是否夸张'],
   );
   assert.deepStrictEqual(
     texts(app, '#selection-label'),
-    texts(proto, '#selection-label'),
+    ['@整份简历'],
   );
 });
 
@@ -409,7 +335,24 @@ test('所有 AI 星光图标使用固定容器内的静态自包含 SVG', () => 
   assert.match(APP_HTML, /\.doc-toolbar button\{border:0!important\}/);
 });
 
-test('样式保留原型布局且不含旧内容关系选择器', () => {
+test('尚未保存正文时关闭或刷新页面必须提醒，已保存不拦截', () => {
+  const element = app.querySelector('#resume-document [data-resume-editable=true]');
+  const original = element.innerHTML, saved = element.dataset.savedText;
+  try {
+    element.dataset.savedText = app.defaultView.directElementText(element);
+    const clean = new app.defaultView.Event('beforeunload', { cancelable: true });
+    app.defaultView.dispatchEvent(clean);
+    assert.equal(clean.defaultPrevented, false);
+    element.appendChild(app.createTextNode('尚未保存的新输入'));
+    const dirty = new app.defaultView.Event('beforeunload', { cancelable: true });
+    app.defaultView.dispatchEvent(dirty);
+    assert.equal(dirty.defaultPrevented, true);
+  } finally {
+    element.innerHTML = original; element.dataset.savedText = saved;
+  }
+});
+
+test('真实页面保留核心文档组件样式且不含旧内容关系选择器', () => {
   const appCss = APP_HTML.match(/<style>([\s\S]*?)<\/style>/)[1];
   for (const selector of [
     '.pending-panel',
@@ -424,7 +367,7 @@ test('样式保留原型布局且不含旧内容关系选择器', () => {
     assert.ok(!appCss.includes(selector), `不得保留旧内容关系样式 ${selector}`);
   }
   for (const selector of ['.app{', '.context{', '.canvas{', '.assistant-panel{', '.resume{']) {
-    assert.ok(appCss.includes(selector), `必须保留原型核心布局样式 ${selector}`);
+    assert.ok(appCss.includes(selector), `必须保留真实文档组件样式 ${selector}`);
   }
 });
 

@@ -506,6 +506,57 @@ function hydrateCompactFragments(base, normalized) {
   };
 }
 
+// Sparse presentation fields on an ancestor do not replace its descendants.
+// Coalesce those disjoint writes into one non-overlapping target before the
+// subtree validator runs. Never choose between competing text/children edits.
+function coalescePresentationTargets(base, normalized) {
+  if (normalized.format !== TARGET_FRAGMENTS_FORMAT) return normalized;
+  const byId = new Map(normalized.changes.map((change) => [change.target_id, change]));
+  const baseIndex = indexNodes(base.root);
+  const children = new Map(), roots = [];
+  for (const change of normalized.changes) {
+    const found = ResumeDom.findNode(base, change.target_id);
+    const ancestor = found && [...found.ancestors].reverse().find((node) => byId.has(node.id));
+    if (!ancestor) roots.push(change);
+    else {
+      const list = children.get(ancestor.id) || [];
+      list.push(change); children.set(ancestor.id, list);
+    }
+  }
+  function combine(change) {
+    const descendants = children.get(change.target_id) || [];
+    if (!descendants.length) return [change];
+    const raw = change.replacement_subtree;
+    const sparsePresentation = raw && Object.keys(raw).every((key) =>
+      ['id', 'style', 'attributes'].includes(key));
+    if (!sparsePresentation) {
+      // Keep the original overlap for the existing diagnostics/recovery path.
+      return [change, ...descendants.flatMap(combine)];
+    }
+    const combined = descendants.flatMap(combine);
+    // A descendant with unresolved overlap is a genuine conflict. Do not bury
+    // it inside a materialized ancestor and silently lose one of the writes.
+    if (combined.some((item) => {
+      const found = ResumeDom.findNode(base, item.target_id);
+      return found && found.ancestors.some((ancestor) =>
+        combined.some((other) => other.target_id === ancestor.id));
+    })) return [change, ...combined];
+    const own = hydrateCompactNode(raw, baseIndex);
+    if (hashJson(own) === hashJson(baseIndex.get(change.target_id))) return combined;
+    const targets = new Map(combined.map((item) => [item.target_id, item.replacement_subtree]));
+    function rebuild(node) {
+      if (targets.has(node.id)) {
+        const target = targets.get(node.id);
+        return target === null ? null : hydrateCompactNode(target, baseIndex);
+      }
+      return { ...node, ...(Array.isArray(node.children)
+        ? { children: node.children.map(rebuild).filter(Boolean) } : {}) };
+    }
+    return [{ target_id: change.target_id, replacement_subtree: rebuild(own) }];
+  }
+  return { ...normalized, changes: roots.flatMap(combine) };
+}
+
 // 完整目标也遵循“未返回字段继承”，否则模型看不到的资源字节会丢失。
 // root 的 children 仍表达完整目标结构：显式数组决定增删和顺序。
 function materializeTargetDocument(baseValue, targetValue) {
@@ -664,7 +715,8 @@ function assertMinimalTargets(base, normalized) {
 
 function materializeTargetFragments(baseValue, rawFragments) {
   const base = ResumeDom.toResumeDocument(baseValue);
-  const normalized = hydrateCompactFragments(base, normalizeFragments(rawFragments));
+  const normalized = hydrateCompactFragments(base,
+    coalescePresentationTargets(base, normalizeFragments(rawFragments)));
   assertTargets(base, normalized);
   assertMinimalTargets(base, normalized);
   const replacements = new Map(

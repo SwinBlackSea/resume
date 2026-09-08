@@ -245,8 +245,18 @@ const routes = [
             throw problem.unprocessable('FILE_UNSAFE', '文件还没有通过安全检查');
           }
           const entryContext = body.entry_context || 'workspace';
-          if (!['workspace', 'template_picker'].includes(entryContext)) {
+          if (!['workspace', 'template_picker', 'chat'].includes(entryContext)) {
             throw problem.badRequest('entry_context 不合法');
+          }
+          if (entryContext === 'chat') {
+            const conversation = db.get(`SELECT id FROM ai_conversations
+              WHERE project_id = ? AND owner_id = ? AND status = 'active'
+              ORDER BY created_at DESC, id DESC LIMIT 1`, [project.id, user.id]);
+            if (!conversation || (upload.chat_conversation_id && upload.chat_conversation_id !== conversation.id)) {
+              throw problem.badRequest('附件属于另一段对话，请重新上传');
+            }
+            db.run('UPDATE uploads SET chat_conversation_id = ? WHERE id = ?',
+              [conversation.id, upload.id]);
           }
           const extension = (upload.original_name.split('.').pop() || '').toLowerCase();
           if (!constants.SUPPORTED_FORMATS.has(extension)) {
@@ -258,7 +268,7 @@ const routes = [
           const active = db.get(
             `SELECT * FROM document_imports
              WHERE project_id = ? AND upload_id = ? AND owner_id = ?
-               AND status NOT IN ('failed','applied')
+               AND status != 'failed'
              ORDER BY created_at DESC LIMIT 1`,
             [project.id, upload.id, user.id],
           );

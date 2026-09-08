@@ -139,8 +139,7 @@ function compactExpiredChanges(database) {
   let changed = 0;
   const rows = database.prepare(
     `SELECT id, before_json, after_json FROM resume_change_events
-     WHERE undo_expired_at IS NOT NULL OR redo_invalidated_at IS NOT NULL
-        OR snapshot_version_id IS NOT NULL`,
+     WHERE undo_expired_at IS NOT NULL OR redo_invalidated_at IS NOT NULL`,
   ).all();
   for (const row of rows) {
     const before = parse(row.before_json);
