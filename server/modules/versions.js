@@ -8,14 +8,16 @@
  * 重复 Idempotency-Key 不得新增版本。版本快照创建后不可修改（由数据库触发器保证）。
  */
 const db = require('../lib/db');
-const { uuidv7, nowIso, problem, deepClone } = require('../lib/util');
+const { uuidv7, nowIso, problem, hashJson } = require('../lib/util');
 const audit = require('../lib/audit');
 const { withIdempotency } = require('../lib/idempotency');
-const { putObject } = require('../lib/storage');
-const { renderPdf } = require('../lib/render/pdf');
-const { renderDocx } = require('../lib/render/docx');
-const { renderHtml } = require('../lib/render/html');
+const { getObject, putObject } = require('../lib/storage');
+const { renderPdfAsync } = require('../lib/render/pdf');
+const { renderDocxAsync } = require('../lib/render/docx');
+const { renderHtmlAsync } = require('../lib/render/html');
+const { ensureVersionThumbnail } = require('../lib/version-thumbnail');
 const { toVersionView } = require('./workspace');
+const ResumeDom = require('../../resume-dom');
 
 function loadProject(projectId, user) {
   const project = db.get('SELECT * FROM resume_projects WHERE id = ? AND owner_id = ?', [
@@ -26,29 +28,125 @@ function loadProject(projectId, user) {
   return project;
 }
 
-function resumeMainWork(resume) {
-  const experience = (resume.experience || [])[0];
-  if (experience && (experience.bullets || []).length) {
-    const bullet = experience.bullets.find((item) => item.id === 'target-bullet') || experience.bullets[0];
-    return bullet.text || '';
+function parseJson(value, fallback = {}) {
+  try {
+    return JSON.parse(value || JSON.stringify(fallback));
+  } catch (_) {
+    return fallback;
   }
-  return resume.summary || '';
+}
+
+function changeLabel(change) {
+  const after = parseJson(change.after_json);
+  if (after.label) return String(after.label).trim();
+  const beforeResume = parseJson(change.before_json).resume_json;
+  const afterResume = after.resume_json;
+  if (beforeResume && afterResume) {
+    const diff = ResumeDom.compareDocuments(
+      ResumeDom.ensureDocument(beforeResume),
+      ResumeDom.ensureDocument(afterResume),
+    );
+    const first = diff.changes.find((item) =>
+      ['added', 'removed', 'text', 'moved', 'structure'].includes(item.type));
+    if (first) {
+      const action = {
+        added: '新增',
+        removed: '删除',
+        text: '修改',
+        moved: '调整位置',
+        structure: '调整结构',
+      }[first.type];
+      return `${action}${first.label}`;
+    }
+  }
+  return '修改简历内容';
+}
+
+function contextLabel(payload) {
+  if (!payload || !Object.keys(payload).length) return '未设置岗位';
+  return [payload.title, payload.company].filter(Boolean).join(' · ') || '未设置岗位';
+}
+
+function currentJobPayload(project, user) {
+  if (!project.current_job_id) return {};
+  const job = db.get(
+    'SELECT * FROM target_jobs WHERE id = ? AND project_id = ? AND owner_id = ?',
+    [project.current_job_id, project.id, user.id],
+  );
+  if (!job) return {};
+  return {
+    id: job.id,
+    title: job.title,
+    company: job.company,
+    confirmed_text: job.confirmed_text,
+    analysis: parseJson(job.analysis_json),
+    revision: job.revision,
+    status: job.status,
+  };
+}
+
+function compareContexts(oldJob, currentJob) {
+  const jobSignature = (payload) => ({
+    id: payload && payload.id || null,
+    title: payload && payload.title || '',
+    company: payload && payload.company || '',
+    confirmed_text: payload && payload.confirmed_text || '',
+    analysis: payload && payload.analysis || {},
+    revision: payload && payload.revision || null,
+    status: payload && payload.status || '',
+  });
+  return [
+    {
+      type: 'job',
+      label: '目标岗位',
+      before: contextLabel(oldJob),
+      after: contextLabel(currentJob),
+      changed: hashJson(jobSignature(oldJob)) !== hashJson(jobSignature(currentJob)),
+    },
+  ];
+}
+
+function storedResumeDocument(resumePayload, templatePayload) {
+  const resume = parseJson(resumePayload);
+  if (resume.schema_version === ResumeDom.RESUME_DOCUMENT_VERSION) {
+    return ResumeDom.toResumeDocument(resume);
+  }
+  const template = parseJson(templatePayload);
+  return ResumeDom.toResumeDocument(
+    template && Object.keys(template).length
+      ? ResumeDom.createResumeAggregate(resume, template)
+      : resume,
+  );
 }
 
 /** 生成导出产物（PDF / DOCX / HTML），并登记到 artifacts。 */
-function renderVersionArtifacts({ user, version, force = false }) {
-  const resume = JSON.parse(version.resume_payload || '{}');
-  const templatePayload = JSON.parse(version.template_payload || '{}');
-  const template = templatePayload.schema ? templatePayload : { schema: {} };
-  const existing = db.all('SELECT * FROM artifacts WHERE version_id = ?', [version.id]);
-  if (existing.length && !force) {
-    return existing.map((row) => ({ id: row.id, type: row.type, size: row.size }));
+async function renderVersionArtifacts({ user, version, force = false }) {
+  const resume = storedResumeDocument(version.resume_payload, version.template_payload);
+  const template = { schema: {} };
+  // Prior text-only exports cannot satisfy the complete-document renderer.
+  // Keep their immutable files/URLs intact; regenerate once on explicit export.
+  const seenTypes = new Set();
+  const existing = db.all("SELECT * FROM artifacts WHERE version_id = ? AND owner_id = ? AND status = 'ready' ORDER BY created_at DESC, id DESC", [version.id, user.id])
+    .filter(row => {
+      if (seenTypes.has(row.type) || !row.object_key.includes('/document-export-v2/') || !getObject(row.object_key)) return false;
+      seenTypes.add(row.type); return true;
+    });
+  const requiredTypes = new Set(['html', 'pdf', 'docx']);
+  const ordered = values => values.sort((a, b) => [...requiredTypes].indexOf(a.type) - [...requiredTypes].indexOf(b.type));
+  const existingTypes = new Set(existing.map((row) => row.type));
+  if (!force && [...requiredTypes].every((type) => existingTypes.has(type))) {
+    return ordered(existing
+      .filter((row) => requiredTypes.has(row.type))
+      .map((row) => ({ id: row.id, type: row.type, size: row.size })));
   }
-  const created = [];
+  const created = existing
+    .filter((row) => requiredTypes.has(row.type) && !force)
+    .map((row) => ({ id: row.id, type: row.type, size: row.size }));
   const save = (type, buffer, mimeType) => {
-    const key = `${user.id}/versions/${version.id}-${type}`;
-    putObject(key, buffer);
+    if (!force && existingTypes.has(type)) return;
     const id = uuidv7();
+    const key = `${user.id}/document-export-v2/${version.id}-${id}-${type}`;
+    putObject(key, buffer);
     const sha = require('../lib/util').sha256(buffer);
     db.run(
       `INSERT INTO artifacts (id, snapshot_id, version_id, owner_id, type, object_key, mime_type, size, sha256, status, created_at)
@@ -57,19 +155,20 @@ function renderVersionArtifacts({ user, version, force = false }) {
     );
     created.push({ id, type, size: buffer.length });
   };
-  save('html', Buffer.from(renderHtml({ resume, template }), 'utf8'), 'text/html; charset=utf-8');
-  const pdf = renderPdf({ resume, template });
-  save('pdf', pdf.buffer, 'application/pdf');
-  save(
-    'docx',
-    renderDocx({ resume, template }).buffer,
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  );
-  db.run('UPDATE resume_versions SET artifact_refs_json = ? WHERE id = ?', [
-    JSON.stringify(Object.fromEntries(created.map((item) => [item.type, item.id]))),
-    version.id,
+  const options = { resume, template, ownerId: user.id };
+  const [html, pdf, docx] = await Promise.all([
+    renderHtmlAsync(options), renderPdfAsync(options), renderDocxAsync(options),
   ]);
-  return created;
+  db.tx(() => {
+    save('html', Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+    save('pdf', pdf.buffer, 'application/pdf');
+    save('docx', docx.buffer, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    db.run('UPDATE resume_versions SET artifact_refs_json = ? WHERE id = ?', [
+      JSON.stringify(Object.fromEntries(created.map((item) => [item.type, item.id]))),
+      version.id,
+    ]);
+  });
+  return ordered(created);
 }
 
 const routes = [
@@ -95,7 +194,7 @@ const routes = [
   {
     method: 'POST',
     pattern: '/projects/:id/versions',
-    handler: ({ params, body, user, req, requestId, ipHash }) =>
+    handler: ({ params, body, user, req, requestId, ipHash, versionKind = 'manual' }) =>
       withIdempotency(user, req.headers['idempotency-key'], 'resume_version', () =>
         db.tx(() => {
           const project = loadProject(params.id, user);
@@ -112,11 +211,6 @@ const routes = [
             ? db.get('SELECT * FROM target_jobs WHERE id = ? AND owner_id = ?', [
                 project.current_job_id,
                 user.id,
-              ])
-            : null;
-          const templateVersion = project.current_template_version_id
-            ? db.get('SELECT * FROM template_versions WHERE id = ?', [
-                project.current_template_version_id,
               ])
             : null;
 
@@ -138,13 +232,6 @@ const routes = [
               expected: body.job_revision,
               current: job.revision,
             });
-          }
-          if (
-            body.template_version_id &&
-            templateVersion &&
-            body.template_version_id !== templateVersion.id
-          ) {
-            throw problem.conflict('REVISION_CONFLICT', '模板已更换，请刷新后重试');
           }
 
           const versionNo = db.nextSequence('resume_versions', project.id, 'version_no');
@@ -168,16 +255,6 @@ const routes = [
               meta: JSON.parse(row.meta_json || '{}'),
               revision: row.revision,
             }));
-          const templatePayload = templateVersion
-            ? {
-                template_version_id: templateVersion.id,
-                name: db.get('SELECT name FROM template_definitions WHERE id = ?', [
-                  templateVersion.template_id,
-                ]).name,
-                version: templateVersion.version,
-                schema: JSON.parse(templateVersion.schema_json || '{}'),
-              }
-            : {};
           const jobPayload = job
             ? {
                 id: job.id,
@@ -187,10 +264,12 @@ const routes = [
                 analysis: JSON.parse(job.analysis_json || '{}'),
                 revision: job.revision,
                 status: job.status,
-                sources_count: db.get('SELECT COUNT(*) AS total FROM job_sources WHERE job_id = ?', [job.id])
+                files_count: db.get('SELECT COUNT(*) AS total FROM job_files WHERE job_id = ?', [job.id])
                   .total,
               }
             : null;
+          const resumePayload = ResumeDom.toResumeDocument(parseJson(draft.resume_json));
+          require('../lib/document-assets').validateDocumentAssets(resumePayload, user.id);
 
           // 未显式传 change_ids 时，把当前全部未成版修改纳入本次版本
           const changeIds = Array.isArray(body.change_ids) && body.change_ids.length
@@ -205,11 +284,11 @@ const routes = [
           const changeLabels = changeIds.length
             ? db
                 .all(
-                  `SELECT id, after_json FROM resume_change_events
+                  `SELECT id, change_type, before_json, after_json FROM resume_change_events
                    WHERE project_id = ? AND owner_id = ? AND id IN (${changeIds.map(() => '?').join(',')})`,
                   [project.id, user.id, ...changeIds],
                 )
-                .map((row) => (JSON.parse(row.after_json || '{}').label || '').trim())
+                .map(changeLabel)
                 .filter(Boolean)
             : [];
 
@@ -218,12 +297,13 @@ const routes = [
             `INSERT INTO resume_versions (id, project_id, owner_id, version_no, kind, name, base_version_id,
                profile_payload, template_payload, job_payload, resume_payload, change_summary_json,
                artifact_refs_json, generation_snapshot_id, status, created_by, created_at)
-             VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, '{}', NULL, 'complete', 'user', ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', NULL, 'complete', 'user', ?)`,
             [
               id,
               project.id,
               user.id,
               versionNo,
+              versionKind,
               name,
               draft.base_version_id,
               JSON.stringify({
@@ -232,9 +312,9 @@ const routes = [
                 experiences,
                 revision: profile.revision,
               }),
-              JSON.stringify(templatePayload),
+              JSON.stringify({}),
               JSON.stringify(jobPayload || {}),
-              draft.resume_json,
+              JSON.stringify(resumePayload),
               JSON.stringify({
                 changes: changeLabels,
                 list_summary: changeLabels.length ? changeLabels.join('、') : '手动保存当前草稿',
@@ -246,9 +326,7 @@ const routes = [
                 job_data: jobPayload
                   ? `${jobPayload.title}｜${jobPayload.company || ''}｜当前岗位资料`
                   : '未设置岗位',
-                template_data: `${templatePayload.name || '系统模板'}｜当前排版`,
                 compare_note: '',
-                time_label: `今天 ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2, '0')}`,
               }),
               now,
             ],
@@ -297,31 +375,59 @@ const routes = [
       ]);
       if (!version) throw problem.notFound('版本不存在');
       const summary = JSON.parse(version.change_summary_json || '{}');
-      const resume = JSON.parse(version.resume_payload || '{}');
       const jobPayload = JSON.parse(version.job_payload || '{}');
-      const templatePayload = JSON.parse(version.template_payload || '{}');
+      const resume = storedResumeDocument(version.resume_payload, version.template_payload);
       const profilePayload = JSON.parse(version.profile_payload || '{}');
       const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [
         version.project_id,
         user.id,
       ]);
+      const draftResume = ResumeDom.toResumeDocument(parseJson(draft && draft.resume_json));
+      const versionDocument = ResumeDom.ensureDocument(resume);
+      const draftDocument = ResumeDom.ensureDocument(draftResume);
       return {
         ...toVersionView(version, draft ? draft.base_version_id : null),
         resume,
+        matches_current_draft: hashJson(versionDocument) === hashJson(draftDocument),
+        draft_has_unsnapshotted_changes: Boolean(draft && draft.has_unsnapshotted_changes),
         profile_payload: profilePayload,
-        template_payload: templatePayload,
         job_payload: jobPayload,
         summary: {
           changes: summary.changes || [],
           profile_data: summary.profile_data || '',
           job_data: summary.job_data || '',
-          template_data: summary.template_data || '',
           compare_note: summary.compare_note || '',
         },
         artifacts: db
           .all('SELECT id, type, size, mime_type FROM artifacts WHERE version_id = ?', [version.id])
           .map((row) => ({ id: row.id, type: row.type, size: row.size, mime_type: row.mime_type })),
       };
+    },
+  },
+  {
+    method: 'GET',
+    pattern: '/versions/:id/thumbnail',
+    raw: true,
+    handler: async ({ params, user, res }) => {
+      const version = db.get('SELECT * FROM resume_versions WHERE id = ? AND owner_id = ?', [
+        params.id,
+        user.id,
+      ]);
+      if (!version) throw problem.notFound('版本不存在');
+      const artifact = await ensureVersionThumbnail(version);
+      if (!artifact) throw problem.serverError('版本缩略图生成失败');
+      const buffer = getObject(artifact.object_key);
+      if (!buffer) throw problem.notFound('版本缩略图不存在');
+      res.writeHead(200, {
+        'content-type': artifact.mime_type || 'image/png',
+        'content-length': buffer.length,
+        'content-disposition': 'inline',
+        'cache-control': 'private, max-age=3600',
+        etag: `"${artifact.sha256}"`,
+        'x-content-type-options': 'nosniff',
+      });
+      res.end(buffer);
+      return { __handled: true };
     },
   },
   {
@@ -337,55 +443,105 @@ const routes = [
         version.project_id,
         user.id,
       ]);
-      const targetId = query.get('target') || (draft ? draft.base_version_id : null);
+      if (!draft) throw problem.notFound('草稿不存在');
+      const targetId = query.get('target');
       const current = targetId
-        ? db.get('SELECT * FROM resume_versions WHERE id = ? AND owner_id = ?', [targetId, user.id])
+        ? db.get(
+            'SELECT * FROM resume_versions WHERE id = ? AND project_id = ? AND owner_id = ?',
+            [targetId, version.project_id, user.id],
+          )
         : null;
-      const summary = JSON.parse(version.change_summary_json || '{}');
-      const currentSummary = current ? JSON.parse(current.change_summary_json || '{}') : {};
-      const oldResume = JSON.parse(version.resume_payload || '{}');
+      if (targetId && !current) throw problem.notFound('要比较的版本不存在');
+      const oldJob = parseJson(version.job_payload);
+      const oldResume = storedResumeDocument(version.resume_payload, version.template_payload);
       const currentResume = current
-        ? JSON.parse(current.resume_payload || '{}')
-        : JSON.parse((draft && draft.resume_json) || '{}');
+        ? storedResumeDocument(current.resume_payload, current.template_payload)
+        : ResumeDom.toResumeDocument(parseJson(draft.resume_json));
+      const project = current ? null : loadProject(version.project_id, user);
+      const currentJob = current
+        ? parseJson(current.job_payload)
+        : currentJobPayload(project, user);
+      const diff = ResumeDom.compareDocuments(
+        ResumeDom.ensureDocument(oldResume),
+        ResumeDom.ensureDocument(currentResume),
+      );
+      const contextChanges = compareContexts(oldJob, currentJob);
       return {
         old: {
           id: version.id,
           title: version.name,
-          time_label: summary.time_label || '',
-          copy: resumeMainWork(oldResume),
+          created_at: version.created_at,
+          resume: oldResume,
         },
         current: {
           id: current ? current.id : null,
           title: current ? current.name : '当前草稿',
-          time_label: current ? currentSummary.time_label || '' : '当前草稿',
-          copy: resumeMainWork(currentResume),
+          created_at: current ? current.created_at : draft.updated_at,
+          resume: currentResume,
+          has_unsnapshotted_changes: current ? false : Boolean(draft.has_unsnapshotted_changes),
         },
-        note:
-          summary.compare_note ||
-          '两个版本之间的差异已按主要经历内容展示；未变化的部分已省略。',
+        diff,
+        context_changes: contextChanges,
+        note: diff.equal && !contextChanges.some((item) => item.changed)
+          ? '这两份简历当前没有差异。'
+          : `已比较完整简历，共发现 ${diff.changes.length} 处内容或结构变化。`,
       };
     },
   },
   {
     method: 'POST',
     pattern: '/versions/:id/clone',
-    handler: ({ params, user, requestId, ipHash }) =>
-      db.tx(() => {
+    handler: ({ params, body, user, req, requestId, ipHash }) =>
+      withIdempotency(user, req.headers['idempotency-key'], 'resume_version_clone', () =>
+        db.tx(() => {
         const version = db.get('SELECT * FROM resume_versions WHERE id = ? AND owner_id = ?', [
           params.id,
           user.id,
         ]);
         if (!version) throw problem.notFound('版本不存在');
+        const project = loadProject(version.project_id, user);
         const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [
           version.project_id,
           user.id,
         ]);
         if (!draft) throw problem.notFound('草稿不存在');
+        if (body.draft_revision !== undefined && body.draft_revision !== draft.revision) {
+          throw problem.conflict('REVISION_CONFLICT', '简历已变化，请刷新后重试', {
+            expected: body.draft_revision,
+            current: draft.revision,
+          });
+        }
+        const pending = db.get(
+          `SELECT COUNT(*) AS total FROM resume_change_events
+           WHERE project_id = ? AND owner_id = ? AND reverted_at IS NULL AND snapshot_version_id IS NULL`,
+          [project.id, user.id],
+        ).total;
+        if ((draft.has_unsnapshotted_changes || pending) && !body.discard_unsaved) {
+          throw problem.conflict(
+            'UNSAVED_DRAFT_CHANGES',
+            '当前草稿还有未保存的修改，请先保存或确认放弃后再继续',
+            { pending_changes: pending },
+          );
+        }
+        const now = nowIso();
+        if (body.discard_unsaved && pending) {
+          db.run(
+            `UPDATE resume_change_events SET reverted_at = ?
+             WHERE project_id = ? AND owner_id = ? AND reverted_at IS NULL AND snapshot_version_id IS NULL`,
+            [now, project.id, user.id],
+          );
+        }
+
         // 复制旧版本创建新草稿，不覆盖原版本（PRD 发布验收 20）
+        const copiedDocument = storedResumeDocument(
+          version.resume_payload,
+          version.template_payload,
+        );
+        require('../lib/document-assets').validateDocumentAssets(copiedDocument, user.id);
         const revision = draft.revision + 1;
         db.run(
           'UPDATE resume_drafts SET resume_json = ?, base_version_id = ?, revision = ?, has_unsnapshotted_changes = 0, updated_at = ? WHERE id = ?',
-          [version.resume_payload, version.id, revision, nowIso(), draft.id],
+          [JSON.stringify(copiedDocument), version.id, revision, now, draft.id],
         );
         audit.log({
           ownerId: user.id,
@@ -394,27 +550,35 @@ const routes = [
           resourceId: version.id,
           requestId,
           ipHash,
-          metadata: { draft_revision: revision },
+          metadata: {
+            draft_revision: revision,
+            discarded_changes: body.discard_unsaved ? pending : 0,
+            profile_unchanged: true,
+            job_unchanged: true,
+          },
         });
         return {
           version_id: version.id,
           draft_revision: revision,
-          resume_json: JSON.parse(version.resume_payload || '{}'),
+          resume_json: copiedDocument,
           base_version_id: version.id,
           original_version_intact: true,
+          profile_unchanged: true,
+          job_unchanged: true,
         };
-      }),
+        }),
+      ),
   },
   {
     method: 'POST',
     pattern: '/versions/:id/export',
-    handler: ({ params, body, user, requestId, ipHash }) => {
+    handler: async ({ params, body, user, requestId, ipHash }) => {
       const version = db.get('SELECT * FROM resume_versions WHERE id = ? AND owner_id = ?', [
         params.id,
         user.id,
       ]);
       if (!version) throw problem.notFound('版本不存在');
-      const artifacts = renderVersionArtifacts({
+      const artifacts = await renderVersionArtifacts({
         user,
         version,
         force: Boolean(body.force),
@@ -439,4 +603,7 @@ const routes = [
   },
 ];
 
-module.exports = { routes, renderVersionArtifacts, resumeMainWork };
+// One snapshot implementation for manual saves and first AI generation.
+const saveDraftVersion = routes.find((route) => route.method === 'POST'
+  && route.pattern === '/projects/:id/versions').handler;
+module.exports = { routes, renderVersionArtifacts, saveDraftVersion };

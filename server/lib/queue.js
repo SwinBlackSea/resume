@@ -5,7 +5,7 @@
  * - 业务事务提交时把事件写入 outbox_events；独立 publisher 投递到队列，
  *   保证「数据库提交成功但队列暂时不可用」时任务不丢失（TECH §8.1、§18.2）。
  * - Worker 按 DAG 执行生成任务：
- *   analyze_job → compose_resume → validate_facts → render_html →
+ *   analyze_job → compose_resume → validate_document → render_html →
  *   （render_pdf ∥ render_docx）→ validate_artifacts → finalize
  * - 每一步有独立超时与错误码；PDF 与 DOCX 中一个成功时整体为 partial（TECH §8.3）。
  */
@@ -14,17 +14,21 @@ const events = require('./events');
 const { uuidv7, nowIso, sha256, problem } = require('./util');
 const { composeResume, splitBullets } = require('./compose');
 const { analyzeJobText, matchJobWithProfile } = require('./job-analyzer');
-const { validateResumeJson, validateFacts } = require('./resume-schema');
-const { recognizeJobSources } = require('./ocr');
+const { validateResumeJson } = require('./resume-schema');
+const { recognizeJobFiles } = require('./ocr');
+const documentRecognition = require('./document-recognition');
+const fs = require('node:fs');
 const { putObject } = require('./storage');
-const { renderPdf } = require('./render/pdf');
-const { renderDocx } = require('./render/docx');
-const { renderHtml } = require('./render/html');
+const { objectPath } = require('./storage');
+const { renderPdfAsync } = require('./render/pdf');
+const { renderDocxAsync } = require('./render/docx');
+const { renderHtmlAsync } = require('./render/html');
+const ResumeDom = require('../../resume-dom');
 
 const STEPS = [
-  { key: 'analyze_job', label: '正在校验资料与岗位', progress: 15 },
+  { key: 'analyze_job', label: '正在读取资料与岗位', progress: 15 },
   { key: 'compose_resume', label: '正在重组简历内容', progress: 35 },
-  { key: 'validate_facts', label: '正在检查内容是否真实', progress: 50 },
+  { key: 'validate_document', label: '正在检查文档结构', progress: 50 },
   { key: 'render_html', label: '正在排版简历', progress: 62 },
   { key: 'render_artifacts', label: '正在渲染 PDF 与 DOCX', progress: 80 },
   { key: 'validate_artifacts', label: '正在校验导出文件', progress: 92 },
@@ -64,7 +68,7 @@ function stepOf(key) {
 
 /** 保存产物并登记 artifacts（先写对象，再在 finalize 事务中登记，保证原子性）。 */
 function writeArtifactFile(ownerId, snapshotId, type, buffer, mimeType) {
-  const key = `${ownerId}/artifacts/${snapshotId}-${type}`;
+  const key = `${ownerId}/document-export-v2/${snapshotId}-${type}`;
   putObject(key, buffer);
   return { key, size: buffer.length, sha256: sha256(buffer), mimeType };
 }
@@ -104,7 +108,9 @@ async function runGeneration(snapshotId) {
   const owner = { id: snapshot.owner_id };
   const projectId = snapshot.project_id;
   const profilePayload = JSON.parse(snapshot.profile_payload || '{}');
-  const templatePayload = JSON.parse(snapshot.template_payload || '{}');
+  const resumeInput = ResumeDom.toResumeDocument(
+    JSON.parse(snapshot.resume_input_payload || snapshot.template_payload || '{}'),
+  );
   const jobPayload = JSON.parse(snapshot.job_payload || '{}');
 
   const attempt = job.attempt_count + 1;
@@ -117,7 +123,7 @@ async function runGeneration(snapshotId) {
     error_code: null,
     error_message_safe: null,
   });
-  emitGeneration(snapshotId, { status: 'running', step: 'analyze_job', progress: 5, label: '正在校验资料与岗位' });
+  emitGeneration(snapshotId, { status: 'running', step: 'analyze_job', progress: 5, label: '正在读取资料与岗位' });
 
   const advance = (key) => {
     const step = stepOf(key);
@@ -135,48 +141,50 @@ async function runGeneration(snapshotId) {
     const facts = (profilePayload.experiences || [])
       .filter((exp) => !exp.deleted_at)
       .flatMap((exp) => splitBullets(exp.description))
-      .concat([profilePayload.summary || '']);
+      .concat([profilePayload.summary || '', ResumeDom.plainText(resumeInput)]);
     const match = matchJobWithProfile(analysis, facts);
     const jobView = { ...jobPayload, analysis: { ...analysis, match } };
 
     // ---- compose_resume ----
     advance('compose_resume');
-    const resume = composeResume({
+    const composed = composeResume({
       profileBasics: profilePayload.basics || {},
       profileSummary: profilePayload.summary || '',
       experiences: profilePayload.experiences || [],
       job: jobView,
-      template: templatePayload,
+      template: {},
     });
+    const generationNotes = composed.generation_notes || [];
+    const validationIssues = composed.validation_issues || [];
+    const generatedDocument = ResumeDom.toResumeDocument(
+      ResumeDom.createResumeAggregate(composed, {}),
+    );
+    const resume = {
+      ...generatedDocument,
+      page_setup: resumeInput.page_setup,
+      styles: resumeInput.styles,
+      assets: resumeInput.assets,
+    };
 
-    // ---- validate_facts ----
-    advance('validate_facts');
+    // ---- validate_document ----
+    advance('validate_document');
     const schemaCheck = validateResumeJson(resume);
     if (!schemaCheck.valid) {
       throw Object.assign(new Error('结构化简历未通过 Schema 校验'), {
-        code: 'FACT_VALIDATION_FAILED',
+        code: 'DOCUMENT_SCHEMA_INVALID',
         safe: schemaCheck.errors.join('；'),
       });
     }
-    const factCheck = validateFacts(resume, facts);
-    const blocking = factCheck.violations.filter((v) => v.code === 'MISSING_SOURCE');
-    if (blocking.length) {
-      throw Object.assign(new Error('存在缺少事实来源的内容'), {
-        code: 'FACT_VALIDATION_FAILED',
-        safe: '部分内容缺少已确认的事实来源，已停止生成',
-      });
-    }
-
     // ---- render_html ----
     advance('render_html');
-    const htmlString = renderHtml({ resume, template: templatePayload });
+    const htmlString = await renderHtmlAsync({ resume, template: {}, ownerId: owner.id });
     const htmlFile = writeArtifactFile(owner.id, snapshotId, 'html', Buffer.from(htmlString, 'utf8'), 'text/html; charset=utf-8');
 
     // ---- render_pdf ∥ render_docx（并行，允许部分成功） ----
     advance('render_artifacts');
     const [pdfResult, docxResult] = await Promise.allSettled([
-      Promise.resolve().then(() => renderPdf({ resume, template: templatePayload })),
-      Promise.resolve().then(() => renderDocx({ resume, template: templatePayload })),
+      renderPdfAsync({ resume, template: {}, ownerId: owner.id }),
+      renderDocxAsync({ resume, template: {}, ownerId: owner.id }),
     ]);
 
     const pdfFile = pdfResult.status === 'fulfilled'
@@ -204,11 +212,10 @@ async function runGeneration(snapshotId) {
 
     // ---- validate_artifacts ----
     advance('validate_artifacts');
-    const maxPages = (templatePayload.schema && templatePayload.schema.page && templatePayload.schema.page.max_pages) || 2;
+    const maxPages = resume.page_setup.max_pages || 2;
     const validation = {
       schema_valid: schemaCheck.valid,
-      fact_violations: factCheck.violations,
-      pending_claims: resume.pending_claims || [],
+      validation_issues: validationIssues,
       pdf_pages: pdfResult.status === 'fulfilled' ? pdfResult.value.pages : null,
       page_limit: maxPages,
       page_overflow: pdfResult.status === 'fulfilled' ? pdfResult.value.pages > maxPages : false,
@@ -236,8 +243,8 @@ async function runGeneration(snapshotId) {
         owner.id,
         JSON.stringify(resume),
         JSON.stringify({
-          generation_notes: resume.generation_notes,
-          pending_claims: resume.pending_claims,
+          generation_notes: generationNotes,
+          validation_issues: validationIssues,
           match,
         }),
         JSON.stringify(validation),
@@ -265,12 +272,22 @@ async function runGeneration(snapshotId) {
           `AI 生成版本 · ${jobView.title || '当前岗位'}`,
           null, // 生成版本以快照为输入，base 留空
           JSON.stringify(profilePayload),
-          JSON.stringify(templatePayload),
+          JSON.stringify({}),
           JSON.stringify(jobView),
           JSON.stringify(resume),
           JSON.stringify({
-            changes: (resume.generation_notes || []).map((note) => note.text),
-            pending_claims: resume.pending_claims || [],
+            changes: generationNotes.map((note) => note.text),
+            list_summary: generationNotes.length
+              ? generationNotes.slice(0, 2).map((note) => note.text).join('、')
+              : 'AI 已按当前要求生成完整简历',
+            profile_data: `${(profilePayload.basics && profilePayload.basics.name) || ''}｜${
+              (profilePayload.basics && profilePayload.basics.city) || ''
+            }；${(profilePayload.experiences || []).filter((item) => item.type === 'work').length} 段工作经历、${
+              (profilePayload.experiences || []).filter((item) => item.type === 'project').length
+            } 个项目`,
+            job_data: [jobView.title, jobView.company].filter(Boolean).join('｜') || '未设置岗位',
+            compare_note: '',
+            validation_issues: validationIssues,
             match,
           }),
           JSON.stringify({}),
@@ -302,12 +319,11 @@ async function runGeneration(snapshotId) {
           [
             JSON.stringify(resume),
             id,
-            db.nextSequence('resume_drafts', projectId, 'revision') || draft.revision + 1,
+            draft.revision + 1,
             nowIso(),
             draft.id,
           ],
         );
-        db.run('UPDATE resume_drafts SET revision = revision + 1 WHERE id = ?', [draft.id]);
       }
       db.run('UPDATE resume_projects SET current_job_id = COALESCE(?, current_job_id), updated_at = ? WHERE id = ?', [
         jobPayload.id || null,
@@ -358,25 +374,25 @@ async function runGeneration(snapshotId) {
 
 // ---------------------------------------------------------------- 岗位与模板任务
 
-/** OCR 任务：写入 job_sources 的 OCR 文本与置信度。 */
+/** OCR 任务：写入岗位文件的 OCR 文本与置信度。 */
 async function runJobOcr(jobId) {
   const job = db.get('SELECT * FROM target_jobs WHERE id = ?', [jobId]);
   if (!job) return;
-  const sources = db.all(
+  const files = db.all(
     `SELECT js.*, u.object_key, u.original_name, u.mime_type, u.id AS upload_id, u.size
-     FROM job_sources js LEFT JOIN uploads u ON u.id = js.upload_id
+     FROM job_files js LEFT JOIN uploads u ON u.id = js.upload_id
      WHERE js.job_id = ? ORDER BY js.sort_order ASC`,
     [jobId],
   ).map((row) => ({ id: row.id, upload: row }));
 
   try {
-    const result = await recognizeJobSources(sources);
+    const result = await recognizeJobFiles(files);
     db.tx(() => {
-      result.sources.forEach((item) => {
-        db.run('UPDATE job_sources SET ocr_raw_text = ?, ocr_confidence = ? WHERE id = ?', [
+      result.files.forEach((item) => {
+        db.run('UPDATE job_files SET ocr_raw_text = ?, ocr_confidence = ? WHERE id = ?', [
           item.text,
           item.confidence,
-          item.source_id,
+          item.file_id,
         ]);
       });
       db.run('UPDATE target_jobs SET ocr_text = ?, revision = revision + 1, updated_at = ? WHERE id = ?', [
@@ -439,6 +455,191 @@ function runTemplateParse({ templateVersionId }) {
   return { ok: true };
 }
 
+function emitDocumentImport(importId, state) {
+  events.publish(importId, { ...state, id: importId, at: nowIso() });
+}
+
+function updateDocumentImport(importId, patch) {
+  const fields = Object.keys(patch);
+  if (!fields.length) return;
+  db.run(`UPDATE document_imports SET ${fields.map((field) => `${field} = ?`).join(', ')}, updated_at = ? WHERE id = ?`, [
+    ...fields.map((field) => patch[field]),
+    nowIso(),
+    importId,
+  ]);
+  emitDocumentImport(importId, patch);
+}
+
+function attachSceneBackgroundArtifacts(contentCandidate, pageArtifactIds) {
+  const root =
+    contentCandidate
+    && contentCandidate.resume_json
+    && contentCandidate.resume_json.dom_document
+    && contentCandidate.resume_json.dom_document.root;
+  if (!root || !pageArtifactIds.size) return;
+  function visit(node) {
+    if (!node || node.type !== 'element') return;
+    const page = Number(
+      node.attributes && node.attributes['data-scene-background-page'],
+    );
+    if (Number.isFinite(page) && pageArtifactIds.has(page)) {
+      node.attributes = {
+        ...(node.attributes || {}),
+        'data-scene-background-artifact-id': pageArtifactIds.get(page),
+      };
+    }
+    (node.children || []).forEach(visit);
+  }
+  visit(root);
+}
+
+async function runDocumentImport(importId) {
+  const row = db.get(
+    `SELECT di.*, u.object_key, u.original_name, u.mime_type, u.size, u.chat_conversation_id
+     FROM document_imports di
+     JOIN uploads u ON u.id = di.upload_id
+     WHERE di.id = ?`,
+    [importId],
+  );
+  if (!row || row.status === 'applied') return;
+  let runtimeDir = null;
+  try {
+    updateDocumentImport(importId, {
+      status: 'scanning',
+      error_code: null,
+      error_message_safe: null,
+    });
+    updateDocumentImport(importId, { status: 'normalizing' });
+    updateDocumentImport(importId, { status: 'extracting' });
+    const result = await documentRecognition.recognize({
+      inputPath: objectPath(row.object_key),
+      originalName: row.original_name,
+      mimeType: row.mime_type,
+    });
+    runtimeDir = result.runtime_dir;
+    updateDocumentImport(importId, { status: 'analyzing' });
+    updateDocumentImport(importId, { status: 'validating' });
+    const previewArtifactIds = [];
+    for (const preview of result.previews || []) {
+      if (!preview.path || !fs.existsSync(preview.path)) continue;
+      const buffer = fs.readFileSync(preview.path);
+      const key = `${row.owner_id}/document-imports/${importId}/page-${preview.page}.png`;
+      putObject(key, buffer);
+      const artifactId = uuidv7();
+      db.run(
+        `INSERT INTO artifacts
+         (id, snapshot_id, version_id, document_import_id, owner_id, type, object_key, mime_type, size, sha256, status, expires_at, created_at)
+         VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
+        [
+          artifactId,
+          importId,
+          row.owner_id,
+          `import_preview_${preview.page}`,
+          key,
+          preview.mime_type || 'image/png',
+          buffer.length,
+          sha256(buffer),
+          row.expires_at || null,
+          nowIso(),
+        ],
+      );
+      previewArtifactIds.push(artifactId);
+    }
+    const sceneBackgroundArtifactIds = new Map();
+    for (const background of result.scene_backgrounds || []) {
+      if (!background.path || !fs.existsSync(background.path)) continue;
+      const buffer = fs.readFileSync(background.path);
+      const key = `${row.owner_id}/document-imports/${importId}/scene-background-${background.page}.png`;
+      putObject(key, buffer);
+      const artifactId = uuidv7();
+      db.run(
+        `INSERT INTO artifacts
+         (id, snapshot_id, version_id, document_import_id, owner_id, type, object_key, mime_type, size, sha256, status, expires_at, created_at)
+         VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'ready', NULL, ?)`,
+        [
+          artifactId,
+          importId,
+          row.owner_id,
+          `import_scene_background_${background.page}`,
+          key,
+          background.mime_type || 'image/png',
+          buffer.length,
+          sha256(buffer),
+          nowIso(),
+        ],
+      );
+      sceneBackgroundArtifactIds.set(Number(background.page), artifactId);
+    }
+    attachSceneBackgroundArtifacts(result.content_candidate, sceneBackgroundArtifactIds);
+    if (
+      result.layout_candidate
+      && result.layout_candidate.schema
+      && result.layout_candidate.schema.assets
+    ) {
+      result.layout_candidate.schema.assets.scene_background_artifact_ids =
+        [...sceneBackgroundArtifactIds.entries()]
+          .sort((left, right) => left[0] - right[0])
+          .map(([, artifactId]) => artifactId);
+    }
+    db.run(
+      `UPDATE document_imports
+       SET status = 'needs_review', detected_format = ?, page_count = ?, parser_version = ?,
+           model_version = ?, content_candidate = ?, layout_candidate = ?, quality_report = ?,
+           warning_codes = ?, preview_artifact_ids = ?, error_code = NULL, error_message_safe = NULL,
+           updated_at = ?
+       WHERE id = ?`,
+      [
+        result.detected_format,
+        result.page_count,
+        result.parser_version,
+        result.model_version,
+        JSON.stringify(result.content_candidate),
+        JSON.stringify(result.layout_candidate),
+        JSON.stringify(result.quality_report),
+        JSON.stringify(result.warning_codes || []),
+        JSON.stringify(previewArtifactIds),
+        nowIso(),
+        importId,
+      ],
+    );
+    if (['pdf', 'docx', 'doc', 'png', 'jpg', 'jpeg', 'webp'].includes(result.detected_format)) {
+      try {
+        await require('./document-assets').prepareUploadImages(row.upload_id, {
+          ownerId: row.owner_id, projectId: row.project_id, conversationId: row.chat_conversation_id,
+        });
+      } catch (_) {
+        // Import already retains the faithful page/background. Unsupported
+        // standalone artwork must not destroy usable editable text or photos.
+        const warnings = [...new Set([...(result.warning_codes || []), 'IMAGE_CANDIDATES_UNAVAILABLE'])];
+        result.warning_codes = warnings;
+        db.run('UPDATE document_imports SET warning_codes = ? WHERE id = ?', [JSON.stringify(warnings), importId]);
+      }
+    }
+    emitDocumentImport(importId, {
+      status: 'needs_review',
+      progress: 100,
+      warning_codes: result.warning_codes || [],
+    });
+    return { ok: true, status: 'needs_review' };
+  } catch (error) {
+    const code = error.code || 'DOCUMENT_RECOGNITION_FAILED';
+    const safe =
+      code === 'DOCUMENT_ENCRYPTED'
+        ? '文件已加密，请解除密码后重新上传'
+        : error.message || '文档识别失败，请稍后重试';
+    updateDocumentImport(importId, {
+      status: 'failed',
+      error_code: code,
+      error_message_safe: safe,
+    });
+    console.error('[document-recognition] failed', importId, code, error.message);
+    if (error.retryable) throw error;
+    return { ok: false, status: 'failed', error_code: code };
+  } finally {
+    documentRecognition.cleanup(runtimeDir);
+  }
+}
+
 // ---------------------------------------------------------------- Worker 循环
 
 const HANDLERS = {
@@ -446,6 +647,7 @@ const HANDLERS = {
   'job.ocr.requested': ({ aggregateId }) => runJobOcr(aggregateId),
   'job.analyze.requested': ({ aggregateId }) => runJobAnalyze(aggregateId),
   'template.parse.requested': ({ payload }) => runTemplateParse(payload),
+  'document-import.recognition.requested': ({ aggregateId }) => runDocumentImport(aggregateId),
 };
 
 let timer = null;
@@ -468,7 +670,10 @@ async function processOnce(limit = 10) {
       db.run("UPDATE outbox_events SET status = 'done', processed_at = ? WHERE id = ?", [nowIso(), row.id]);
     } catch (err) {
       const attempts = row.attempts + 1;
-      const retryable = err && err.code === 'PROVIDER_TEMPORARY';
+      const retryable =
+        err
+        && ['PROVIDER_TEMPORARY', 'DOCUMENT_SERVICE_UNAVAILABLE', 'DOCUMENT_RECOGNITION_TIMEOUT']
+          .includes(err.code);
       if (retryable && attempts < 3) {
         // 可重试错误使用指数退避加随机抖动（TECH §8.4）
         const delay = Math.round(Math.min(30000, 500 * 2 ** attempts) + Math.random() * 300);
@@ -512,5 +717,6 @@ module.exports = {
   runJobOcr,
   runJobAnalyze,
   runTemplateParse,
+  runDocumentImport,
   STEPS,
 };

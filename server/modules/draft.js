@@ -2,12 +2,25 @@
 /**
  * 简历草稿与变更事件（TECH §4.3、§9.6、PRD §6.5）。
  *
- * 简历正文或模板每次成功修改后写入草稿并追加可撤销 change event；
+ * 画布文字事务或已应用的 AI 修改写入同一份完整文档并追加可撤销 change event；
  * 不得因此自动创建历史版本。撤销应同时回滚草稿并标记对应事件 reverted。
  */
 const db = require('../lib/db');
-const { uuidv7, nowIso, problem } = require('../lib/util');
+const { uuidv7, nowIso, problem, hashJson } = require('../lib/util');
 const audit = require('../lib/audit');
+const {
+  createNodeDeltaPair,
+  createStructureDeltaPair,
+  isArchivedPayload,
+  isNodeDelta,
+  isStructureDelta,
+  restoreNodeDelta,
+  restoreStructureDelta,
+} = require('../lib/resume-change');
+const { compileManualNodeAction } = require('../lib/manual-node-actions');
+const { refreshResumeProposalStaleness } = require('../lib/resume-proposals');
+const ResumeDom = require('../../resume-dom');
+const HISTORY_DEPTH = 5;
 
 /** 定位并更新某条 bullet 的文本。 */
 function applyBulletText(resume, bulletId, text) {
@@ -38,7 +51,31 @@ function findBullet(resume, bulletId) {
 
 /** 把变更应用到草稿（正向与撤销共用）。 */
 function applyChangePatch(resume, event, direction) {
-  const payload = direction === 'forward' ? JSON.parse(event.after_json) : JSON.parse(event.before_json);
+  const before = JSON.parse(event.before_json || '{}');
+  const after = JSON.parse(event.after_json || '{}');
+  const payload = direction === 'forward' ? after : before;
+  const expected = direction === 'forward' ? before : after;
+  if (isArchivedPayload(payload)) {
+    const error = new Error('这条较早的操作记录已归档，不能再单独撤销');
+    error.code = 'CHANGE_ARCHIVED';
+    throw error;
+  }
+  if (isNodeDelta(payload)) {
+    return restoreNodeDelta(resume, payload, expected);
+  }
+  if (isStructureDelta(payload)) {
+    return restoreStructureDelta(resume, payload, expected);
+  }
+  if (
+    payload.resume_json
+    && expected.resume_json
+    && hashJson(ResumeDom.toResumeDocument(resume))
+      !== hashJson(ResumeDom.toResumeDocument(expected.resume_json))
+  ) {
+    const error = new Error('整份简历在此后又发生了变化');
+    error.code = 'CHANGE_DOCUMENT_MODIFIED';
+    throw error;
+  }
   switch (event.change_type) {
     case 'bullet_text':
       applyBulletText(resume, event.scope_id, payload.text);
@@ -47,9 +84,20 @@ function applyChangePatch(resume, event, direction) {
       resume.summary = payload.text;
       break;
     case 'template':
+      if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
       resume.layout_hints = { ...(resume.layout_hints || {}), ...(payload.layout_hints || {}) };
       break;
     case 'full_document':
+      if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
+      break;
+    case 'dom_operations':
+    case 'resume_document_merge':
+      if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
+      break;
+    case 'document_import':
+      if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
+      break;
+    case 'document_transaction':
       if (payload.resume_json) return JSON.parse(JSON.stringify(payload.resume_json));
       break;
     default:
@@ -67,7 +115,178 @@ function loadDraft(projectId, user) {
   return draft;
 }
 
+function changeEventLabel(event) {
+  const after = JSON.parse(event.after_json || '{}');
+  const before = JSON.parse(event.before_json || '{}');
+  return String(
+    after.label
+    || before.label
+    || {
+      document_transaction: '修改简历文字',
+      manual_structure: '增删简历内容',
+      inline_ai_text: 'AI 局部修改文字',
+      dom_operations: 'AI 修改简历',
+      resume_document_merge: 'AI 修改简历',
+      document_import: '导入简历',
+      full_document: '修改整份简历',
+    }[event.change_type]
+    || '修改简历',
+  ).slice(0, 120);
+}
+
+function historyEventView(event) {
+  return {
+    id: event.id,
+    label: changeEventLabel(event),
+    change_type: event.change_type,
+    scope_type: event.scope_type,
+    scope_id: event.scope_id,
+    actor_type: event.actor_type,
+    created_at: event.created_at,
+    reverted_at: event.reverted_at,
+  };
+}
+
+function loadHistoryStacks(projectId, ownerId) {
+  const undo = db.all(
+    `SELECT * FROM resume_change_events
+     WHERE project_id = ? AND owner_id = ?
+       AND reverted_at IS NULL
+       AND undo_expired_at IS NULL
+     ORDER BY draft_revision DESC, id DESC
+     LIMIT ?`,
+    [projectId, ownerId, HISTORY_DEPTH],
+  ).map(historyEventView);
+  const redo = db.all(
+    `SELECT * FROM resume_change_events
+     WHERE project_id = ? AND owner_id = ?
+       AND reverted_at IS NOT NULL
+       AND undo_expired_at IS NULL
+       AND redo_invalidated_at IS NULL
+     ORDER BY reverted_at DESC, draft_revision ASC, id DESC
+     LIMIT ?`,
+    [projectId, ownerId, HISTORY_DEPTH],
+  ).map(historyEventView);
+  return { depth: HISTORY_DEPTH, undo, redo };
+}
+
+function applyHistoryStep({ draft, event, direction, user, requestId, ipHash }) {
+  if (direction === 'backward') {
+    if (event.reverted_at) {
+      throw problem.conflict('CHANGE_ALREADY_REVERTED', '这一步已经撤销');
+    }
+    if (event.undo_expired_at) {
+      throw problem.conflict('UNDO_LIMIT_REACHED', '只能撤销最近 5 步修改');
+    }
+  } else {
+    if (!event.reverted_at) {
+      throw problem.conflict('CHANGE_NOT_REVERTED', '这一步尚未撤销');
+    }
+    if (event.redo_invalidated_at) {
+      throw problem.conflict('REDO_BRANCH_INVALIDATED', '撤销后已有新的修改，不能再重做这一步');
+    }
+  }
+  const resume = JSON.parse(draft.resume_json || '{}');
+  let restored;
+  try {
+    restored = ResumeDom.toResumeDocument(applyChangePatch(resume, event, direction));
+  } catch (error) {
+    if (error.code === 'CHANGE_ARCHIVED') {
+      throw problem.conflict('CHANGE_ARCHIVED', error.message);
+    }
+    if (
+      error.code === 'CHANGE_TARGET_MISSING'
+      || error.code === 'CHANGE_TARGET_MODIFIED'
+      || error.code === 'CHANGE_DOCUMENT_MODIFIED'
+    ) {
+      throw problem.conflict(
+        'CHANGE_CONFLICT',
+        direction === 'backward'
+          ? '相关内容后来又被修改过，不能直接撤销这一步'
+          : '当前内容与撤销后的状态不一致，不能直接重做这一步',
+      );
+    }
+    throw error;
+  }
+  const changedAt = nowIso();
+  const revision = draft.revision + 1;
+  db.run(
+    'UPDATE resume_drafts SET resume_json = ?, revision = ?, updated_at = ? WHERE id = ?',
+    [JSON.stringify(restored), revision, changedAt, draft.id],
+  );
+  if (direction === 'backward') {
+    db.run('UPDATE resume_change_events SET reverted_at = ? WHERE id = ?', [changedAt, event.id]);
+  } else {
+    db.run('UPDATE resume_change_events SET reverted_at = NULL WHERE id = ?', [event.id]);
+  }
+  refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+    resume: restored,
+    revision,
+  });
+  let remaining = db.get(
+    `SELECT COUNT(*) AS total FROM resume_change_events
+     WHERE project_id = ? AND owner_id = ?
+       AND reverted_at IS NULL AND snapshot_version_id IS NULL`,
+    [draft.project_id, user.id],
+  ).total;
+  if (draft.base_version_id) {
+    const base = db.get('SELECT resume_payload FROM resume_versions WHERE id = ? AND owner_id = ?',
+      [draft.base_version_id, user.id]);
+    if (base) remaining = hashJson(ResumeDom.toResumeDocument(JSON.parse(base.resume_payload))) === hashJson(restored) ? 0 : 1;
+  }
+  db.run('UPDATE resume_drafts SET has_unsnapshotted_changes = ? WHERE id = ?', [
+    remaining ? 1 : 0,
+    draft.id,
+  ]);
+  audit.log({
+    ownerId: user.id,
+    action: direction === 'backward' ? 'resume_change_undone' : 'resume_change_redone',
+    resourceType: 'resume_change_event',
+    resourceId: event.id,
+    requestId,
+    ipHash,
+    metadata: { change_type: event.change_type, scope_id: event.scope_id },
+  });
+  return {
+    id: event.id,
+    status: direction === 'backward' ? 'reverted' : 'restored',
+    revision,
+    has_unsnapshotted_changes: Boolean(remaining),
+    resume_json: restored,
+    history: loadHistoryStacks(draft.project_id, user.id),
+  };
+}
+
 const routes = [
+  {
+    method: 'GET',
+    pattern: '/projects/:id/resume-draft/download',
+    raw: true,
+    handler: async ({ params, query, user, res }) => {
+      const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [params.id, user.id]);
+      if (!draft) throw problem.notFound('简历不存在');
+      if (Number(query.get('revision')) !== draft.revision) {
+        throw problem.conflict('REVISION_CONFLICT', '简历已变化，请刷新后重新下载');
+      }
+      const format = query.get('format');
+      if (!['pdf', 'docx'].includes(format)) throw problem.badRequest('支持 PDF 和 Word 下载');
+      const resume = ResumeDom.toResumeDocument(JSON.parse(draft.resume_json));
+      if (!ResumeDom.plainText(resume).trim()) throw problem.badRequest('简历还没有内容');
+      const render = format === 'pdf' ? require('../lib/render/pdf').renderPdfAsync : require('../lib/render/docx').renderDocxAsync;
+      const buffer = (await render({ resume, template: {}, ownerId: user.id })).buffer;
+      const live = db.get('SELECT revision FROM resume_drafts WHERE id = ? AND owner_id = ?', [draft.id, user.id]);
+      if (!live || live.revision !== draft.revision) throw problem.conflict('REVISION_CONFLICT', '简历已变化，请刷新后重新下载');
+      const project = db.get('SELECT name FROM resume_projects WHERE id = ? AND owner_id = ?', [params.id, user.id]);
+      const name = require('./artifacts').safeFileName(project.name, format);
+      res.writeHead(200, {
+        'content-type': format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'content-length': buffer.length, 'content-disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(name),
+        'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+      });
+      res.end(buffer);
+      return { __handled: true };
+    },
+  },
   {
     method: 'GET',
     pattern: '/projects/:id/resume-draft',
@@ -75,7 +294,7 @@ const routes = [
       const draft = loadDraft(params.id, user);
       return {
         id: draft.id,
-        resume_json: JSON.parse(draft.resume_json || '{}'),
+        resume_json: ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}')),
         revision: draft.revision,
         base_version_id: draft.base_version_id,
         has_unsnapshotted_changes: Boolean(draft.has_unsnapshotted_changes),
@@ -85,6 +304,7 @@ const routes = [
   {
     method: 'PATCH',
     pattern: '/projects/:id/resume-draft',
+    maxBodyBytes: 16 * 1024 * 1024,
     handler: ({ params, body, user, requestId, ipHash }) =>
       db.tx(() => {
         const draft = loadDraft(params.id, user);
@@ -94,12 +314,31 @@ const routes = [
             current: draft.revision,
           });
         }
-        const resume = body.resume_json ? body.resume_json : JSON.parse(draft.resume_json || '{}');
+        let resume;
+        try {
+          resume = body.resume_json
+            ? ResumeDom.toResumeDocument(
+                body.resume_json,
+                { allowLegacyAiScope: false },
+              )
+            : ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}'));
+        } catch (error) {
+          throw problem.unprocessable(
+            'RESUME_DOCUMENT_INVALID',
+            `简历文档无效：${error.message}`,
+          );
+        }
+        require('../lib/document-assets').validateDocumentAssets(resume, user.id);
         const revision = draft.revision + 1;
         db.run(
           `UPDATE resume_drafts SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ? WHERE id = ?`,
           [JSON.stringify(resume), revision, nowIso(), draft.id],
         );
+        refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+          resume,
+          revision,
+          forceAll: true,
+        });
 
         let changeEvent = null;
         if (body.change) {
@@ -160,6 +399,394 @@ const routes = [
       }),
   },
   {
+    method: 'POST',
+    pattern: '/projects/:id/resume-draft/images/:nodeId',
+    handler: async (request) => {
+      const { params, body, user } = request;
+      const draft = loadDraft(params.id, user);
+      if (!body.mutation_id || !Number.isInteger(body.expected_revision) || !body.upload_id) {
+        throw problem.badRequest('图片更换需要上传文件、当前简历状态和操作标识');
+      }
+      const existing = db.get('SELECT * FROM resume_change_events WHERE project_id = ? AND mutation_id = ?',
+        [params.id, String(body.mutation_id)]);
+      if (existing) {
+        const metadata = JSON.parse(existing.after_json || '{}');
+        if (metadata.input_type !== 'image_replace' || existing.scope_id !== params.nodeId
+          || metadata.image_upload_id !== body.upload_id) {
+          throw problem.conflict('MUTATION_ID_REUSED', '这次操作标识已经用于其他修改，请重新操作');
+        }
+        return { revision: draft.revision, resume_json: JSON.parse(draft.resume_json),
+          change_id: existing.id, idempotent_replay: true, version_created: false };
+      }
+      if (body.expected_revision !== draft.revision) {
+        throw problem.conflict('REVISION_CONFLICT', '简历已变化，请重新选择要更换的图片');
+      }
+      const { canReplaceImage } = require('../../resume-image-edit');
+      if (!canReplaceImage(ResumeDom.toResumeDocument(JSON.parse(draft.resume_json)), params.nodeId)) {
+        throw problem.unprocessable('IMAGE_REPLACEMENT_UNAVAILABLE',
+          '这里只支持更换独立图片；整页扫描背景请通过 AI 调整或提供独立照片');
+      }
+      const upload = db.get("SELECT * FROM uploads WHERE id = ? AND owner_id = ? AND status = 'ready'",
+        [body.upload_id, user.id]);
+      if (!upload || upload.chat_conversation_id || !['image/png', 'image/jpeg', 'image/webp'].includes(upload.mime_type)) {
+        throw problem.badRequest('请选择新上传的 PNG、JPG 或 WEBP 图片');
+      }
+      const assetService = require('../lib/document-assets');
+      const asset = await assetService.storeImage(require('../lib/storage').getObject(upload.object_key),
+        user.id, { existingObjectKey: upload.object_key });
+      // The existing transaction rechecks revision after asynchronous parsing.
+      // No parallel undo stack and no model request are introduced.
+      return routes.find(route => route.pattern === '/projects/:id/resume-draft/transactions').handler({
+        ...request,
+        body: { expected_revision: body.expected_revision, mutation_id: body.mutation_id,
+          operations: [{ op: 'replace_image', node_id: params.nodeId, asset_id: asset.id }],
+          label: '更换简历图片', input_type: 'image_replace', scope_id: params.nodeId,
+          image_upload_id: body.upload_id },
+      });
+    },
+  },
+  {
+    method: 'POST',
+    pattern: '/projects/:id/resume-draft/transactions',
+    handler: ({ params, body, user, requestId, ipHash }) =>
+      db.tx(() => {
+        const draft = loadDraft(params.id, user);
+        const mutationId = String(body.mutation_id || uuidv7());
+        const existing = db.get(
+          'SELECT * FROM resume_change_events WHERE project_id = ? AND mutation_id = ?',
+          [draft.project_id, mutationId],
+        );
+        if (existing) {
+          const metadata = JSON.parse(existing.after_json || '{}');
+          if (body.operations?.some(operation => operation?.op === 'replace_image')
+            || metadata.input_type === 'image_replace') {
+            if (hashJson(metadata.image_operation || null) !== hashJson(body.operations?.[0] || null)) {
+              throw problem.conflict('MUTATION_ID_REUSED', '这次操作标识已经用于其他修改，请重新操作');
+            }
+          }
+          return {
+            id: draft.id,
+            revision: draft.revision,
+            resume_json: ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}')),
+            change_id: existing.id,
+            has_unsnapshotted_changes: Boolean(draft.has_unsnapshotted_changes),
+            idempotent_replay: true,
+            version_created: false,
+          };
+        }
+        if (body.expected_revision !== undefined && body.expected_revision !== draft.revision) {
+          throw problem.conflict('REVISION_CONFLICT', '简历已被其他操作修改，请刷新后重试', {
+            expected: body.expected_revision,
+            current: draft.revision,
+          });
+        }
+        if (!Array.isArray(body.operations) || !body.operations.length) {
+          throw problem.badRequest('文档事务至少需要一个操作');
+        }
+        const imageEdit = body.operations.some(operation => operation?.op === 'replace_image');
+        if (imageEdit && (!Number.isInteger(body.expected_revision) || body.operations.length !== 1)) {
+          throw problem.badRequest('每次只能替换一张图片，且必须提供当前简历状态');
+        }
+        const beforeResume = ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}'));
+        body.operations.forEach((operation) => {
+          if (operation?.op === 'replace_image') {
+            if (Object.keys(operation).sort().join(',') !== 'asset_id,node_id,op'
+              || typeof operation.node_id !== 'string' || typeof operation.asset_id !== 'string') {
+              throw problem.badRequest('图片更换操作格式无效');
+            }
+            return;
+          }
+          if (!operation || operation.op !== 'replace_text') {
+            throw problem.unprocessable(
+              'DIRECT_EDIT_TEXT_ONLY',
+              '画布只支持修改现有文字；增删模块、结构和样式调整请通过 AI 建议完成',
+            );
+          }
+          const found = ResumeDom.findNode(beforeResume, operation.node_id);
+          if (!found || found.node.editable !== true) {
+            throw problem.unprocessable(
+              'DIRECT_EDIT_TARGET_INVALID',
+              '这处内容不能直接修改，请通过 AI 调整',
+            );
+          }
+        });
+        let nextResume;
+        try {
+          if (imageEdit) {
+            const operation = body.operations[0];
+            const asset = require('../lib/document-assets').readDocumentAsset(operation.asset_id, user.id);
+            nextResume = require('../lib/document-image-edit').replaceDocumentImage(beforeResume,
+              operation.node_id, { id: asset.id, url: asset.url, mime_type: asset.mime_type,
+                width: asset.width, height: asset.height }, user.id);
+          } else nextResume = ResumeDom.applyDocumentOperations(beforeResume, body.operations, {
+            allowStructure: false,
+          });
+        } catch (error) {
+          throw problem.unprocessable('DOCUMENT_TRANSACTION_INVALID', error.message);
+        }
+        require('../lib/document-assets').validateDocumentAssets(nextResume, user.id);
+        const revision = draft.revision + 1;
+        const changedAt = nowIso();
+        const changeId = uuidv7();
+        const changedNodeIds = Array.from(
+          new Set(body.operations.map((operation) => String(operation.node_id))),
+        );
+        const delta = createNodeDeltaPair(beforeResume, nextResume, changedNodeIds, {
+          label: String(body.label || '修改简历文字').slice(0, 120),
+          input_type: String(body.input_type || 'inline_text').slice(0, 40),
+          ...(imageEdit ? { image_upload_id: body.image_upload_id || null,
+            image_operation: body.operations[0] } : {}),
+        });
+        db.run(
+          `UPDATE resume_drafts
+           SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ?
+           WHERE id = ?`,
+          [JSON.stringify(nextResume), revision, changedAt, draft.id],
+        );
+        db.run(
+          `INSERT INTO resume_change_events
+           (id, project_id, owner_id, draft_revision, change_type, scope_type, scope_id,
+            before_json, after_json, actor_type, mutation_id, created_at)
+           VALUES (?, ?, ?, ?, 'document_transaction', 'RESUME_DOCUMENT', ?, ?, ?, 'user', ?, ?)`,
+          [
+            changeId,
+            draft.project_id,
+            user.id,
+            revision,
+            body.scope_id || null,
+            JSON.stringify(delta.before),
+            JSON.stringify(delta.after),
+            mutationId,
+            changedAt,
+          ],
+        );
+        refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+          resume: nextResume,
+          revision,
+        });
+        audit.log({
+          ownerId: user.id,
+          action: 'resume_document_transaction_applied',
+          resourceType: 'resume_draft',
+          resourceId: draft.id,
+          requestId,
+          ipHash,
+          metadata: {
+            revision,
+            operations: body.operations.length,
+            input_type: body.input_type || 'inline_text',
+          },
+        });
+        return {
+          id: draft.id,
+          revision,
+          resume_json: nextResume,
+          change_id: changeId,
+          has_unsnapshotted_changes: true,
+          version_created: false,
+        };
+      }),
+  },
+  {
+    method: 'POST',
+    pattern: '/projects/:id/resume-draft/node-actions',
+    handler: ({ params, body, user, requestId, ipHash }) =>
+      db.tx(() => {
+        const draft = loadDraft(params.id, user);
+        const mutationId = String(body.mutation_id || uuidv7());
+        const existing = db.get(
+          'SELECT * FROM resume_change_events WHERE project_id = ? AND mutation_id = ?',
+          [draft.project_id, mutationId],
+        );
+        if (existing) {
+          const after = JSON.parse(existing.after_json || '{}');
+          if (
+            existing.change_type !== 'manual_structure'
+            || String(existing.scope_id || '') !== String(body.node_id || '')
+            || String(after.manual_action || '') !== String(body.action || '')
+          ) {
+            throw problem.conflict(
+              'MUTATION_ID_REUSED',
+              '这次操作的标识已经用于另一项修改，请重新操作',
+            );
+          }
+          return {
+            id: draft.id,
+            revision: draft.revision,
+            resume_json: ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}')),
+            change_id: existing.id,
+            focus_node_id: after.focus_node_id || null,
+            label: changeEventLabel(existing),
+            has_unsnapshotted_changes: Boolean(draft.has_unsnapshotted_changes),
+            idempotent_replay: true,
+            version_created: false,
+          };
+        }
+        if (body.expected_revision !== undefined && body.expected_revision !== draft.revision) {
+          throw problem.conflict('REVISION_CONFLICT', '简历已被其他操作修改，请刷新后重试', {
+            expected: body.expected_revision,
+            current: draft.revision,
+          });
+        }
+        if (!body.node_id || !body.action) {
+          throw problem.badRequest('请选择要增删的简历内容');
+        }
+        const beforeResume = ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}'));
+        let compiled;
+        let nextResume;
+        try {
+          compiled = compileManualNodeAction(beforeResume, body.action, body.node_id);
+          nextResume = ResumeDom.applyDocumentOperations(beforeResume, compiled.operations, {
+            allowStructure: true,
+          });
+        } catch (error) {
+          if (
+            [
+              'MANUAL_NODE_ACTION_UNAVAILABLE',
+              'FIXED_LAYOUT_ACTION_UNAVAILABLE',
+              'MANUAL_NODE_TARGET_MISSING',
+            ].includes(error.code)
+          ) {
+            throw problem.unprocessable(error.code, error.message);
+          }
+          throw problem.unprocessable('MANUAL_NODE_ACTION_INVALID', error.message);
+        }
+        const delta = createStructureDeltaPair(
+          beforeResume,
+          nextResume,
+          compiled.operations,
+          {
+            label: String(compiled.label || '增删简历内容').slice(0, 120),
+            input_type: 'manual_structure',
+            manual_action: String(body.action),
+            source_node_id: String(body.node_id),
+            focus_node_id: compiled.focusNodeId || null,
+          },
+        );
+        if (!delta) {
+          throw problem.unprocessable(
+            'MANUAL_NODE_ACTION_INVALID',
+            '这次增删无法形成安全的撤销记录，请刷新后重试',
+          );
+        }
+        const revision = draft.revision + 1;
+        const changedAt = nowIso();
+        const changeId = uuidv7();
+        db.run(
+          `UPDATE resume_drafts
+           SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ?
+           WHERE id = ?`,
+          [JSON.stringify(nextResume), revision, changedAt, draft.id],
+        );
+        db.run(
+          `INSERT INTO resume_change_events
+           (id, project_id, owner_id, draft_revision, change_type, scope_type, scope_id,
+            before_json, after_json, actor_type, mutation_id, created_at)
+           VALUES (?, ?, ?, ?, 'manual_structure', 'RESUME_BLOCK', ?, ?, ?, 'user', ?, ?)`,
+          [
+            changeId,
+            draft.project_id,
+            user.id,
+            revision,
+            body.node_id,
+            JSON.stringify(delta.before),
+            JSON.stringify(delta.after),
+            mutationId,
+            changedAt,
+          ],
+        );
+        refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+          resume: nextResume,
+          revision,
+        });
+        audit.log({
+          ownerId: user.id,
+          action: 'resume_manual_node_action_applied',
+          resourceType: 'resume_draft',
+          resourceId: draft.id,
+          requestId,
+          ipHash,
+          metadata: {
+            revision,
+            action: body.action,
+            node_id: body.node_id,
+            operations: compiled.operations.length,
+          },
+        });
+        return {
+          id: draft.id,
+          revision,
+          resume_json: nextResume,
+          change_id: changeId,
+          focus_node_id: compiled.focusNodeId || null,
+          label: compiled.label,
+          has_unsnapshotted_changes: true,
+          version_created: false,
+        };
+      }),
+  },
+  {
+    method: 'GET',
+    pattern: '/projects/:id/resume-draft/history',
+    handler: ({ params, user }) => {
+      const draft = loadDraft(params.id, user);
+      return loadHistoryStacks(draft.project_id, user.id);
+    },
+  },
+  {
+    method: 'POST',
+    pattern: '/projects/:id/resume-draft/undo',
+    handler: ({ params, user, requestId, ipHash }) =>
+      db.tx(() => {
+        const draft = loadDraft(params.id, user);
+        const event = db.get(
+          `SELECT * FROM resume_change_events
+           WHERE project_id = ? AND owner_id = ?
+             AND reverted_at IS NULL
+             AND undo_expired_at IS NULL
+           ORDER BY draft_revision DESC, id DESC
+           LIMIT 1`,
+          [draft.project_id, user.id],
+        );
+        if (!event) throw problem.conflict('NOTHING_TO_UNDO', '没有可撤销的修改');
+        return applyHistoryStep({
+          draft,
+          event,
+          direction: 'backward',
+          user,
+          requestId,
+          ipHash,
+        });
+      }),
+  },
+  {
+    method: 'POST',
+    pattern: '/projects/:id/resume-draft/redo',
+    handler: ({ params, user, requestId, ipHash }) =>
+      db.tx(() => {
+        const draft = loadDraft(params.id, user);
+        const event = db.get(
+          `SELECT * FROM resume_change_events
+           WHERE project_id = ? AND owner_id = ?
+             AND reverted_at IS NOT NULL
+             AND undo_expired_at IS NULL
+             AND redo_invalidated_at IS NULL
+           ORDER BY reverted_at DESC, draft_revision ASC, id DESC
+           LIMIT 1`,
+          [draft.project_id, user.id],
+        );
+        if (!event) throw problem.conflict('NOTHING_TO_REDO', '没有可重做的修改');
+        return applyHistoryStep({
+          draft,
+          event,
+          direction: 'forward',
+          user,
+          requestId,
+          ipHash,
+        });
+      }),
+  },
+  {
     method: 'GET',
     pattern: '/projects/:id/resume-draft/changes',
     handler: ({ params, user }) => {
@@ -198,11 +825,32 @@ const routes = [
           [params.changeId, draft.project_id, user.id],
         );
         if (!event) throw problem.notFound('变更不存在');
+        if (event.undo_expired_at) {
+          throw problem.conflict('UNDO_LIMIT_REACHED', '只能撤销最近 5 步修改');
+        }
         if (event.reverted_at) {
           return { id: event.id, status: 'already_reverted', idempotent_replay: true };
         }
         const resume = JSON.parse(draft.resume_json || '{}');
-        const restored = applyChangePatch(resume, event, 'backward');
+        let restored;
+        try {
+          restored = ResumeDom.toResumeDocument(applyChangePatch(resume, event, 'backward'));
+        } catch (error) {
+          if (error.code === 'CHANGE_ARCHIVED') {
+            throw problem.conflict('CHANGE_ARCHIVED', error.message);
+          }
+          if (
+            error.code === 'CHANGE_TARGET_MISSING'
+            || error.code === 'CHANGE_TARGET_MODIFIED'
+            || error.code === 'CHANGE_DOCUMENT_MODIFIED'
+          ) {
+            throw problem.conflict(
+              'CHANGE_CONFLICT',
+              '相关内容后来又被修改过，不能直接撤销这一步',
+            );
+          }
+          throw error;
+        }
         const revision = draft.revision + 1;
         db.run('UPDATE resume_drafts SET resume_json = ?, revision = ?, updated_at = ? WHERE id = ?', [
           JSON.stringify(restored),
@@ -210,7 +858,45 @@ const routes = [
           nowIso(),
           draft.id,
         ]);
-        db.run('UPDATE resume_change_events SET reverted_at = ? WHERE id = ?', [nowIso(), event.id]);
+        const revertedAt = nowIso();
+        db.run('UPDATE resume_change_events SET reverted_at = ? WHERE id = ?', [revertedAt, event.id]);
+        refreshResumeProposalStaleness(db, draft.project_id, user.id, {
+          resume: restored,
+          revision,
+        });
+        if (event.change_type === 'document_import' || event.change_type === 'template') {
+          const before = JSON.parse(event.before_json || '{}');
+          if (Object.hasOwn(before, 'template_version_id')) {
+            db.run(
+              'UPDATE resume_projects SET current_template_version_id = ?, updated_at = ? WHERE id = ?',
+              [before.template_version_id || null, nowIso(), draft.project_id],
+            );
+            db.bumpRevision('resume_projects', draft.project_id);
+          }
+        }
+        // 文件导入会立即形成历史版本。撤销这类已成版操作后，当前草稿重新
+        // 与基准版本产生差异，所以追加一个可保存的反向操作。
+        if (event.snapshot_version_id) {
+          db.run(
+            `INSERT INTO resume_change_events
+             (id, project_id, owner_id, draft_revision, change_type, scope_type, scope_id,
+              before_json, after_json, actor_type, mutation_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?)`,
+            [
+              uuidv7(),
+              draft.project_id,
+              user.id,
+              revision,
+              event.change_type,
+              event.scope_type,
+              event.scope_id,
+              event.after_json,
+              event.before_json,
+              uuidv7(),
+              revertedAt,
+            ],
+          );
+        }
         // 同步回滚草稿后，如已无未成版修改则清除标记（PRD 发布验收 19）
         const remaining = db.get(
           `SELECT COUNT(*) AS total FROM resume_change_events
@@ -241,4 +927,10 @@ const routes = [
   },
 ];
 
-module.exports = { routes, applyChangePatch, findBullet };
+module.exports = {
+  routes,
+  applyChangePatch,
+  findBullet,
+  loadHistoryStacks,
+  HISTORY_DEPTH,
+};

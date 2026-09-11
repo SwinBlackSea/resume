@@ -2,8 +2,8 @@
 /**
  * 生成模块（PRD §6.4、TECH §8）。
  *
- * 创建阶段在一个数据库事务中完成：锁定项目 → 校验 owner / revision / 模板 / 岗位 →
- * 预占额度 → 深拷贝三类输入 → 分配 generation_no → 写快照与任务 → 写 outbox 事件。
+ * 创建阶段在一个数据库事务中完成：锁定项目 → 校验 owner / revision / 岗位 →
+ * 深拷贝个人资料、当前完整简历与岗位 → 分配 generation_no → 写快照与任务 → 写 outbox 事件。
  * 生成快照是内部任务记录，不立即出现在历史列表；Worker 成功后才创建 kind=generated 的版本。
  */
 const db = require('../lib/db');
@@ -12,8 +12,11 @@ const audit = require('../lib/audit');
 const { withIdempotency } = require('../lib/idempotency');
 const queue = require('../lib/queue');
 const events = require('../lib/events');
-const { computeReadiness } = require('../lib/resume-schema');
+const { computeReadiness, RESUME_SCHEMA_VERSION } = require('../lib/resume-schema');
+const { PROMPT_VERSION } = require('../lib/resume-harness');
+const { POLICY_VERSION } = require('../lib/policy');
 const { sseOpen, sseWrite } = require('../lib/util');
+const ResumeDom = require('../../resume-dom');
 
 function loadProject(projectId, user) {
   const project = db.get('SELECT * FROM resume_projects WHERE id = ? AND owner_id = ?', [
@@ -24,7 +27,7 @@ function loadProject(projectId, user) {
   return project;
 }
 
-/** 组装快照输入（规范化深拷贝，冻结当时的三类输入）。 */
+/** 组装快照输入（规范化深拷贝，冻结当时的资料、完整简历与岗位）。 */
 function collectInputs(project, user) {
   const profile = db.get('SELECT * FROM profiles WHERE id = ? AND owner_id = ?', [
     project.current_profile_id,
@@ -54,26 +57,39 @@ function collectInputs(project, user) {
   const templateDefinition = templateVersion
     ? db.get('SELECT * FROM template_definitions WHERE id = ?', [templateVersion.template_id])
     : null;
+  const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [
+    project.id,
+    user.id,
+  ]);
+  const rawResume = draft ? JSON.parse(draft.resume_json || '{}') : {};
+  const resumeDocument =
+    rawResume.schema_version === ResumeDom.RESUME_DOCUMENT_VERSION && rawResume.root
+      ? ResumeDom.toResumeDocument(rawResume)
+      : ResumeDom.toResumeDocument(
+          ResumeDom.createResumeAggregate(
+            rawResume,
+            templateVersion
+              ? {
+                  template_version_id: templateVersion.id,
+                  name: templateDefinition ? templateDefinition.name : '',
+                  version: templateVersion.version,
+                  schema: JSON.parse(templateVersion.schema_json || '{}'),
+                }
+              : {},
+          ),
+        );
   return {
     profile,
     experiences,
     job,
-    templateVersion,
-    templateDefinition,
+    draft,
     profilePayload: {
       basics: JSON.parse(profile.basics_json || '{}'),
       summary: profile.summary,
       experiences,
       revision: profile.revision,
     },
-    templatePayload: templateVersion
-      ? {
-          template_version_id: templateVersion.id,
-          name: templateDefinition ? templateDefinition.name : '自定义模板',
-          version: templateVersion.version,
-          schema: JSON.parse(templateVersion.schema_json || '{}'),
-        }
-      : {},
+    resumeDocument,
     jobPayload: job
       ? {
           id: job.id,
@@ -124,18 +140,20 @@ const routes = [
             });
           }
           if (
-            body.template_version_id &&
-            inputs.templateVersion &&
-            body.template_version_id !== inputs.templateVersion.id
+            body.draft_revision !== undefined &&
+            inputs.draft &&
+            body.draft_revision !== inputs.draft.revision
           ) {
-            throw problem.conflict('REVISION_CONFLICT', '模板已更换，请刷新后重试');
+            throw problem.conflict('REVISION_CONFLICT', '当前简历已变化，请刷新后重试', {
+              expected: body.draft_revision,
+              current: inputs.draft.revision,
+            });
           }
 
           // 前置条件校验：缺少必需素材时准确定位问题（PRD 发布验收 2）
           const readiness = computeReadiness({
             profileBasics: inputs.profilePayload.basics,
             experiences: inputs.experiences,
-            template: inputs.templateDefinition ? { status: inputs.templateDefinition.status } : null,
             job: inputs.job,
           });
           if (!readiness.complete) {
@@ -149,35 +167,39 @@ const routes = [
           const jobId = uuidv7();
           const inputHash = hashJson({
             profile: inputs.profilePayload,
-            template: inputs.templatePayload,
+            resume_document: inputs.resumeDocument,
             job: inputs.jobPayload,
           });
 
           db.run(
-            `INSERT INTO generation_snapshots (id, project_id, owner_id, generation_no, profile_payload, template_payload, job_payload, generation_config, input_hash, status, created_by, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'user', ?)`,
+            `INSERT INTO generation_snapshots (id, project_id, owner_id, generation_no, profile_payload,
+               resume_input_payload, template_payload, job_payload, generation_config, input_hash,
+               status, created_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, 'pending', 'user', ?)`,
             [
               snapshotId,
               project.id,
               user.id,
               generationNo,
               JSON.stringify(inputs.profilePayload),
-              JSON.stringify(inputs.templatePayload),
+              JSON.stringify(inputs.resumeDocument),
               JSON.stringify(inputs.jobPayload),
               JSON.stringify({
                 client_request_id: body.client_request_id || null,
-                policy_version: 'policy-v1',
-                schema_version: 'resume-schema-v1',
-                prompt_version: 'prompt-contract-v2',
+                policy_version: POLICY_VERSION,
+                schema_version: RESUME_SCHEMA_VERSION,
+                prompt_version: PROMPT_VERSION,
               }),
               inputHash,
               nowIso(),
             ],
           );
           db.run(
-            `INSERT INTO generation_jobs (id, snapshot_id, owner_id, status, current_step, progress, attempt_count, created_at, updated_at)
-             VALUES (?, ?, ?, 'queued', 'queued', 0, 0, ?, ?)`,
-            [jobId, snapshotId, user.id, nowIso(), nowIso()],
+            `INSERT INTO generation_jobs
+             (id, snapshot_id, owner_id, status, current_step, progress, prompt_version,
+              attempt_count, created_at, updated_at)
+             VALUES (?, ?, ?, 'queued', 'queued', 0, ?, 0, ?, ?)`,
+            [jobId, snapshotId, user.id, PROMPT_VERSION, nowIso(), nowIso()],
           );
           // 先提交数据库 outbox，再投递队列：避免「有快照无任务」
           queue.publish({
@@ -389,10 +411,10 @@ const routes = [
 
 /** 步骤 → 界面文案（与前端运行日志一致）。 */
 const STEP_LABELS = {
-  queued: '正在校验资料与岗位',
-  analyze_job: '正在校验资料与岗位',
+  queued: '正在读取资料与岗位',
+  analyze_job: '正在读取资料与岗位',
   compose_resume: '正在重组简历内容',
-  validate_facts: '正在检查内容是否真实',
+  validate_document: '正在检查文档结构',
   render_html: '正在排版简历',
   render_artifacts: '正在渲染 PDF 与 DOCX',
   validate_artifacts: '正在校验导出文件',

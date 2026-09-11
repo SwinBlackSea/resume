@@ -4,7 +4,7 @@
  *
  * - /api/v1/* 走 REST 路由（TECH §5.2：路径版本为 /api/v1）
  * - / 与静态资源返回 index.html（前端统一维护在单一 HTML，见 AGENTS.md）
- * - 启动时初始化系统模板与演示数据，并启动 outbox Worker
+ * - 启动时初始化兼容数据与演示数据，并启动 outbox Worker
  */
 const http = require('node:http');
 const fs = require('node:fs');
@@ -17,18 +17,26 @@ const envLoaded = require('./lib/dotenv').loadEnv();
 const { uuidv7, sendJson, sendProblem, readJsonBody, problem } = require('./lib/util');
 const db = require('./lib/db');
 const { resolveUser, ipHash } = require('./lib/auth');
+const { runtimeFromEnvironment, testAuthEnabled } = require('./lib/accounts/runtime');
+const { assertCsrf, setPrivateHeaders } = require('./lib/accounts/http');
 const { seedIfEmpty } = require('./lib/seed');
-const { ensureSystemTemplates } = require('./lib/templates');
 const queue = require('./lib/queue');
+const {
+  configuredRouting,
+} = require('./lib/model-client');
 
 const MODULES = [
+  './modules/accounts',
   './modules/workspace',
+  './modules/home',
   './modules/profile',
   './modules/jobs',
-  './modules/templates',
   './modules/uploads',
+  './modules/document-assets',
+  './modules/document-imports',
   './modules/draft',
   './modules/ai',
+  './modules/inline-ai',
   './modules/versions',
   './modules/generations',
   './modules/artifacts',
@@ -64,6 +72,8 @@ function buildRouter() {
 }
 
 const STATIC_ROOT = path.join(__dirname, '..');
+// 仓库不是 public 目录：配置、数据库、源码、原型和测试不得通过静态路由下载。
+const PUBLIC_FILES = new Set(['index.html', 'login.html', 'account-client.js', 'account-workspace.js', 'resume-dom.js', 'resume-review.js', 'resume-image-edit.js', 'home-controller.js', 'home-image-preview.js']);
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -74,38 +84,61 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon',
 };
 
-function serveStatic(req, res, pathname) {
+function serveStatic(req, res, pathname, { accountsEnabled = false } = {}) {
   const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-  const target = path.join(STATIC_ROOT, relative);
-  // 防目录穿越
-  if (!target.startsWith(STATIC_ROOT)) {
-    res.writeHead(403).end('Forbidden');
+  if (!PUBLIC_FILES.has(relative)) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未找到资源');
     return;
   }
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    res.writeHead(405, { allow: 'GET, HEAD' }).end('Method Not Allowed');
+    return;
+  }
+  const target = path.join(STATIC_ROOT, relative);
   fs.readFile(target, (err, data) => {
     if (err) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未找到资源');
       return;
     }
+    if (relative === 'index.html' && accountsEnabled) {
+      data = Buffer.from(data.toString('utf8').replace('<head>',
+        '<head><script>window.__RESUME_ACCOUNTS_ENABLED__=true;document.documentElement.dataset.accountReady="false";</script>'));
+    }
     res.writeHead(200, {
       'content-type': MIME_TYPES[path.extname(target)] || 'application/octet-stream',
       'cache-control': 'no-cache',
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'referrer-policy': 'same-origin',
     });
-    res.end(data);
+    res.end(req.method === 'HEAD' ? undefined : data);
   });
 }
 
-function createServer() {
+function createServer({ accountRuntime: suppliedRuntime = null } = {}) {
+  const testAuth = !suppliedRuntime && testAuthEnabled();
+  const accountRuntime = suppliedRuntime || (testAuth ? null : runtimeFromEnvironment(db.getDb()));
+  if (accountRuntime) accountRuntime.assertReleaseReady();
   const router = buildRouter();
 
   const server = http.createServer(async (req, res) => {
     const requestId = uuidv7();
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    let url;
+    try { url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); }
+    catch (_) { sendProblem(res, problem.badRequest('请求地址不合法'), requestId); return; }
     const ip = ipHash(req);
 
-    // CORS（本地开发用；生产由网关控制）
-    res.setHeader('access-control-allow-origin', req.headers.origin || '*');
-    res.setHeader('access-control-allow-headers', 'content-type, idempotency-key, x-user-id');
+    // Same-origin only. Development impersonation is never a production path.
+    const origin = req.headers.origin;
+    if (!testAuth && origin && origin !== accountRuntime.config.publicOrigin) {
+      sendProblem(res, problem.forbidden('请在当前站点重新操作'), requestId);
+      return;
+    }
+    if (origin && (testAuth || origin === accountRuntime.config.publicOrigin)) {
+      res.setHeader('access-control-allow-origin', origin);
+      res.setHeader('vary', 'Origin');
+    }
+    res.setHeader('access-control-allow-headers', 'content-type, idempotency-key, x-csrf-token, x-account-id');
     res.setHeader('access-control-allow-methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
     if (req.method === 'OPTIONS') {
       res.writeHead(204).end();
@@ -113,8 +146,28 @@ function createServer() {
     }
 
     if (!url.pathname.startsWith('/api/')) {
-      serveStatic(req, res, url.pathname);
+      serveStatic(req, res, url.pathname, { accountsEnabled: Boolean(accountRuntime) });
       return;
+    }
+
+    if (accountRuntime) {
+      setPrivateHeaders(res);
+      // Raw images/SSE/download handlers cannot accidentally turn private user
+      // data into a reusable browser/shared-cache response after logout.
+      const originalWriteHead = res.writeHead;
+      res.writeHead = function(status, ...args) {
+        const index = typeof args[0] === 'string' ? 1 : 0;
+        if (args[index] && !Array.isArray(args[index])) {
+          const headers = { ...args[index] };
+          for (const key of Object.keys(headers)) {
+            if (key.toLowerCase() === 'cache-control') delete headers[key];
+          }
+          headers['cache-control'] = 'private, no-store';
+          args[index] = headers;
+        }
+        res.setHeader('cache-control', 'private, no-store');
+        return originalWriteHead.call(this, status, ...args);
+      };
     }
 
     const routePath = url.pathname.replace(/^\/api\/v1/, '');
@@ -133,10 +186,17 @@ function createServer() {
       route.keys.forEach((key, index) => {
         params[key] = decodeURIComponent(matched[index + 1]);
       });
-      const user = resolveUser(req);
+      const user = route.auth === 'public' && !testAuth ? null
+        : resolveUser(req, { accountRuntime, testAuth });
+      if (user && accountRuntime) {
+        res.setHeader('x-account-id', user.id);
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+          assertCsrf(req, accountRuntime.config, req.accountSession.token);
+        }
+      }
       let body = {};
       if (!route.raw && ['POST', 'PATCH', 'PUT'].includes(req.method)) {
-        body = await readJsonBody(req);
+        body = await readJsonBody(req, route.maxBodyBytes);
       }
       const result = await route.handler({
         req,
@@ -147,26 +207,56 @@ function createServer() {
         user,
         requestId,
         ipHash: ip,
+        accountRuntime,
+        testAuth,
       });
-      if (result && (result.__sse || result.__handled)) return; // 响应已由 handler 接管
+      if (result && result.__sse && accountRuntime && req.accountSession && !res.writableEnded) {
+        const token = req.accountSession.token;
+        const timer = setInterval(() => {
+          try { accountRuntime.resolve(token, { touch: false }); }
+          catch (_) { clearInterval(timer); res.end(); }
+        }, 30_000);
+        timer.unref?.();
+        res.once('close', () => clearInterval(timer));
+      }
+      if (result && (result.__sse || result.__handled)) return;
       sendJson(res, 200, result === undefined ? { ok: true } : result);
     } catch (err) {
       sendProblem(res, err, requestId);
     }
   });
+  if (accountRuntime) {
+    let cleanupTimer;
+    const cleanup = () => {
+      try { accountRuntime.sessions.cleanup(); }
+      catch (_) { console.warn('[accounts] bounded retention cleanup failed'); }
+    };
+    server.once('listening', () => {
+      cleanup();
+      cleanupTimer = setInterval(cleanup, 5 * 60_000);
+      cleanupTimer.unref?.();
+    });
+    server.once('close', () => clearInterval(cleanupTimer));
+  }
   return server;
 }
 
 function bootstrap({ port = 8787 } = {}) {
-  ensureSystemTemplates();
-  const seeded = seedIfEmpty();
-  queue.startWorker();
+  const testAuth = testAuthEnabled();
+  if (!testAuth && (!process.env.RESUME_DOWNLOAD_SECRET
+    || process.env.RESUME_DOWNLOAD_SECRET === 'resume-planet-local-secret'
+    || Buffer.byteLength(process.env.RESUME_DOWNLOAD_SECRET) < 32)) {
+    throw new Error('生产下载签名必须配置至少 32 字节的独立密钥');
+  }
+  const seeded = testAuth ? seedIfEmpty() : null;
   const server = createServer();
+  queue.startWorker();
   server.listen(port, () => {
     const project = db.get('SELECT * FROM resume_projects ORDER BY created_at ASC LIMIT 1');
+    const { models, providers } = configuredRouting();
     console.log(`简历星球服务已启动： http://localhost:${port}`);
     if (envLoaded.loaded) console.log(`已加载配置文件： ${envLoaded.file}（${envLoaded.count} 项）`);
-    console.log(`AI 引擎： ${process.env.RESUME_LLM_PROVIDER === 'http' ? `远程模型 ${process.env.RESUME_LLM_MODEL || ''}` : '本地规则引擎'}`);
+    console.log(`AI 引擎： Resume Harness / 文本 ${providers.text || '未配置'}:${models.text} / 复杂结构 ${providers.complex || '未配置'}:${models.complex} / 视觉 ${providers.vision || '未配置'}:${models.vision}`);
     console.log(`工作区接口：       http://localhost:${port}/api/v1/projects/${project ? project.id : ':id'}`);
     if (seeded && seeded.seeded) console.log('已初始化演示数据（陈知行 · 高级产品经理岗位）');
   });

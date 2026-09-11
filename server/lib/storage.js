@@ -8,7 +8,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const OBJECTS_DIR = path.join(__dirname, '..', '..', 'data', 'objects');
+const OBJECTS_DIR = process.env.RESUME_OBJECTS_DIR
+  ? path.resolve(process.env.RESUME_OBJECTS_DIR)
+  : path.join(__dirname, '..', '..', 'data', 'objects');
 
 function ensureDir() {
   if (!fs.existsSync(OBJECTS_DIR)) fs.mkdirSync(OBJECTS_DIR, { recursive: true });
@@ -38,4 +40,10 @@ function objectPath(key) {
   return path.join(OBJECTS_DIR, key);
 }
 
-module.exports = { objectKey, putObject, getObject, objectPath, OBJECTS_DIR };
+function removeObject(key) {
+  const target = path.resolve(OBJECTS_DIR, key);
+  if (!target.startsWith(path.resolve(OBJECTS_DIR) + path.sep)) throw new Error('非法对象路径');
+  fs.rmSync(target, { force: true });
+}
+
+module.exports = { objectKey, putObject, getObject, objectPath, removeObject, OBJECTS_DIR };

@@ -1,8 +1,8 @@
 'use strict';
 /**
  * 岗位分析（TECH §9.1 阶段一、PRD §6.3）。
- * 输入确认后的岗位文本，输出标准化 JobAnalysis：职责、必需能力、优先能力、关键词与原文证据位置。
- * 每项分析可追溯到岗位原文；匹配分不等于真实录用概率（明示）。
+ * 输入确认后的岗位文本，输出职责、必需能力、优先能力与关键词。
+ * 分析结果不建立逐句证据映射；匹配分不等于真实录用概率（明示）。
  */
 const { uuidv7 } = require('./util');
 
@@ -26,14 +26,6 @@ function splitSentences(text) {
     .filter((item) => item.length >= 4);
 }
 
-function evidenceOf(text, source) {
-  const index = source.indexOf(text);
-  return {
-    quote: text.slice(0, 60),
-    start: index >= 0 ? index : null,
-  };
-}
-
 /**
  * @param {string} text 已确认的岗位文本
  * @returns {object} JobAnalysis
@@ -46,7 +38,7 @@ function analyzeJobText(text) {
   const others = [];
 
   sentences.forEach((sentence) => {
-    const item = { id: uuidv7(), text: sentence, evidence: evidenceOf(sentence, text) };
+    const item = { id: uuidv7(), text: sentence };
     if (NICE_TO_HAVE_HINTS.some((hint) => sentence.includes(hint))) niceToHave.push(item);
     else if (RESPONSIBILITY_HINTS.some((hint) => sentence.includes(hint))) responsibilities.push(item);
     else if (MUST_HAVE_HINTS.some((hint) => sentence.includes(hint))) mustHave.push(item);

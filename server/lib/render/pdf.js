@@ -1,10 +1,10 @@
 'use strict';
 /**
- * PDF 渲染：Resume JSON + Template Schema → PDF（TECH §11.1）。
+ * PDF 渲染：Resume DOM + Template Schema → PDF（TECH §11.1）。
  *
  * 说明：TECH 推荐固定版本 Chromium 打印 PDF。当前环境无浏览器，
  * 这里使用内置 PDF writer 完成同样的语义输出：
- *   - Resume JSON 驱动布局，模板决定字体、页边距与模块顺序；
+ *   - Resume DOM 驱动内容与顺序，模板决定字体、页边距与视觉规则；
  *   - 嵌入 Noto Sans SC（CIDFontType2 + Identity-H），中文字体不缺失；
  *   - 只输出实际用到的 glyph 宽度表（W）与 ToUnicode，保证文本可复制/可搜索；
  *   - 生产接入 Chromium 时只需替换 renderPdf 实现，调用方不变。
@@ -12,6 +12,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadFont, measureText } = require('./ttf');
+const ResumeDom = require('../../../resume-dom');
 
 const FONT_PATH =
   process.env.RESUME_FONT_PATH || '/home/ubuntu/.fonts/NotoSansSC.ttf';
@@ -20,7 +21,10 @@ const PAGE_WIDTH = 595.28; // A4 pt
 const PAGE_HEIGHT = 841.89;
 
 class PdfDoc {
-  constructor() {
+  constructor(pageLayout) {
+    this.width = pageLayout.width;
+    this.height = pageLayout.height;
+    this.margin = pageLayout.margins;
     this.pages = [];
     this.currentOps = [];
     this.fontResources = new Map(); // name → font object
@@ -34,21 +38,30 @@ class PdfDoc {
 
   /** 以「距页面顶部 topPt」的坐标系写入文本，内部转换为 PDF 坐标。 */
   text(x, top, content, { size = 9.5, color = '#414448', bold = false, letterSpacing = 0 } = {}) {
-    const y = PAGE_HEIGHT - top - size;
+    const y = this.height - top - size;
     const rgb = hexToRgb01(color);
-    let line = `${rgb} rg\n`;
+    // Different Unicode characters can share a font glyph (e.g. 舟/⾈).
+    // Preserve the actual input per text run; reverse cmap lookup cannot
+    // determine which character the user supplied.
+    const actualText = Buffer.from(String(content), 'utf16le').swap16().toString('hex');
+    let line = `/Span << /ActualText <feff${actualText}> >> BDC\n${rgb} rg\n`;
     if (bold) line += `2 Tr 0.35 w\n`; // 无粗体字形时用填充+描边模拟
     line += `BT /F1 ${size} Tf ${letterSpacing} Tc 1 0 0 1 ${fmt(x)} ${fmt(y)} Tm <${toHexGids(content)}> Tj ET\n`;
     if (bold) line += `0 Tr\n`;
-    this.currentOps.push(line);
+    this.currentOps.push(line + 'EMC\n');
     return this;
   }
 
   line(x1, top, x2, color = '#d1d1d6', width = 0.7) {
-    const y = PAGE_HEIGHT - top;
+    return this.segment(x1, top, x2, top, color, width);
+  }
+
+  segment(x1, top1, x2, top2, color = '#d1d1d6', width = 0.7) {
+    const y1 = this.height - top1;
+    const y2 = this.height - top2;
     const rgb = hexToRgb01(color);
     this.currentOps.push(
-      `${rgb} RG ${width} w ${fmt(x1)} ${fmt(y)} m ${fmt(x2)} ${fmt(y)} l S\n`,
+      `${rgb} RG ${width} w ${fmt(x1)} ${fmt(y1)} m ${fmt(x2)} ${fmt(y2)} l S\n`,
     );
     return this;
   }
@@ -77,7 +90,9 @@ let activeFont = null;
 function toHexGids(text) {
   let out = '';
   for (const char of String(text)) {
-    const gid = activeFont.glyphId(char.codePointAt(0));
+    const code = char.codePointAt(0);
+    const gid = activeFont.glyphId(code);
+    if (!gidToUnicode.has(gid)) gidToUnicode.set(gid, code);
     out += gid.toString(16).padStart(4, '0');
   }
   return out;
@@ -113,38 +128,41 @@ function wrapText(font, text, maxWidth, size) {
 function layoutResume(doc, font, resume, template) {
   const schema = template.schema || template;
   const typo = schema.typography || {};
-  const margin = (schema.page && schema.page.margin) || { top: 58, right: 64, bottom: 64, left: 64 };
-  const maxPages = (schema.page && schema.page.max_pages) || 2;
+  const margin = doc.margin;
   const baseSize = typo.base_size || 9.5;
   const lineHeight = typo.line_height || 1.75;
   const color = typo.color || '#414448';
   const accent = typo.accent || '#1d1d1f';
   const titleStyle = (schema.section_rules && schema.section_rules.title_style) || {};
-  const titles = (schema.section_rules && schema.section_rules.titles) || {};
+  const attached = ResumeDom.attachDocument(resume);
+  const rendered = ResumeDom.toRenderBlocks(attached.dom_document);
 
   const left = margin.left;
-  const contentWidth = PAGE_WIDTH - margin.left - margin.right;
+  const contentWidth = doc.width - margin.left - margin.right;
   let top = margin.top;
 
   const ensureSpace = (needed) => {
-    if (top + needed <= PAGE_HEIGHT - margin.bottom) return;
+    if (top + needed <= doc.height - margin.bottom) return;
     doc.newPage();
     top = margin.top;
   };
 
   // ---- 页眉 ----
-  doc.text(left, top, resume.basics.name || '', { size: 22, color: accent, bold: true, letterSpacing: 2 });
-  top += 30;
-  const contactParts = [
-    resume.headline,
-    resume.basics.city,
-    resume.basics.phone,
-    resume.basics.email,
-  ].filter(Boolean);
-  doc.text(left, top, contactParts.join('　|　'), { size: 9, color: '#5f6265' });
-  top += 16;
-  doc.line(left, top, PAGE_WIDTH - margin.right, accent, 1.6);
-  top += 22;
+  const headerTitle = (rendered.header && rendered.header.title)
+    || (attached.basics && attached.basics.name)
+    || '';
+  if (headerTitle) {
+    doc.text(left, top, headerTitle, { size: 22, color: accent, bold: true, letterSpacing: 2 });
+    top += 30;
+  }
+  if (rendered.header && rendered.header.subtitle) {
+    doc.text(left, top, rendered.header.subtitle, { size: 9, color: '#5f6265' });
+    top += 16;
+  }
+  if (headerTitle || (rendered.header && rendered.header.subtitle)) {
+    doc.line(left, top, doc.width - margin.right, accent, 1.6);
+    top += 22;
+  }
 
   const drawSectionTitle = (label) => {
     ensureSpace(40);
@@ -156,7 +174,7 @@ function layoutResume(doc, font, resume, template) {
     });
     top += 16;
     if (titleStyle.rule !== false) {
-      doc.line(left, top, PAGE_WIDTH - margin.right, titleStyle.color || accent, 0.7);
+      doc.line(left, top, doc.width - margin.right, titleStyle.color || accent, 0.7);
       top += 12;
     } else {
       top += 6;
@@ -201,68 +219,80 @@ function layoutResume(doc, font, resume, template) {
     }
     if (period) {
       const periodWidth = measureText(font, period, 9);
-      doc.text(PAGE_WIDTH - margin.right - periodWidth, top, period, { size: 9, color: '#73767a' });
+      doc.text(doc.width - margin.right - periodWidth, top, period, { size: 9, color: '#73767a' });
     }
     top += 17;
   };
 
-  // ---- 模块顺序由模板决定 ----
-  const order = (schema.section_rules && schema.section_rules.order) || [
-    'summary',
-    'experience',
-    'projects',
-    'education',
-    'skills',
-  ];
-
-  order.forEach((sectionKey) => {
-    if (sectionKey === 'summary') {
-      if (!resume.summary) return;
-      drawSectionTitle(titles.summary || '个人优势');
-      drawParagraph(resume.summary);
-      top += 10;
-    }
-    if (sectionKey === 'experience' && (resume.experience || []).length) {
-      drawSectionTitle(titles.experience || '工作经历');
-      resume.experience.forEach((item) => {
-        drawEntryRow(item.organization, item.title, periodText(item));
-        drawBullets(item.bullets);
-        top += 6;
+  const drawTable = (block) => {
+    const rows = block.rows || [];
+    const columnCount = Math.max(
+      1,
+      ...rows.map((row) =>
+        (row.cells || []).reduce((sum, cell) => sum + Math.max(1, Number(cell.colspan || 1)), 0)),
+    );
+    const columnWidth = contentWidth / columnCount;
+    rows.forEach((row) => {
+      const cells = row.cells || [];
+      const prepared = cells.map((cell) => {
+        const span = Math.max(1, Number(cell.colspan || 1));
+        const sourceLines = cell.lines && cell.lines.length ? cell.lines : [cell.text || ''];
+        const lines = sourceLines.flatMap((line) =>
+          wrapText(font, line, columnWidth * span - 10, baseSize));
+        return { cell, span, lines: lines.length ? lines : [''] };
       });
-    }
-    if (sectionKey === 'projects' && (resume.projects || []).length) {
-      drawSectionTitle(titles.projects || '项目经历');
-      resume.projects.forEach((item) => {
-        drawEntryRow(item.name || item.organization, item.role || item.title, periodText(item));
-        drawBullets(item.bullets);
-        top += 6;
-      });
-    }
-    if (sectionKey === 'education' && (resume.education || []).length) {
-      drawSectionTitle(titles.education || '教育经历');
-      resume.education.forEach((item) => {
-        const detail = [item.major, item.degree].filter(Boolean).join(' · ');
-        drawEntryRow(item.school || item.organization, detail, periodText(item));
-      });
-    }
-    if (sectionKey === 'skills') {
-      const skills = (resume.skills || []).map((skill) =>
-        typeof skill === 'string' ? skill : skill.name,
+      const rowHeight = Math.max(
+        baseSize * lineHeight + 8,
+        ...prepared.map((entry) => entry.lines.length * baseSize * 1.35 + 8),
       );
-      if (!skills.length) return;
-      drawSectionTitle(titles.skills || '专业技能');
-      drawParagraph(skills.join('　'));
+      ensureSpace(rowHeight + 1);
+      const rowTop = top;
+      let x = left;
+      doc.line(left, rowTop, left + contentWidth, '#d8dde2', 0.55);
+      prepared.forEach((entry) => {
+        doc.segment(x, rowTop, x, rowTop + rowHeight, '#d8dde2', 0.55);
+        entry.lines.forEach((line, lineIndex) => {
+          doc.text(x + 5, rowTop + 4 + lineIndex * baseSize * 1.35, line, {
+            size: baseSize,
+            color,
+            bold: lineIndex === 0 && entry.lines.length > 1,
+          });
+        });
+        x += columnWidth * entry.span;
+      });
+      doc.segment(left + contentWidth, rowTop, left + contentWidth, rowTop + rowHeight, '#d8dde2', 0.55);
+      doc.line(left, rowTop + rowHeight, left + contentWidth, '#d8dde2', 0.55);
+      top += rowHeight;
+    });
+    top += 6;
+  };
+
+  // ---- 模块和顺序由 Resume DOM 决定 ----
+  let numberedIndex = 0;
+  rendered.blocks.forEach((block) => {
+    if (block.type !== 'numbered') numberedIndex = 0;
+    if (block.type === 'heading') {
+      drawSectionTitle(block.text);
+    } else if (block.type === 'row') {
+      drawEntryRow(block.main || block.text || '', block.secondary || '', block.trailing || '');
+    } else if (block.type === 'bullet') {
+      drawBullets([block.text]);
+    } else if (block.type === 'numbered') {
+      numberedIndex += 1;
+      drawParagraph(`${numberedIndex}. ${block.text}`);
+    } else if (block.type === 'rule') {
+      ensureSpace(12);
+      doc.line(left, top, doc.width - margin.right, '#d1d1d6', 0.7);
+      top += 10;
+    } else if (block.type === 'table') {
+      drawTable(block);
+    } else if (block.type === 'paragraph') {
+      drawParagraph(block.text);
+      top += 6;
     }
   });
 
-  return doc.pages.length > maxPages ? maxPages : doc.pages.length;
-}
-
-function periodText(item) {
-  const start = item.start || item.start_date || '';
-  const end = item.end || item.end_date || '';
-  if (!start && !end) return '';
-  return `${start} — ${end || '至今'}`;
+  return doc.pages.length;
 }
 
 /** 生成连续 gid 的宽度表 W（只覆盖实际用到的字形）。 */
@@ -295,7 +325,7 @@ function buildToUnicode(usedGids) {
     .map((gid) => {
       const code = gidToUnicode.get(gid);
       if (code === undefined) return null;
-      const uni = code.toString(16).padStart(4, '0');
+      const uni = Buffer.from(String.fromCodePoint(code), 'utf16le').swap16().toString('hex');
       return `<${gid.toString(16).padStart(4, '0')}> <${uni}>`;
     })
     .filter(Boolean);
@@ -357,7 +387,7 @@ function reverseLookup(font, gid) {
 }
 
 /** 组装 PDF 文件字节。 */
-function serialize(font, pages, usedGids, pageCount) {
+function serialize(font, pages, usedGids, pageCount, pageLayout) {
   const objects = [];
   const add = (body) => {
     objects.push(body);
@@ -387,7 +417,7 @@ function serialize(font, pages, usedGids, pageCount) {
 
   pages.forEach((_, index) => {
     pageObjIds[index] = add(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${fmt(PAGE_WIDTH)} ${fmt(PAGE_HEIGHT)}] ` +
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${fmt(pageLayout.width)} ${fmt(pageLayout.height)}] ` +
         `/Resources << /Font << /F1 ${type0Number} 0 R >> >> /Contents ${contentIds[index]} 0 R >>`,
     );
   });
@@ -476,7 +506,7 @@ function serialize(font, pages, usedGids, pageCount) {
  * @param {{resume:object, template:object}} input
  * @returns {{buffer:Buffer, pages:number}}
  */
-function renderPdf({ resume, template }) {
+function renderPdf({ resume, template = {} }) {
   if (!fs.existsSync(FONT_PATH)) {
     const err = new Error(`缺少中文字体 ${FONT_PATH}`);
     err.code = 'RENDER_FONT_MISSING';
@@ -486,15 +516,24 @@ function renderPdf({ resume, template }) {
   activeFont = font;
   gidToUnicode = new Map();
 
-  const doc = new PdfDoc();
+  const schema = template.schema || template;
+  const pageLayout = ResumeDom.resolvePageLayout(resume, {
+    margins: (schema.page && schema.page.margin) || { top: 58, right: 64, bottom: 64, left: 64 },
+  });
+  const doc = new PdfDoc(pageLayout);
   doc.newPage();
   layoutResume(doc, font, resume, template);
   const pages = doc.finish();
   const pageCount = Math.max(1, pages.length);
   const usedGids = collectUsedGids(font, pages);
   usedGids.add(font.glyphId(32));
-  const buffer = serialize(font, pages, usedGids, pageCount);
+  const buffer = serialize(font, pages, usedGids, pageCount, pageLayout);
   return { buffer, pages: pageCount };
 }
 
-module.exports = { renderPdf, FONT_PATH, PAGE_WIDTH, PAGE_HEIGHT, wrapText };
+async function renderPdfAsync({ resume, ownerId }) {
+  const { document } = await require('./document-images').prepareDocumentImages(resume, ownerId);
+  const { printDocumentHtml } = require('./print-document');
+  return require('./chromium').printPdf(printDocumentHtml(document), ResumeDom.resolvePageLayout(document));
+}
+module.exports = { renderPdf, renderPdfAsync, FONT_PATH, PAGE_WIDTH, PAGE_HEIGHT, wrapText };

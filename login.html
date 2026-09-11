@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="same-origin">
+  <title>登录 · resume</title>
+  <style>
+    :root{--ink:#1d1d1f;--muted:#737378;--line:rgba(0,0,0,.075);--bg:#f5f5f7;--card:#fff;--blue:#0071e3;--blue2:#005ac7}
+    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;-webkit-font-smoothing:antialiased}
+    button,input{font:inherit}button{cursor:pointer}button:disabled{cursor:wait}::selection{background:rgba(0,113,227,.18)}
+    button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid rgba(0,113,227,.24);outline-offset:2px}
+    .topbar{height:68px;display:flex;align-items:center;padding:0 20px;border-bottom:1px solid var(--line);background:rgba(250,250,252,.8)}
+    .brand{display:inline-flex;align-items:center;min-height:40px;color:var(--ink);font-size:24px;font-weight:700;line-height:1;letter-spacing:-.8px;text-decoration:none}
+    main{min-height:calc(100dvh - 68px);display:grid;place-items:center;padding:48px 24px 64px}
+    .panel{width:min(100%,420px);padding:36px;border:1px solid var(--line);border-radius:24px;background:var(--card);box-shadow:0 12px 40px rgba(0,0,0,.045)}
+    h1{font-size:26px;line-height:1.35;letter-spacing:-.7px;font-weight:650;margin:0 0 24px}
+    label{display:block;font-size:12px;font-weight:600;margin:18px 0 8px;color:#4a4a4f}
+    input{width:100%;height:44px;border:1px solid rgba(0,0,0,.12);border-radius:12px;background:#fafafa;padding:0 13px;color:var(--ink);transition:border-color .15s,box-shadow .15s,background .15s}
+    input:hover{border-color:rgba(0,0,0,.2)}input:focus-visible{outline:0;border-color:rgba(0,113,227,.5);background:#fff;box-shadow:0 0 0 3px rgba(0,113,227,.09)}input[aria-invalid=true]{border-color:#bd6464}
+    .hint{font-size:11px;line-height:1.6;color:var(--muted);margin:8px 0 0}
+    .submit{width:100%;margin-top:24px;height:44px;border:0;border-radius:99px;background:var(--blue);color:#fff;font-size:13px;font-weight:630;box-shadow:0 5px 16px rgba(0,113,227,.16);transition:background .15s,box-shadow .15s}
+    .submit:hover:not(:disabled){background:var(--blue2);box-shadow:0 6px 18px rgba(0,113,227,.22)}.submit:disabled{opacity:.7;box-shadow:none}
+    .error{font-size:12px;line-height:1.6;color:#b5473d;margin:12px 0 0;overflow-wrap:anywhere}.error:empty{display:none}
+    .switch-wrap{display:flex;justify-content:center;align-items:center;gap:4px;margin-top:18px;color:var(--muted);font-size:12px}.switch{min-height:32px;background:none;border:0;border-radius:8px;padding:5px 7px;color:var(--blue);font-weight:600}.switch:hover:not(:disabled){background:rgba(0,113,227,.06)}
+    .loading{display:inline-block;width:13px;height:13px;border:1.5px solid #ffffff55;border-top-color:currentColor;border-radius:50%;vertical-align:-2px;margin-right:9px;animation:spin .9s linear infinite}
+    [hidden]{display:none!important}@keyframes spin{to{transform:rotate(360deg)}}
+    @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+    @media(max-width:480px){.topbar{height:60px;padding:0 16px}main{min-height:calc(100dvh - 60px);padding:32px 16px;align-items:start}.panel{padding:28px 24px;border-radius:20px}h1{font-size:24px}input{font-size:16px}}
+  </style>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="./" aria-label="resume 首页">resume</a></header>
+  <main>
+    <section class="panel" aria-labelledby="title">
+      <h1 id="title">登录</h1>
+      <form id="account-form">
+        <label for="username">用户名</label>
+        <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required aria-describedby="username-hint">
+        <p class="hint" id="username-hint" hidden>3–32 位英文字母、数字、短横线或下划线，以字母开头。</p>
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required aria-describedby="password-hint">
+        <p class="hint" id="password-hint" hidden>至少 15 个字符，可以是一句容易记住的话。</p>
+        <p class="error" id="error" role="alert"></p>
+        <button class="submit" id="submit" type="submit" disabled>正在连接…</button>
+      </form>
+      <div class="switch-wrap"><button class="switch" id="switch" type="button">创建账号</button></div>
+    </section>
+  </main>
+  <script src="account-client.js"></script>
+  <script>
+    (function(){
+      'use strict';
+      var mode='login',busy=false,ready=false;
+      var $=function(id){return document.getElementById(id)};
+      var base=location.pathname.replace(/[^/]*$/,'')+'api/v1';
+      function render(){
+        $('title').textContent=mode==='login'?'登录':'创建账号';
+        $('username-hint').hidden=mode==='login';$('password-hint').hidden=mode==='login';
+        $('password').autocomplete=mode==='login'?'current-password':'new-password';
+        $('switch').textContent=mode==='login'?'创建账号':'登录';
+        $('switch').disabled=busy;$('submit').disabled=busy||!ready;
+        $('submit').replaceChildren();
+        if(busy){var spinner=document.createElement('span');spinner.className='loading';spinner.setAttribute('aria-hidden','true');$('submit').append(spinner)}
+        $('submit').append(document.createTextNode(busy?'请稍候…':!ready?'重新连接':mode==='login'?'登录':'创建账号'));
+        $('account-form').setAttribute('aria-busy',String(busy));
+      }
+      $('switch').onclick=function(){if(busy)return;mode=mode==='login'?'register':'login';$('error').textContent='';render();$('username').focus()};
+      $('account-form').onsubmit=async function(event){
+        event.preventDefault();if(busy||!ready)return;
+        busy=true;$('error').textContent='';render();
+        try{
+          await ResumeAccount.login(mode,{username:$('username').value,password:$('password').value});
+          $('password').value='';
+          location.replace(ResumeAccount.safeReturn(new URLSearchParams(location.search).get('return')));
+        }catch(error){$('error').textContent=error.message||'登录未完成，请重试';$('password').focus()}
+        finally{busy=false;render()}
+      };
+      async function start(){
+        try{
+          var result=await ResumeAccount.bootstrap({apiBase:base,allowAnonymous:true});
+          if(result.authenticated){location.replace(ResumeAccount.safeReturn(new URLSearchParams(location.search).get('return')));return}
+          ready=true;$('error').textContent='';
+        }catch(error){$('error').textContent='暂时无法连接，请刷新页面重试'}
+        render();
+      }
+      start();
+    })();
+  </script>
+</body>
+</html>

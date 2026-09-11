@@ -1,77 +1,67 @@
 'use strict';
 /**
- * HTML 渲染产物：Resume JSON + Template → 打印用 HTML 字符串。
+ * HTML 渲染产物：Resume DOM + Template → 打印用 HTML 字符串。
  * 仅作为生成产物（artifact）存入对象存储供预览与缩略图使用，
  * 不是产品页面（产品页面统一维护在 index.html）。
  */
+const ResumeDom = require('../../../resume-dom');
+const db = require('../db');
+const { getObject } = require('../storage');
+
 const escape = (text) =>
   String(text)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
-function periodText(item) {
-  const start = item.start || item.start_date || '';
-  const end = item.end || item.end_date || '';
-  if (!start && !end) return '';
-  return `${start} — ${end || '至今'}`;
-}
-
-function bulletsHtml(bullets = []) {
-  if (!bullets.length) return '';
-  return `<ul>${bullets
-    .map((bullet) => `<li>${escape(typeof bullet === 'string' ? bullet : bullet.text)}</li>`)
-    .join('')}</ul>`;
-}
-
-function renderHtml({ resume, template }) {
-  const schema = template.schema || template;
-  const titles = (schema.section_rules && schema.section_rules.titles) || {};
-  const order = (schema.section_rules && schema.section_rules.order) || [];
-  const accent = (schema.typography && schema.typography.accent) || '#1d1d1f';
-
-  const blocks = [];
-  order.forEach((key) => {
-    if (key === 'summary' && resume.summary) {
-      blocks.push(`<h2>${escape(titles.summary || '个人优势')}</h2><p>${escape(resume.summary)}</p>`);
-    }
-    if (key === 'experience' && (resume.experience || []).length) {
-      blocks.push(`<h2>${escape(titles.experience || '工作经历')}</h2>`);
-      resume.experience.forEach((item) => {
-        blocks.push(
-          `<div class="row"><strong>${escape(item.organization)}</strong><span>${escape(item.title || '')}</span><time>${escape(periodText(item))}</time></div>${bulletsHtml(item.bullets)}`,
-        );
-      });
-    }
-    if (key === 'projects' && (resume.projects || []).length) {
-      blocks.push(`<h2>${escape(titles.projects || '项目经历')}</h2>`);
-      resume.projects.forEach((item) => {
-        blocks.push(
-          `<div class="row"><strong>${escape(item.name || item.organization)}</strong><span>${escape(item.role || item.title || '')}</span><time>${escape(periodText(item))}</time></div>${bulletsHtml(item.bullets)}`,
-        );
-      });
-    }
-    if (key === 'education' && (resume.education || []).length) {
-      blocks.push(`<h2>${escape(titles.education || '教育经历')}</h2>`);
-      resume.education.forEach((item) => {
-        blocks.push(
-          `<div class="row"><strong>${escape(item.school || item.organization)}</strong><span>${escape([item.major, item.degree].filter(Boolean).join(' · '))}</span><time>${escape(periodText(item))}</time></div>`,
-        );
-      });
-    }
-    if (key === 'skills') {
-      const skills = (resume.skills || []).map((skill) => (typeof skill === 'string' ? skill : skill.name));
-      if (skills.length) {
-        blocks.push(`<h2>${escape(titles.skills || '专业技能')}</h2><p>${escape(skills.join('　'))}</p>`);
+function inlineSceneAssets(documentValue, ownerId) {
+  const document = ResumeDom.clone(documentValue);
+  if (!ownerId) return document;
+  function visit(node) {
+    if (!node || node.type !== 'element') return;
+    const artifactId =
+      node.attributes && node.attributes['data-scene-background-artifact-id'];
+    if (node.tag === 'img' && artifactId) {
+      const artifact = db.get(
+        `SELECT object_key, mime_type
+         FROM artifacts
+         WHERE id = ? AND owner_id = ? AND status = 'ready'`,
+        [artifactId, ownerId],
+      );
+      const buffer = artifact && getObject(artifact.object_key);
+      if (buffer && String(artifact.mime_type || '').startsWith('image/')) {
+        node.attributes.src =
+          `data:${artifact.mime_type};base64,${buffer.toString('base64')}`;
       }
     }
-  });
-
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escape(resume.basics.name)} · 简历</title>
-<style>@page{size:A4;margin:18mm}body{font-family:"Noto Sans SC","Microsoft YaHei",sans-serif;color:#414448;font-size:10.5pt;line-height:1.75}h1{font-size:22pt;letter-spacing:2px;margin:0}h2{font-size:12pt;color:${accent};border-bottom:1px solid #d1d1d6;padding-bottom:4pt;margin:18pt 0 8pt}.contact{color:#5f6265;font-size:9pt;margin:6pt 0 14pt;border-bottom:1px solid ${accent};padding-bottom:10pt}.row{margin-top:10pt;font-weight:700;font-size:10pt}.row span{margin-left:10pt;font-weight:400;color:#4d5155}.row time{float:right;font-weight:400;color:#73767a;font-size:9pt}ul{margin:6pt 0;padding-left:16px}li{white-space:pre-line}</style>
-</head><body><h1>${escape(resume.basics.name)}</h1><div class="contact">${escape(
-    [resume.headline, resume.basics.city, resume.basics.phone, resume.basics.email].filter(Boolean).join('　|　'),
-  )}</div>${blocks.join('')}</body></html>`;
+    (node.children || []).forEach(visit);
+  }
+  visit(document.root);
+  return document;
 }
 
-module.exports = { renderHtml };
+function renderHtml({ resume, template = {}, ownerId }) {
+  const schema = template.schema || template;
+  const accent = (schema.typography && schema.typography.accent) || '#1d1d1f';
+  const importedLayout = /^imported-(?:native|positioned|scene)$/.test(String(schema.layout || ''));
+  const page = ResumeDom.resolvePageLayout(resume, importedLayout
+    ? { margins: { top: 0, right: 0, bottom: 0, left: 0 } } : {});
+  const pageCss = `@page{size:${page.width}pt ${page.height}pt;margin:${
+    ['top', 'right', 'bottom', 'left'].map((side) => `${page.margins[side]}pt`).join(' ')}}`;
+  const attached = ResumeDom.attachDocument(resume);
+  const exportDocument = inlineSceneAssets(attached.dom_document, ownerId);
+  const body = ResumeDom.renderToHtml(exportDocument, { forExport: true });
+  const title = (attached.basics && attached.basics.name)
+    || (ResumeDom.toRenderBlocks(attached.dom_document).header || {}).title
+    || '简历';
+
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escape(title)} · 简历</title>
+<style>@page{size:A4;margin:${importedLayout ? '0' : '18mm'}}html,body{margin:${importedLayout ? '0' : 'initial'};padding:0}body{font-family:"Noto Sans SC","Microsoft YaHei",sans-serif;color:#414448;font-size:10.5pt;line-height:1.75}.resume-top h1,h1{font-size:22pt;letter-spacing:2px;margin:0}.resume-section h2,h2{font-size:12pt;color:${accent};border-bottom:1px solid #d1d1d6;padding-bottom:4pt;margin:18pt 0 8pt}.resume-top p,.contact{color:#5f6265;font-size:9pt;margin:6pt 0 14pt;border-bottom:1px solid ${accent};padding-bottom:10pt}.resume-row,.row{margin-top:10pt;font-weight:700;font-size:10pt}.resume-row .role,.row span{margin-left:10pt;font-weight:400;color:#4d5155}.resume-row time,.row time{float:right;font-weight:400;color:#73767a;font-size:9pt}ul{margin:6pt 0;padding-left:16px}li{white-space:pre-line}.imported-document-page{break-after:page;page-break-after:always;box-shadow:none!important}.imported-document-page:last-child{break-after:auto;page-break-after:auto}.imported-scene-background{display:block}.imported-scene-span{display:inline-block}.imported-paragraph span{margin-left:0}.imported-table{break-inside:avoid}</style>
+<style>${pageCss}</style></head><body>${body}</body></html>`;
+}
+
+async function renderHtmlAsync({ resume, ownerId }) {
+  const { document } = await require('./document-images').prepareDocumentImages(resume, ownerId);
+  return require('./print-document').printDocumentHtml(document);
+}
+module.exports = { renderHtml, renderHtmlAsync, inlineSceneAssets };

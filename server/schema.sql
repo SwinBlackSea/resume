@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS profiles (
   updated_at   TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS home_intakes (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES users(id),
+  project_id TEXT NOT NULL REFERENCES resume_projects(id),
+  state_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_home_intakes_owner ON home_intakes(owner_id, updated_at);
+
 CREATE TABLE IF NOT EXISTS experiences (
   id           TEXT PRIMARY KEY,
   profile_id   TEXT NOT NULL REFERENCES profiles(id),
@@ -67,7 +77,7 @@ CREATE TABLE IF NOT EXISTS template_definitions (
   name             TEXT NOT NULL,
   kind             TEXT NOT NULL,               -- system | custom
   status           TEXT NOT NULL DEFAULT 'ready',
-  source_upload_id TEXT REFERENCES uploads(id),
+  template_upload_id TEXT REFERENCES uploads(id),
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL
 );
@@ -100,7 +110,7 @@ CREATE TABLE IF NOT EXISTS target_jobs (
   updated_at     TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS job_sources (
+CREATE TABLE IF NOT EXISTS job_files (
   id             TEXT PRIMARY KEY,
   job_id         TEXT NOT NULL REFERENCES target_jobs(id),
   owner_id       TEXT NOT NULL REFERENCES users(id),
@@ -121,8 +131,61 @@ CREATE TABLE IF NOT EXISTS uploads (
   sha256        TEXT NOT NULL DEFAULT '',
   status        TEXT NOT NULL DEFAULT 'uploading', -- uploading|quarantined|scanning|ready|failed
   expires_at    TEXT,
+  chat_conversation_id TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
+);
+
+-- Immutable private image objects. References remain in the one ResumeDocument;
+-- these records never introduce a second document or a personal portrait profile.
+CREATE TABLE IF NOT EXISTS document_assets (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES users(id),
+  sha256 TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  byte_size INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(owner_id, sha256)
+);
+CREATE TABLE IF NOT EXISTS document_image_cache (
+  owner_id TEXT NOT NULL REFERENCES users(id),
+  upload_id TEXT NOT NULL,
+  input_sha256 TEXT NOT NULL,
+  parser_version TEXT NOT NULL,
+  candidates_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  accessed_at TEXT NOT NULL,
+  PRIMARY KEY(owner_id, upload_id, parser_version)
+);
+CREATE INDEX IF NOT EXISTS ix_document_assets_owner ON document_assets(owner_id);
+
+CREATE TABLE IF NOT EXISTS document_imports (
+  id                   TEXT PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES resume_projects(id),
+  upload_id            TEXT NOT NULL REFERENCES uploads(id),
+  owner_id             TEXT NOT NULL REFERENCES users(id),
+  entry_context        TEXT NOT NULL DEFAULT 'workspace', -- workspace | template_picker
+  status               TEXT NOT NULL DEFAULT 'uploaded',
+  detected_format      TEXT NOT NULL DEFAULT '',
+  page_count           INTEGER,
+  parser_version       TEXT NOT NULL DEFAULT '',
+  model_version        TEXT NOT NULL DEFAULT '',
+  content_candidate    TEXT NOT NULL DEFAULT '{}',
+  layout_candidate     TEXT NOT NULL DEFAULT '{}',
+  quality_report       TEXT NOT NULL DEFAULT '{}',
+  warning_codes        TEXT NOT NULL DEFAULT '[]',
+  preview_artifact_ids TEXT NOT NULL DEFAULT '[]',
+  applied_mode         TEXT,
+  applied_template_version_id TEXT REFERENCES template_versions(id),
+  applied_version_id   TEXT REFERENCES resume_versions(id),
+  error_code           TEXT,
+  error_message_safe   TEXT,
+  expires_at           TEXT,
+  created_at           TEXT NOT NULL,
+  updated_at           TEXT NOT NULL
 );
 
 -- ---------------------------------------------------------------- AI 对话层
@@ -148,7 +211,7 @@ CREATE TABLE IF NOT EXISTS ai_tasks (
   goal               TEXT NOT NULL DEFAULT '',
   state_json         TEXT NOT NULL DEFAULT '{}',
   active_proposal_id TEXT,
-  status             TEXT NOT NULL DEFAULT 'active', -- active|waiting_fact|waiting_apply|completed|canceled
+  status             TEXT NOT NULL DEFAULT 'understanding', -- understanding|conversing|clarifying|planning|validated|waiting_apply|completed|failed|canceled
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL
 );
@@ -156,6 +219,7 @@ CREATE TABLE IF NOT EXISTS ai_tasks (
 CREATE TABLE IF NOT EXISTS ai_messages (
   id                  TEXT PRIMARY KEY,
   conversation_id     TEXT NOT NULL REFERENCES ai_conversations(id),
+  task_id              TEXT REFERENCES ai_tasks(id),
   owner_id            TEXT NOT NULL REFERENCES users(id),
   role                TEXT NOT NULL,          -- user | assistant
   content             TEXT NOT NULL DEFAULT '',
@@ -175,33 +239,14 @@ CREATE TABLE IF NOT EXISTS ai_action_requests (
   target_type          TEXT,
   target_id            TEXT,
   payload_json         TEXT NOT NULL DEFAULT '{}',
-  evidence_json        TEXT NOT NULL DEFAULT '[]',
-  confidence           REAL,
-  requires_confirmation INTEGER NOT NULL DEFAULT 1,
-  status               TEXT NOT NULL DEFAULT 'proposed', -- proposed|awaiting_confirmation|applied|rejected|failed|reverted
+  requires_user_action INTEGER NOT NULL DEFAULT 1,
+  status               TEXT NOT NULL DEFAULT 'proposed', -- processing|proposed|awaiting_confirmation|superseded|stale|applied|rejected|failed|reverted
   expected_revision    INTEGER,
-  policy_version       TEXT NOT NULL DEFAULT 'policy-v1',
+  policy_version       TEXT NOT NULL DEFAULT 'policy-v2',
   applied_at           TEXT,
+  rejected_at          TEXT,
   reverted_at          TEXT,
   created_at           TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS fact_candidates (
-  id                 TEXT PRIMARY KEY,
-  project_id         TEXT NOT NULL REFERENCES resume_projects(id),
-  owner_id           TEXT NOT NULL REFERENCES users(id),
-  target_type        TEXT NOT NULL,
-  target_id          TEXT,
-  field_path         TEXT NOT NULL DEFAULT '',
-  proposed_value_json TEXT NOT NULL DEFAULT '{}',
-  source_type        TEXT NOT NULL DEFAULT '',   -- message | upload | voice | inference
-  source_id          TEXT,
-  status             TEXT NOT NULL DEFAULT 'pending', -- pending|confirmed|rejected
-  confirmed_by       TEXT,
-  confirmed_at       TEXT,
-  rejected_at        TEXT,
-  created_at         TEXT NOT NULL,
-  updated_at         TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS change_receipts (
@@ -245,6 +290,8 @@ CREATE TABLE IF NOT EXISTS resume_change_events (
   mutation_id    TEXT NOT NULL,
   snapshot_version_id TEXT REFERENCES resume_versions(id), -- 成版后回填，为空表示尚未成版
   reverted_at    TEXT,
+  undo_expired_at TEXT, -- 超出最近 5 步后不再进入撤销栈，但仍保留审计记录
+  redo_invalidated_at TEXT, -- 撤销后产生新修改时清空重做分支
   created_at     TEXT NOT NULL,
   UNIQUE (project_id, mutation_id)
 );
@@ -256,7 +303,7 @@ CREATE TABLE IF NOT EXISTS resume_versions (
   project_id             TEXT NOT NULL REFERENCES resume_projects(id),
   owner_id               TEXT NOT NULL REFERENCES users(id),
   version_no             INTEGER NOT NULL,
-  kind                   TEXT NOT NULL,          -- manual | generated
+  kind                   TEXT NOT NULL,          -- manual | generated | imported
   name                   TEXT NOT NULL DEFAULT '',
   base_version_id        TEXT REFERENCES resume_versions(id),
   profile_payload        TEXT NOT NULL DEFAULT '{}',
@@ -278,6 +325,7 @@ CREATE TABLE IF NOT EXISTS generation_snapshots (
   owner_id          TEXT NOT NULL REFERENCES users(id),
   generation_no     INTEGER NOT NULL,
   profile_payload   TEXT NOT NULL DEFAULT '{}',
+  resume_input_payload TEXT NOT NULL DEFAULT '{}',
   template_payload  TEXT NOT NULL DEFAULT '{}',
   job_payload       TEXT NOT NULL DEFAULT '{}',
   generation_config TEXT NOT NULL DEFAULT '{}',
@@ -297,7 +345,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   progress           INTEGER NOT NULL DEFAULT 0,
   model_provider     TEXT NOT NULL DEFAULT 'local-rule-engine',
   model_name         TEXT NOT NULL DEFAULT 'resume-rule-v1',
-  prompt_version     TEXT NOT NULL DEFAULT 'prompt-contract-v2',
+  prompt_version     TEXT NOT NULL DEFAULT 'resume-harness-v19-strict-flow-and-fragments',
   attempt_count      INTEGER NOT NULL DEFAULT 0,
   started_at         TEXT,
   finished_at        TEXT,
@@ -322,20 +370,21 @@ CREATE TABLE IF NOT EXISTS resume_outputs (
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
-  id          TEXT PRIMARY KEY,
-  snapshot_id TEXT REFERENCES generation_snapshots(id),
-  version_id  TEXT REFERENCES resume_versions(id),
-  owner_id    TEXT NOT NULL REFERENCES users(id),
-  type        TEXT NOT NULL,                    -- pdf | docx | html | thumbnail
-  object_key  TEXT NOT NULL,
-  mime_type   TEXT NOT NULL DEFAULT '',
-  size        INTEGER NOT NULL DEFAULT 0,
-  sha256      TEXT NOT NULL DEFAULT '',
-  status      TEXT NOT NULL DEFAULT 'ready',
-  expires_at  TEXT,
-  created_at  TEXT NOT NULL
+  id                 TEXT PRIMARY KEY,
+  snapshot_id        TEXT REFERENCES generation_snapshots(id),
+  version_id         TEXT REFERENCES resume_versions(id),
+  document_import_id TEXT REFERENCES document_imports(id),
+  owner_id           TEXT NOT NULL REFERENCES users(id),
+  type               TEXT NOT NULL,                    -- pdf | docx | html | thumbnail | import_preview
+  object_key         TEXT NOT NULL,
+  mime_type          TEXT NOT NULL DEFAULT '',
+  size               INTEGER NOT NULL DEFAULT 0,
+  sha256             TEXT NOT NULL DEFAULT '',
+  status             TEXT NOT NULL DEFAULT 'ready',
+  expires_at         TEXT,
+  created_at         TEXT NOT NULL
 );
--- artifacts 至少关联 snapshot_id 或 version_id
+-- artifacts 至少关联 snapshot_id、version_id 或 document_import_id 之一
 CREATE UNIQUE INDEX IF NOT EXISTS ux_artifacts_scope ON artifacts(snapshot_id, type, sha256);
 
 -- ---------------------------------------------------------------- 基础设施
@@ -403,15 +452,27 @@ CREATE INDEX IF NOT EXISTS ix_projects_owner ON resume_projects(owner_id);
 CREATE INDEX IF NOT EXISTS ix_profiles_project ON profiles(project_id);
 CREATE INDEX IF NOT EXISTS ix_experiences_profile ON experiences(profile_id, deleted_at);
 CREATE INDEX IF NOT EXISTS ix_jobs_project ON target_jobs(project_id);
-CREATE INDEX IF NOT EXISTS ix_job_sources_job ON job_sources(job_id);
+CREATE INDEX IF NOT EXISTS ix_job_files_job ON job_files(job_id);
+CREATE INDEX IF NOT EXISTS ix_document_imports_project ON document_imports(project_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_document_imports_upload ON document_imports(upload_id, status);
+CREATE INDEX IF NOT EXISTS ix_ai_conversations_owner_project
+  ON ai_conversations(owner_id, project_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS ai_messages_conv ON ai_messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_ai_tasks_scope ON ai_tasks(conversation_id, scope_type, scope_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS ix_ai_tasks_owner_conversation
+  ON ai_tasks(owner_id, conversation_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS ix_actions_owner_status ON ai_action_requests(owner_id, status);
-CREATE INDEX IF NOT EXISTS ix_facts_project_status ON fact_candidates(project_id, status);
+CREATE INDEX IF NOT EXISTS ix_actions_inline_target
+  ON ai_action_requests(owner_id, action_type, target_id, status);
 CREATE INDEX IF NOT EXISTS ix_change_events_project ON resume_change_events(project_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_change_events_retention
+  ON resume_change_events(snapshot_version_id, reverted_at, created_at);
 CREATE INDEX IF NOT EXISTS ix_versions_project ON resume_versions(project_id, version_no);
 CREATE INDEX IF NOT EXISTS ix_snapshots_project ON generation_snapshots(project_id, generation_no);
 CREATE INDEX IF NOT EXISTS ix_artifacts_version ON artifacts(version_id, type);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_version_thumbnail
+  ON artifacts(version_id, type)
+  WHERE version_id IS NOT NULL AND type = 'thumbnail';
 CREATE INDEX IF NOT EXISTS ix_outbox_pending ON outbox_events(status, available_at);
 
 -- ---------------------------------------------------------------- 冻结约束
@@ -435,6 +496,7 @@ CREATE TRIGGER IF NOT EXISTS trg_snapshots_freeze
 BEFORE UPDATE ON generation_snapshots
 FOR EACH ROW WHEN
   OLD.profile_payload   IS NOT NEW.profile_payload  OR
+  OLD.resume_input_payload IS NOT NEW.resume_input_payload OR
   OLD.template_payload  IS NOT NEW.template_payload OR
   OLD.job_payload       IS NOT NEW.job_payload      OR
   OLD.generation_config IS NOT NEW.generation_config OR

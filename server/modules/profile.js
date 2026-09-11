@@ -255,10 +255,7 @@ const routes = [
       return toExperienceView(db.get('SELECT * FROM experiences WHERE id = ?', [experience.id]));
     },
   },
-  /**
-   * 导入旧简历 / 证书等资料：AI 提取结果先进入待确认，确认后才进入可靠事实库。
-   * 任何情况下不直接改写简历正文（PRD §6.1、§6.6）。
-   */
+  /** 导入文件只登记为待处理资料，不自动生成资料条目，也不改写简历正文。 */
   {
     method: 'POST',
     pattern: '/projects/:id/profile/import',
@@ -267,32 +264,12 @@ const routes = [
         const project = loadProject(params, user);
         const uploadIds = Array.isArray(body.upload_ids) ? body.upload_ids : [];
         if (!uploadIds.length) throw problem.badRequest('缺少上传文件');
-        const created = [];
         uploadIds.forEach((uploadId) => {
           const upload = db.get('SELECT * FROM uploads WHERE id = ? AND owner_id = ?', [
             uploadId,
             user.id,
           ]);
           if (!upload) throw problem.notFound('上传文件不存在');
-          const id = uuidv7();
-          db.run(
-            `INSERT INTO fact_candidates (id, project_id, owner_id, target_type, target_id, field_path, proposed_value_json, source_type, source_id, status, created_at, updated_at)
-             VALUES (?, ?, ?, 'profile_experience', NULL, 'imported_fact', ?, 'upload', ?, 'pending', ?, ?)`,
-            [
-              id,
-              project.id,
-              user.id,
-              JSON.stringify({
-                label: 'AI 从资料中识别的新信息',
-                value: upload.original_name,
-                source_label: upload.original_name,
-              }),
-              upload.id,
-              nowIso(),
-              nowIso(),
-            ],
-          );
-          created.push(id);
         });
         audit.log({
           ownerId: user.id,
@@ -303,7 +280,13 @@ const routes = [
           ipHash,
           metadata: { count: uploadIds.length },
         });
-        return { created: created.length, status: 'pending', resume_unchanged: true };
+        return {
+          accepted: uploadIds.length,
+          status: 'uploaded',
+          message: '文件已上传。请在对话中说明希望如何整理；保存到资料与应用到简历将分别确认。',
+          resume_unchanged: true,
+          profile_unchanged: true,
+        };
       }),
   },
   // ---- 字段级 AI 润色：只返回方案，不覆盖原文 ----
@@ -342,7 +325,7 @@ const routes = [
           result.original,
           result.suggestion,
           JSON.stringify(result.diff),
-          JSON.stringify(result.pending_claims),
+          JSON.stringify(result.validation_issues),
           nowIso(),
           nowIso(),
         ],
@@ -353,8 +336,8 @@ const routes = [
         suggestion: result.suggestion,
         diff: result.diff,
         note: result.note,
-        pending_claims: result.pending_claims,
-        requires_confirmation: true,
+        validation_issues: result.validation_issues,
+        requires_user_action: true,
         resume_unchanged: true,
       };
     },

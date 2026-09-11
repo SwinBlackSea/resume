@@ -1,7 +1,8 @@
 'use strict';
+const { latestConversationTask, continuationView } = require('../lib/chat-continuation');
 /**
- * 工作区聚合：一次请求返回三栏所需的全部服务端状态（TECH §4.2）。
- * 个人信息、岗位信息、模板、历史版本与生成进度都在工作区内完成，不通过页面跳转打断上下文。
+ * 工作区聚合：返回当前简历、对话及按需材料所需的服务端状态。
+ * 保留既有资料接口与数据；界面围绕简历和对话，不要求先建资料档案。
  */
 const db = require('../lib/db');
 const { uuidv7, nowIso, problem } = require('../lib/util');
@@ -9,6 +10,16 @@ const { computeReadiness, computeProfileCompleteness } = require('../lib/resume-
 const { splitBullets } = require('../lib/compose');
 const { SCOPE_LABEL } = require('../lib/policy');
 const { DEMO_EMAIL } = require('../lib/auth');
+const { previewProposalOnResume } = require('../lib/resume-change-preview');
+const { loadHistoryStacks } = require('./draft');
+const { normalizeQuickReplies } = require('../lib/resume-harness/output-schema');
+const {
+  configuredModels,
+  configuredProvider,
+} = require('../lib/model-client');
+const ResumeDom = require('../../resume-dom');
+const { withIdempotency } = require('../lib/idempotency');
+const { messageAttachments } = require('../lib/message-attachments');
 
 function toExperienceView(row) {
   const meta = JSON.parse(row.meta_json || '{}');
@@ -30,9 +41,9 @@ function toExperienceView(row) {
 function toJobView(job) {
   if (!job) return null;
   const analysis = JSON.parse(job.analysis_json || '{}');
-  const sources = db.all(
+  const files = db.all(
     `SELECT js.id, js.sort_order, js.ocr_confidence, u.original_name AS file_name
-     FROM job_sources js LEFT JOIN uploads u ON u.id = js.upload_id
+     FROM job_files js LEFT JOIN uploads u ON u.id = js.upload_id
      WHERE js.job_id = ? ORDER BY js.sort_order ASC`,
     [job.id],
   );
@@ -44,7 +55,7 @@ function toJobView(job) {
     revision: job.revision,
     confirmed_text: job.confirmed_text,
     ocr_text: job.ocr_text,
-    sources,
+    files,
     analysis: {
       title: analysis.title || job.title,
       company: analysis.company || job.company,
@@ -69,7 +80,7 @@ function toTemplateView(version) {
     template_version_id: version.id,
     template_id: version.template_id,
     key: schema.key || 'custom',
-    name: definition ? definition.name : schema.name || '自定义模板',
+    name: definition ? definition.name : schema.name || '自定义排版',
     description: schema.description || '',
     version: version.version,
     kind: definition ? definition.kind : 'custom',
@@ -80,7 +91,6 @@ function toTemplateView(version) {
 
 function toVersionView(row, currentVersionId) {
   const summary = JSON.parse(row.change_summary_json || '{}');
-  const templatePayload = JSON.parse(row.template_payload || '{}');
   const jobPayload = JSON.parse(row.job_payload || '{}');
   return {
     id: row.id,
@@ -90,15 +100,17 @@ function toVersionView(row, currentVersionId) {
     status: row.status,
     created_at: row.created_at,
     time_label: summary.time_label || '',
-    template: templatePayload.name || '',
     job: jobPayload.job || `${jobPayload.title || ''}${jobPayload.company ? ` · ${jobPayload.company}` : ''}`,
     changes: summary.changes || [],
     list_summary: summary.list_summary || '',
+    thumbnail_url: `/api/v1/versions/${row.id}/thumbnail`,
+    is_base_version: row.id === currentVersionId,
+    // 兼容旧客户端；新界面使用 is_base_version，避免把有新修改的草稿误称为“当前版本”。
     is_current: row.id === currentVersionId,
   };
 }
 
-function toMessageView(row) {
+function toMessageView(row, options = {}) {
   let modelMetadata = {};
   try {
     modelMetadata = JSON.parse(row.model_metadata_json || '{}');
@@ -108,20 +120,71 @@ function toMessageView(row) {
   const actions = db.all(
     'SELECT * FROM ai_action_requests WHERE message_id = ? ORDER BY created_at ASC',
     [row.id],
-  ).map(toActionView);
+  ).map((action) => toActionView(action, options));
+  const messageTaskId = row.task_id || modelMetadata.task_id || null;
+  const task = messageTaskId
+    ? db.get('SELECT status FROM ai_tasks WHERE id = ?', [messageTaskId])
+    : null;
+  const legacyResultType = String(modelMetadata.result_type || '');
+  const resultType = ['ANSWER', 'CLARIFICATION_REQUIRED', 'PLAN_CONFIRMATION_REQUIRED'].includes(
+    legacyResultType,
+  )
+    ? 'MESSAGE'
+    : legacyResultType || null;
+  const retryable = resultType === 'ERROR'
+    && ['failed', 'waiting_apply'].includes(task && task.status)
+    && Boolean(modelMetadata.request_message_id)
+    && db.get(
+      `SELECT id FROM ai_messages WHERE conversation_id = ? AND owner_id = ?
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [row.conversation_id, row.owner_id],
+    )?.id === row.id;
+  let quickReplies = normalizeQuickReplies(modelMetadata.quick_replies);
+  const configuredModelSet = configuredModels();
+  if (!quickReplies.length && modelMetadata.clarification) {
+    quickReplies = normalizeQuickReplies(modelMetadata.clarification.options);
+  }
+  if (!quickReplies.length && modelMetadata.plan) {
+    quickReplies = normalizeQuickReplies([
+      modelMetadata.plan.confirm_label || '按这个思路修改',
+      modelMetadata.plan.adjust_label || '调整要求',
+    ]);
+  }
   return {
     id: row.id,
     role: row.role,
     content: row.content,
+    client_request_id: modelMetadata.client_request_id || null,
+    context_mode: modelMetadata.context_mode === 'fresh' ? 'fresh' : 'continue',
+    ...messageAttachments(row, modelMetadata),
     scope_type: row.scope_type,
     scope_label: row.scope_type ? SCOPE_LABEL[row.scope_type] || row.scope_type : '',
     scope_id: row.scope_id,
-    task_id: modelMetadata.task_id || null,
+    task_id: messageTaskId,
+    task_status: task ? task.status : null,
+    type: modelMetadata.protocol_type
+      || (resultType ? resultType.toLowerCase() : null),
+    result_type: resultType,
+    awaiting_user: modelMetadata.awaiting_user !== undefined
+      ? Boolean(modelMetadata.awaiting_user)
+      : ['CLARIFICATION_REQUIRED', 'PLAN_CONFIRMATION_REQUIRED'].includes(legacyResultType),
+    quick_replies: quickReplies,
+    message_kind: modelMetadata.message_kind || null,
+    clarification: modelMetadata.clarification || null,
+    plan: modelMetadata.plan || null,
+    error_code: modelMetadata.error_code || null,
+    retry_message_id: retryable ? row.id : null,
     created_at: row.created_at,
     // 展示当前回答来自哪个引擎/模型，便于确认配置是否生效
     model: {
-      provider: modelMetadata.provider || 'local-rule-engine',
-      model: modelMetadata.model || 'resume-rule-v1',
+      provider: modelMetadata.provider || configuredProvider() || 'unconfigured',
+      model: modelMetadata.model || configuredModelSet.complex,
+      capability:
+        modelMetadata.capability
+        || modelMetadata.model_route
+        || modelMetadata.route
+        || null,
+      routing_reason: modelMetadata.routing_reason || null,
       prompt_version: modelMetadata.prompt_version || '',
       policy_version: modelMetadata.policy_version || '',
     },
@@ -129,12 +192,32 @@ function toMessageView(row) {
   };
 }
 
-function toActionView(row) {
+function toActionView(row, options = {}) {
   let payload = {};
   try {
     payload = JSON.parse(row.payload_json || '{}');
   } catch (_) {
     payload = {};
+  }
+  if (
+    row.action_type === 'RESUME_REWRITE_PROPOSAL'
+    && ['proposed', 'awaiting_confirmation'].includes(row.status)
+    && options.resume
+  ) {
+    const proposal = payload.proposal || payload;
+    try {
+      const preview = previewProposalOnResume(
+        proposal,
+        options.resume,
+        options.draftRevision,
+      );
+      if (preview) {
+        proposal.change_preview = preview;
+        proposal.summary = preview.summary;
+      }
+    } catch (_) {
+      // 可执行性由领域服务统一判断；展示层无法模拟时保留生成时预览。
+    }
   }
   const receipt = db.get(
     'SELECT * FROM change_receipts WHERE action_request_id = ? ORDER BY created_at DESC LIMIT 1',
@@ -142,33 +225,24 @@ function toActionView(row) {
   );
   const taskId = payload.task_id || null;
   const task = taskId ? db.get('SELECT active_proposal_id, status FROM ai_tasks WHERE id = ?', [taskId]) : null;
-  // 待确认事实动作：附带其关联事实的当前状态，前端据此刻画是否仍显示待确认卡片
-  let factStatus = null;
-  if (row.action_type === 'FACT_CANDIDATE' && row.payload_json) {
-    try {
-      const fp = JSON.parse(row.payload_json || '{}');
-      if (fp.fact_id) {
-        const f = db.get('SELECT status FROM fact_candidates WHERE id = ?', [fp.fact_id]);
-        factStatus = f ? f.status : null;
-      }
-    } catch (_) {
-      factStatus = null;
-    }
-  }
+  const proposal = payload.proposal || payload;
+  const canReapply = row.action_type === 'RESUME_REWRITE_PROPOSAL'
+    && ['applied', 'reverted'].includes(row.status)
+    && Boolean(proposal.reapply_material || (proposal.base_resume_json && proposal.target_resume_document));
+  // Do not inflate every chat refresh with compressed replay material.
+  delete proposal.reapply_material;
   return {
     id: row.id,
     task_id: taskId,
     is_active_proposal: Boolean(task && task.active_proposal_id === row.id),
     task_status: task ? task.status : null,
     action_type: row.action_type,
-    fact_status: factStatus,
     target_type: row.target_type,
     target_id: row.target_id,
     status: row.status,
-    requires_confirmation: Boolean(row.requires_confirmation),
+    can_reapply: canReapply,
+    requires_user_action: Boolean(row.requires_user_action),
     payload,
-    evidence: JSON.parse(row.evidence_json || '[]'),
-    confidence: row.confidence,
     expected_revision: row.expected_revision,
     policy_version: row.policy_version,
     created_at: row.created_at,
@@ -183,33 +257,8 @@ function toActionView(row) {
   };
 }
 
-function toFactView(row) {
-  const value = JSON.parse(row.proposed_value_json || '{}');
-  let sourceLabel = value.source_label || '';
-  if (!sourceLabel) {
-    if (row.source_type === 'message') sourceLabel = '本次 AI 对话';
-    else if (row.source_type === 'voice') sourceLabel = '语音转写';
-    else if (row.source_type === 'upload') {
-      const upload = db.get('SELECT original_name FROM uploads WHERE id = ?', [row.source_id]);
-      sourceLabel = upload ? upload.original_name : '上传资料';
-    } else sourceLabel = 'AI 推断';
-  }
-  return {
-    id: row.id,
-    target_type: row.target_type,
-    target_id: row.target_id,
-    field_path: row.field_path,
-    label: value.label || row.field_path,
-    value: value.value || '',
-    source_type: row.source_type,
-    source_label: sourceLabel,
-    status: row.status,
-    created_at: row.created_at,
-  };
-}
-
 /** 构建工作区聚合视图。 */
-function buildWorkspace(projectId, user) {
+function buildWorkspace(projectId, user, options = {}) {
   const project = db.get('SELECT * FROM resume_projects WHERE id = ? AND owner_id = ?', [
     projectId,
     user.id,
@@ -237,20 +286,16 @@ function buildWorkspace(projectId, user) {
       )
     : null;
 
-  const availableTemplates = db
-    .all(
-      `SELECT tv.* FROM template_versions tv
-       JOIN template_definitions td ON td.id = tv.template_id
-       WHERE (td.kind = 'system' AND td.owner_id IS NULL) OR td.owner_id = ?
-       ORDER BY td.kind DESC, td.name ASC`,
-      [user.id],
-    )
-    .map(toTemplateView);
-
   const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [
     projectId,
     user.id,
   ]);
+  const rawDraft = draft ? JSON.parse(draft.resume_json || '{}') : {};
+  const resumeDocument = ResumeDom.toResumeDocument(
+    rawDraft.schema_version === ResumeDom.RESUME_DOCUMENT_VERSION
+      ? rawDraft
+      : ResumeDom.createResumeAggregate(rawDraft, currentTemplate),
+  );
   const pendingChanges = db
     .all(
       `SELECT * FROM resume_change_events
@@ -270,6 +315,9 @@ function buildWorkspace(projectId, user) {
       mutation_id: row.mutation_id,
       created_at: row.created_at,
     }));
+  const history = draft
+    ? loadHistoryStacks(projectId, user.id)
+    : { depth: 5, undo: [], redo: [] };
 
   const versionRows = db.all(
     'SELECT * FROM resume_versions WHERE project_id = ? AND owner_id = ? ORDER BY version_no DESC',
@@ -277,17 +325,30 @@ function buildWorkspace(projectId, user) {
   );
   const versions = versionRows.map((row) => toVersionView(row, draft ? draft.base_version_id : null));
 
-  const conversation =
-    db.get("SELECT * FROM ai_conversations WHERE project_id = ? AND owner_id = ? AND status = 'active' ORDER BY created_at DESC, id DESC LIMIT 1", [
-      projectId,
-      user.id,
-    ]) || null;
+  let conversation = null;
+  if (options.conversationId) {
+    conversation = db.get(
+      `SELECT * FROM ai_conversations
+       WHERE id = ? AND project_id = ? AND owner_id = ?`,
+      [options.conversationId, projectId, user.id],
+    );
+    if (!conversation) throw problem.badRequest('当前 AI 对话不存在');
+  } else {
+    conversation =
+      db.get("SELECT * FROM ai_conversations WHERE project_id = ? AND owner_id = ? AND status = 'active' ORDER BY created_at DESC, id DESC LIMIT 1", [
+        projectId,
+        user.id,
+      ]) || null;
+  }
   const messages = conversation
     ? db
         .all('SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC', [
           conversation.id,
         ])
-        .map(toMessageView)
+        .map((row) => toMessageView(row, {
+          resume: resumeDocument,
+          draftRevision: draft ? draft.revision : 1,
+        }))
     : [];
 
   const tasks = conversation
@@ -304,17 +365,10 @@ function buildWorkspace(projectId, user) {
         }))
     : [];
 
-  const pendingFacts = db
-    .all(
-      "SELECT * FROM fact_candidates WHERE project_id = ? AND owner_id = ? AND status = 'pending' ORDER BY created_at ASC",
-      [projectId, user.id],
-    )
-    .map(toFactView);
-
   const pendingActionsCount = conversation
     ? db.get(
         `SELECT COUNT(*) AS total FROM ai_action_requests
-         WHERE conversation_id = ? AND owner_id = ? AND status IN ('awaiting_confirmation','proposed') AND requires_confirmation = 1`,
+         WHERE conversation_id = ? AND owner_id = ? AND status IN ('awaiting_confirmation','proposed') AND requires_user_action = 1`,
         [conversation.id, user.id],
       ).total
     : 0;
@@ -322,10 +376,8 @@ function buildWorkspace(projectId, user) {
   const readiness = computeReadiness({
     profileBasics: basics,
     experiences: experienceRows,
-    template: currentTemplate,
     job: jobRow,
   });
-
   return {
     user: { id: user.id, display_name: user.display_name, email: user.email },
     project: {
@@ -343,19 +395,24 @@ function buildWorkspace(projectId, user) {
       experiences,
     },
     job: toJobView(jobRow),
-    template: currentTemplate,
-    templates: availableTemplates,
     draft: {
       id: draft ? draft.id : null,
-      resume_json: draft ? JSON.parse(draft.resume_json || '{}') : {},
+      resume_json: resumeDocument,
       revision: draft ? draft.revision : 1,
       base_version_id: draft ? draft.base_version_id : null,
       has_unsnapshotted_changes: draft ? Boolean(draft.has_unsnapshotted_changes) : false,
       pending_changes: pendingChanges,
+      undo_stack: history.undo,
+      redo_stack: history.redo,
+      undo_depth: history.depth,
     },
     versions,
-    conversation: conversation ? { id: conversation.id, messages, tasks } : null,
-    pending_facts: pendingFacts,
+    conversation: conversation
+      ? { id: conversation.id, status: conversation.status, messages, tasks,
+        continuation: continuationView(latestConversationTask({
+          conversationId: conversation.id, projectId: project.id, ownerId: user.id,
+        })) }
+      : null,
     pending_actions_count: pendingActionsCount,
     readiness,
   };
@@ -368,13 +425,20 @@ const routes = [
     handler: ({ user }) => ({
       items: db
         .all('SELECT * FROM resume_projects WHERE owner_id = ? ORDER BY created_at ASC', [user.id])
-        .map((row) => ({ id: row.id, name: row.name, revision: row.revision, status: row.status })),
+        .map((row) => {
+          const job = row.current_job_id && db.get('SELECT title, company FROM target_jobs WHERE id = ?', [row.current_job_id]);
+          const draft = db.get('SELECT revision, updated_at FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [row.id, user.id]);
+          return { id: row.id, name: row.name, revision: row.revision, status: row.status,
+            updated_at: draft?.updated_at || row.updated_at, job: job || null };
+        }),
     }),
   },
   {
     method: 'GET',
     pattern: '/projects/:id',
-    handler: ({ params, user }) => buildWorkspace(params.id, user),
+    handler: ({ params, user, query }) => buildWorkspace(params.id, user, {
+      conversationId: query.get('conversation_id') || null,
+    }),
   },
   {
     method: 'PATCH',
@@ -397,13 +461,31 @@ const routes = [
   {
     method: 'POST',
     pattern: '/projects',
-    handler: ({ body, user }) =>
-      db.tx(() => {
+    handler: ({ body, user, req }) =>
+      withIdempotency(user, req.headers['idempotency-key'], 'resume_project', () => db.tx(() => {
+        let startingDocument = ResumeDom.toResumeDocument({
+          schema_version: ResumeDom.RESUME_DOCUMENT_VERSION,
+          root: { id: 'resume-root', type: 'element', tag: 'article',
+            semantic: { kind: 'document' }, children: [] },
+        });
+        let startingJob = null;
+        if (body.copy_project_id) {
+          const original = db.get('SELECT * FROM resume_projects WHERE id = ? AND owner_id = ?', [body.copy_project_id, user.id]);
+          if (!original) throw problem.notFound('要复用的简历不存在');
+          const originalDraft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [original.id, user.id]);
+          if (!originalDraft || body.copy_draft_revision !== originalDraft.revision) {
+            throw problem.conflict('REVISION_CONFLICT', '原简历已变化，请保存并刷新后再制作另一份');
+          }
+          startingDocument = ResumeDom.toResumeDocument(JSON.parse(originalDraft.resume_json));
+          startingJob = original.current_job_id
+            ? db.get('SELECT * FROM target_jobs WHERE id = ? AND owner_id = ?', [original.current_job_id, user.id]) : null;
+        }
         const projectId = uuidv7();
+        const name = String(body.name || '新的简历').trim().slice(0, 120) || '新的简历';
         db.run(
           `INSERT INTO resume_projects (id, owner_id, name, revision, status, created_at, updated_at)
            VALUES (?, ?, ?, 1, 'active', ?, ?)`,
-          [projectId, user.id, body.name || '未命名简历项目', nowIso(), nowIso()],
+          [projectId, user.id, name, nowIso(), nowIso()],
         );
         const profileId = uuidv7();
         db.run(
@@ -414,8 +496,8 @@ const routes = [
         const draftId = uuidv7();
         db.run(
           `INSERT INTO resume_drafts (id, project_id, owner_id, resume_json, revision, has_unsnapshotted_changes, created_at, updated_at)
-           VALUES (?, ?, ?, '{}', 1, 0, ?, ?)`,
-          [draftId, projectId, user.id, nowIso(), nowIso()],
+           VALUES (?, ?, ?, ?, 1, 0, ?, ?)`,
+          [draftId, projectId, user.id, JSON.stringify(startingDocument), nowIso(), nowIso()],
         );
         const conversationId = uuidv7();
         db.run(
@@ -424,8 +506,26 @@ const routes = [
           [conversationId, projectId, user.id, nowIso(), nowIso()],
         );
         db.run('UPDATE resume_projects SET current_profile_id = ? WHERE id = ?', [profileId, projectId]);
-        return { id: projectId, name: body.name || '未命名简历项目' };
-      }),
+        if (startingJob) {
+          const jobId = uuidv7();
+          db.run(`INSERT INTO target_jobs
+            (id, project_id, owner_id, title, company, confirmed_text, ocr_text, analysis_json, revision, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'confirmed', ?, ?)`,
+          [jobId, projectId, user.id, startingJob.title, startingJob.company,
+            startingJob.confirmed_text, startingJob.ocr_text, startingJob.analysis_json, nowIso(), nowIso()]);
+          for (const file of db.all('SELECT * FROM job_files WHERE job_id = ? AND owner_id = ?',
+            [startingJob.id, user.id])) {
+            // Independent job-file records reuse immutable owner-owned bytes.
+            db.run(`INSERT INTO job_files
+              (id, job_id, owner_id, upload_id, sort_order, ocr_raw_text, ocr_confidence, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [uuidv7(), jobId, user.id, file.upload_id, file.sort_order,
+              file.ocr_raw_text, file.ocr_confidence, nowIso()]);
+          }
+          db.run('UPDATE resume_projects SET current_job_id = ? WHERE id = ?', [jobId, projectId]);
+        }
+        return { id: projectId, name, conversation_id: conversationId };
+      })),
   },
   {
     method: 'GET',
@@ -448,5 +548,4 @@ module.exports = {
   toVersionView,
   toMessageView,
   toActionView,
-  toFactView,
 };

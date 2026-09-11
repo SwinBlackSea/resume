@@ -5,7 +5,7 @@
  * 约束：
  *  - 支持「更专业、强调成果、更简洁」三种意图；
  *  - 用户确认前不得覆盖原文（这里只返回建议）；
- *  - 不得新增数字、公司、项目和技能；疑似新增事实必须标记待确认。
+ *  - 建议只在用户确认后应用；内容准确性由用户通过差异预览判断。
  */
 const { keyTokens } = require('./resume-schema');
 
@@ -219,22 +219,13 @@ function suggestPolish({ text, intent = '更专业', keywords = [] }) {
     }
   }
 
-  // 事实守卫：建议中不得出现原文没有的数字或实体
-  const originalTokens = keyTokens(text);
-  const suggestionTokens = keyTokens(output.text);
-  const added = Array.from(suggestionTokens).filter((token) => !originalTokens.has(token));
-  const pending = added.map((token) => ({
-    token,
-    reason: `建议中出现的「${token}」无法在原文中找到来源，需确认后才能使用`,
-  }));
-
   return {
     original: text,
     suggestion: output.text,
     diff: diffWords(text, output.text),
     note: output.note,
-    pending_claims: pending,
-    requires_confirmation: true,
+    validation_issues: [],
+    requires_user_action: true,
   };
 }
 
