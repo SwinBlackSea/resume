@@ -12,9 +12,9 @@ const { uuidv7, nowIso, problem, hashJson } = require('../lib/util');
 const audit = require('../lib/audit');
 const { withIdempotency } = require('../lib/idempotency');
 const { getObject, putObject } = require('../lib/storage');
-const { renderPdf } = require('../lib/render/pdf');
-const { renderDocx } = require('../lib/render/docx');
-const { renderHtml } = require('../lib/render/html');
+const { renderPdfAsync } = require('../lib/render/pdf');
+const { renderDocxAsync } = require('../lib/render/docx');
+const { renderHtmlAsync } = require('../lib/render/html');
 const { ensureVersionThumbnail } = require('../lib/version-thumbnail');
 const { toVersionView } = require('./workspace');
 const ResumeDom = require('../../resume-dom');
@@ -120,25 +120,33 @@ function storedResumeDocument(resumePayload, templatePayload) {
 }
 
 /** 生成导出产物（PDF / DOCX / HTML），并登记到 artifacts。 */
-function renderVersionArtifacts({ user, version, force = false }) {
+async function renderVersionArtifacts({ user, version, force = false }) {
   const resume = storedResumeDocument(version.resume_payload, version.template_payload);
   const template = { schema: {} };
-  const existing = db.all('SELECT * FROM artifacts WHERE version_id = ?', [version.id]);
+  // Prior text-only exports cannot satisfy the complete-document renderer.
+  // Keep their immutable files/URLs intact; regenerate once on explicit export.
+  const seenTypes = new Set();
+  const existing = db.all("SELECT * FROM artifacts WHERE version_id = ? AND owner_id = ? AND status = 'ready' ORDER BY created_at DESC, id DESC", [version.id, user.id])
+    .filter(row => {
+      if (seenTypes.has(row.type) || !row.object_key.includes('/document-export-v2/') || !getObject(row.object_key)) return false;
+      seenTypes.add(row.type); return true;
+    });
   const requiredTypes = new Set(['html', 'pdf', 'docx']);
+  const ordered = values => values.sort((a, b) => [...requiredTypes].indexOf(a.type) - [...requiredTypes].indexOf(b.type));
   const existingTypes = new Set(existing.map((row) => row.type));
   if (!force && [...requiredTypes].every((type) => existingTypes.has(type))) {
-    return existing
+    return ordered(existing
       .filter((row) => requiredTypes.has(row.type))
-      .map((row) => ({ id: row.id, type: row.type, size: row.size }));
+      .map((row) => ({ id: row.id, type: row.type, size: row.size })));
   }
   const created = existing
     .filter((row) => requiredTypes.has(row.type) && !force)
     .map((row) => ({ id: row.id, type: row.type, size: row.size }));
   const save = (type, buffer, mimeType) => {
     if (!force && existingTypes.has(type)) return;
-    const key = `${user.id}/versions/${version.id}-${type}`;
-    putObject(key, buffer);
     const id = uuidv7();
+    const key = `${user.id}/document-export-v2/${version.id}-${id}-${type}`;
+    putObject(key, buffer);
     const sha = require('../lib/util').sha256(buffer);
     db.run(
       `INSERT INTO artifacts (id, snapshot_id, version_id, owner_id, type, object_key, mime_type, size, sha256, status, created_at)
@@ -147,19 +155,20 @@ function renderVersionArtifacts({ user, version, force = false }) {
     );
     created.push({ id, type, size: buffer.length });
   };
-  save('html', Buffer.from(renderHtml({ resume, template }), 'utf8'), 'text/html; charset=utf-8');
-  const pdf = renderPdf({ resume, template });
-  save('pdf', pdf.buffer, 'application/pdf');
-  save(
-    'docx',
-    renderDocx({ resume, template }).buffer,
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  );
-  db.run('UPDATE resume_versions SET artifact_refs_json = ? WHERE id = ?', [
-    JSON.stringify(Object.fromEntries(created.map((item) => [item.type, item.id]))),
-    version.id,
+  const options = { resume, template, ownerId: user.id };
+  const [html, pdf, docx] = await Promise.all([
+    renderHtmlAsync(options), renderPdfAsync(options), renderDocxAsync(options),
   ]);
-  return created;
+  db.tx(() => {
+    save('html', Buffer.from(html, 'utf8'), 'text/html; charset=utf-8');
+    save('pdf', pdf.buffer, 'application/pdf');
+    save('docx', docx.buffer, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    db.run('UPDATE resume_versions SET artifact_refs_json = ? WHERE id = ?', [
+      JSON.stringify(Object.fromEntries(created.map((item) => [item.type, item.id]))),
+      version.id,
+    ]);
+  });
+  return ordered(created);
 }
 
 const routes = [
@@ -260,6 +269,7 @@ const routes = [
               }
             : null;
           const resumePayload = ResumeDom.toResumeDocument(parseJson(draft.resume_json));
+          require('../lib/document-assets').validateDocumentAssets(resumePayload, user.id);
 
           // 未显式传 change_ids 时，把当前全部未成版修改纳入本次版本
           const changeIds = Array.isArray(body.change_ids) && body.change_ids.length
@@ -527,6 +537,7 @@ const routes = [
           version.resume_payload,
           version.template_payload,
         );
+        require('../lib/document-assets').validateDocumentAssets(copiedDocument, user.id);
         const revision = draft.revision + 1;
         db.run(
           'UPDATE resume_drafts SET resume_json = ?, base_version_id = ?, revision = ?, has_unsnapshotted_changes = 0, updated_at = ? WHERE id = ?',
@@ -561,13 +572,13 @@ const routes = [
   {
     method: 'POST',
     pattern: '/versions/:id/export',
-    handler: ({ params, body, user, requestId, ipHash }) => {
+    handler: async ({ params, body, user, requestId, ipHash }) => {
       const version = db.get('SELECT * FROM resume_versions WHERE id = ? AND owner_id = ?', [
         params.id,
         user.id,
       ]);
       if (!version) throw problem.notFound('版本不存在');
-      const artifacts = renderVersionArtifacts({
+      const artifacts = await renderVersionArtifacts({
         user,
         version,
         force: Boolean(body.force),

@@ -67,7 +67,8 @@ function readSelectedEntries(filePath) {
           fail(new DocumentRecognitionError('FILE_UNSAFE', 'Word 文件包含不安全路径'));
           return;
         }
-        if (!REQUIRED_ENTRIES.has(entry.fileName)) {
+        if (!REQUIRED_ENTRIES.has(entry.fileName)
+          && !/^word\/(?:header|footer)\d+\.xml$/.test(entry.fileName)) {
           zip.readEntry();
           return;
         }
@@ -636,6 +637,9 @@ async function parseDocx(filePath, { workDir, convertPreview = true } = {}) {
   }
   const styles = parseStylesXml(entries['word/styles.xml']);
   const parsedDocument = parseDocumentXml(entries['word/document.xml'], styles);
+  parsedDocument.document.has_embedded_images = Object.entries(entries)
+    .some(([name, bytes]) => /^word\/(?:document|header\d+|footer\d+)\.xml$/.test(name)
+      && /<(?:w:drawing|v:imagedata)\b/.test(bytes.toString('utf8')));
   const blocks = parsedDocument.blocks;
   let previewPdf = null;
   if (convertPreview && workDir) {

@@ -5,8 +5,48 @@
  * 全局修改列表与约束直接结构化，只有开放字段的单个节点或完整重构
  * 使用短 JSON 字符串，不再把整份 proposal 二次序列化为巨大字符串。
  */
+const DATA_ACTION_SCHEMA = {
+  anyOf: [{
+    type: 'object',
+    properties: {
+      type: { type: 'string', enum: ['JOB_SET_CURRENT_PROPOSAL'] },
+      target_id: { type: ['string', 'null'] },
+      payload: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          company: { type: 'string' },
+          confirmed_text: { type: 'string', minLength: 1,
+            description: '本次建议采用的完整岗位描述，不能省略或只返回岗位标题。' },
+        },
+        required: ['title', 'company', 'confirmed_text'],
+        additionalProperties: false,
+      },
+    },
+    required: ['type', 'target_id', 'payload'],
+    additionalProperties: false,
+  }, {
+    type: 'object',
+    properties: {
+      type: { type: 'string', enum: ['PROFILE_SAVE_PROPOSAL'] },
+      target_id: { type: ['string', 'null'] },
+      payload: {
+        type: 'object',
+        properties: {
+          field: { type: 'string', enum: ['name', 'phone', 'email', 'city', 'current_title', 'job_status'] },
+          value: { type: 'string', minLength: 1 },
+        },
+        required: ['field', 'value'],
+        additionalProperties: false,
+      },
+    },
+    required: ['type', 'target_id', 'payload'],
+    additionalProperties: false,
+  }],
+};
+
 const GLOBAL_RESPONSE_SCHEMA = {
-  name: 'resume_assistant_response_v2',
+  name: 'resume_assistant_response_v3',
   schema: {
     type: 'object',
     properties: {
@@ -35,6 +75,29 @@ const GLOBAL_RESPONSE_SCHEMA = {
         anyOf: [{
         type: 'object',
         properties: {
+          asset_requests: {
+            type: 'array', maxItems: 8,
+            description: '把本任务附件的原图片或裁剪区域嵌入目标 img；无图片操作时为空。不要输出图片URL或字节。',
+            items: {
+              type: 'object',
+              properties: {
+                input_image_id: { type: 'string' },
+                target_node_id: { type: 'string' },
+                purpose: { type: 'string', enum: ['portrait', 'image'] },
+                crop: { anyOf: [{ type: 'null' }, {
+                  type: 'object',
+                  properties: {
+                    x: { type: 'number', minimum: 0, maximum: 1 },
+                    y: { type: 'number', minimum: 0, maximum: 1 },
+                    width: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
+                    height: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
+                  },
+                  required: ['x', 'y', 'width', 'height'], additionalProperties: false,
+                }] },
+              },
+              required: ['input_image_id', 'target_node_id', 'purpose', 'crop'], additionalProperties: false,
+            },
+          },
           changes: {
             type: 'array',
             items: {
@@ -74,23 +137,14 @@ const GLOBAL_RESPONSE_SCHEMA = {
             additionalProperties: false,
           },
         },
-        required: ['changes', 'insertions', 'target_document_json', 'change_constraints'],
+        required: ['asset_requests', 'changes', 'insertions', 'target_document_json', 'change_constraints'],
         additionalProperties: false,
         }, { type: 'null' }],
       },
       data_actions: {
         type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            type: { type: 'string', enum: ['PROFILE_SAVE_PROPOSAL', 'JOB_SET_CURRENT_PROPOSAL'] },
-            target_type: { type: ['string', 'null'] },
-            target_id: { type: ['string', 'null'] },
-            payload_json: { type: 'string' },
-          },
-          required: ['type', 'target_type', 'target_id', 'payload_json'],
-          additionalProperties: false,
-        },
+        description: '只提供本轮确实需要且尚未完成的资料或岗位变更；历史存在岗位不代表每轮都要再次设置。无本轮变更时为空。',
+        items: DATA_ACTION_SCHEMA,
       },
     },
     required: [
@@ -168,6 +222,7 @@ const DOCUMENT_SEMANTIC_RESPONSE_SCHEMA = {
 
 module.exports = {
   GLOBAL_RESPONSE_SCHEMA,
+  DATA_ACTION_SCHEMA,
   INLINE_RESPONSE_SCHEMA,
   DOCUMENT_SEMANTIC_RESPONSE_SCHEMA,
 };

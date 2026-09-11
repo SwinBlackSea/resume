@@ -296,7 +296,8 @@ test('连续两次不可执行的模型动作返回准确错误类型', async ()
     );
     assert.strictEqual(res.status, 422, JSON.stringify(res.body));
     assert.strictEqual(res.body.title, 'PROPOSAL_NOT_EXECUTABLE');
-    assert.match(res.body.detail, /正文未变.*可直接重试/);
+    assert.match(res.body.detail, /自动修复未成功.*原简历未变.*本轮要求已保留/);
+    assert.doesNotMatch(res.body.detail, /处理思路/, '没有实际思路记录时不能声称已保留');
     assert.doesNotMatch(res.body.detail, /没有返回可用结果/);
     assert.ok(res.body.persisted_message_id);
     const task = db.get('SELECT * FROM ai_tasks WHERE id = ?', [res.body.task_id]);
@@ -468,7 +469,7 @@ test('复杂请求先确认极简处理思路，确认后在同一任务直接�
   }
 });
 
-test('同一会话中的多个修改任务分别保存上下文，不会互相串线', async () => {
+test('同一会话中不同作用范围的任务分别保存上下文，显式返回原任务不串线', async () => {
   let continuedInput = null;
   const restore = resumeHarness.setModelClientForTests({
     provider: 'test',
@@ -489,7 +490,9 @@ test('同一会话中的多个修改任务分别保存上下文，不会互相�
   try {
     const conversationId = (await workspace()).conversation.id;
     const first = await send('任务一', {}, { conversation_id: conversationId });
-    const second = await send('任务二', {}, { conversation_id: conversationId });
+    const second = await send('任务二', { type: 'DATA_PROFILE' }, { conversation_id: conversationId });
+    assert.strictEqual(first.status, 200, JSON.stringify(first.body));
+    assert.strictEqual(second.status, 200, JSON.stringify(second.body));
     assert.notStrictEqual(first.body.task_id, second.body.task_id);
 
     const continued = await send('继续任务一', {}, {

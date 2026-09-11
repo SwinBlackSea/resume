@@ -29,10 +29,14 @@ function loadDocumentMaterials(ids, user, projectId, conversationId) {
   });
 }
 
-function conversationMaterials(conversationId, user, projectId) {
+function conversationMaterials(conversationId, user, projectId, taskId) {
+  if (!taskId) throw new Error('读取聊天材料必须指定当前任务');
   const rows = db.all(`SELECT model_metadata_json FROM ai_messages
-    WHERE conversation_id = ? AND owner_id = ? AND role = 'user' ORDER BY created_at, id`,
-  [conversationId, user.id]);
+    WHERE conversation_id = ? AND owner_id = ? AND role = 'user'
+      AND (task_id = ? OR (task_id IS NULL AND json_valid(model_metadata_json)
+        AND json_extract(model_metadata_json, '$.task_id') = ?))
+    ORDER BY created_at, id`,
+  [conversationId, user.id, taskId, taskId]);
   const documentIds = new Set();
   const links = new Map();
   for (const row of rows) {
@@ -40,9 +44,13 @@ function conversationMaterials(conversationId, user, projectId) {
     for (const id of meta.document_import_ids || []) documentIds.add(id);
     for (const item of meta.link_materials || []) links.set(item.url, item);
   }
+  const homeIntake = require('./home-materials').taskHomeMaterials(conversationId, taskId, user, projectId);
   return {
-    documents: [...documentIds].flatMap((id) => loadDocumentMaterials([id], user, projectId, conversationId)),
+    documents: [...documentIds].flatMap((id) => loadDocumentMaterials([id], user, projectId, conversationId))
+      .map((item) => ({ ...item, ...(homeIntake ? { material_role: Object.entries(homeIntake.roles)
+        .find(([, value]) => value.document_import_id === item.id)?.[0] || 'supplement' } : {}) })),
     links: [...links.values()],
+    ...(homeIntake ? { home_intake: homeIntake } : {}),
   };
 }
 

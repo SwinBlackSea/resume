@@ -177,8 +177,12 @@ const routes = [
         db.get('SELECT * FROM template_definitions WHERE template_upload_id = ?', [upload.id]) ||
         db.get('SELECT * FROM document_imports WHERE upload_id = ?', [upload.id]);
       if (referenced) throw problem.conflict('UPLOAD_REFERENCED', '文件已被引用，不能删除');
-      removeObject(upload.object_key);
+      // Upload identity may be discarded after an image replacement, but an
+      // immutable resource still used by a draft/version/undo owns its bytes.
+      const documentAsset = db.get('SELECT id FROM document_assets WHERE object_key = ?', [upload.object_key]);
+      if (!documentAsset) removeObject(upload.object_key);
       db.run('DELETE FROM uploads WHERE id = ?', [upload.id]);
+      if (documentAsset) require('../lib/document-assets').collectUnusedAssets(user.id, { graceMs: 0 });
       return { id: upload.id, deleted: true };
     },
   },

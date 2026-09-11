@@ -6,6 +6,7 @@ const R = require('../resume-dom');
 const { fixture } = require('./fixtures/manual-structures');
 const { publicDocuments } = require('./fixtures/public-resume-samples');
 const { openBrowser, available } = require('./browser-driver');
+const { scenarioTarget, selectNode } = require('./manual-selection-driver');
 
 function ids(node) { return [node.id, ...(node.children || []).flatMap(ids)]; }
 function shape(node) {
@@ -31,7 +32,7 @@ test('真实浏览器 +/-：表格、合并行、多层列表、整块/内部、
   const ctx = await helpers.boot();
   t.after(() => helpers.close(ctx));
   const projectId = await helpers.defaultProject(ctx);
-  const browser = await openBrowser(t, ctx.base.replace('/api/v1', '/'));
+  const browser = await openBrowser(t, ctx.base.replace('/api/v1', '/'), { manualStructure: true });
   const { cdp, evaluate, until, click, hover } = browser;
   async function workspace() { return (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body; }
   async function reset(document) {
@@ -45,20 +46,11 @@ test('真实浏览器 +/-：表格、合并行、多层列表、整块/内部、
     return (await workspace()).draft.resume_json;
   }
   async function action(anchor, actionName) {
-    await hover(nodeSelector(anchor));
-    await until(`nodeStructureState && nodeStructureState.nodeId===${JSON.stringify(anchor)}`);
-    const capability = await evaluate('nodeStructureState.capability');
+    await selectNode(browser, scenarioTarget((await workspace()).draft.resume_json, anchor, actionName));
     const remove = actionName.startsWith('remove');
     const revision = (await workspace()).draft.revision;
     const previousChange = await evaluate('lastChange&&lastChange.meta&&lastChange.meta.changeId||null');
     await click(remove ? '#node-structure-remove' : '#node-structure-add', false);
-    const options = remove ? capability.remove_choices || [capability.remove] : capability.add;
-    if (remove || options.length > 1) {
-      await until('document.querySelector("#node-structure-menu").classList.contains("show")');
-      const choice = options.filter((item) => item.enabled !== false).findIndex((item) => item.action === actionName);
-      assert.ok(choice >= 0, actionName);
-      await click(`#node-structure-menu button:nth-child(${choice + 1})`, false);
-    }
     await until(`!nodeStructureActionPending && WS.draft.revision>${revision} && lastChange&&lastChange.meta&&lastChange.meta.changeId!==${JSON.stringify(previousChange)}`);
     return (await workspace()).draft.resume_json;
   }
@@ -74,6 +66,19 @@ test('真实浏览器 +/-：表格、合并行、多层列表、整块/内部、
     await until('Boolean(!window.__structureReloadPending && window.WS && WS.draft)');
   }
   let operations = 0;
+  await reset(fixture());
+  await hover(nodeSelector('overview-p'));
+  await until('nodeStructureState?.nodeId==="overview-p"');
+  assert.equal(await evaluate('document.activeElement.matches("[data-resume-editable=true]")'), false,
+    '只移动鼠标，不点击或聚焦，也必须显示增删按钮');
+  await evaluate('refresh()');
+  await until('nodeStructureState?.nodeId==="overview-p"');
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 5 });
+  await until('!document.querySelector("#node-structure-tools").classList.contains("show")');
+  await selectNode(browser, 'overview');
+  await hover(nodeSelector('overview-title'));
+  await until('nodeStructureState?.nodeId==="overview-title"');
+  assert.equal(await evaluate('document.querySelectorAll("#node-structure-outline.show").length'), 1);
   for (const [anchor, actionName] of [
     ['overview-p', 'add_sibling'],
     ['grid-row-2-p-2', 'add_sibling'],
@@ -141,9 +146,38 @@ test('真实浏览器 +/-：表格、合并行、多层列表、整块/内部、
     await click('#zoom-button');
     await click(`#zoom-menu [data-zoom="${zoom}"]`, false);
     const after = await action('grid-row-2-p-2', 'add_sibling');
+    await hover(nodeSelector('grid-row-2-p-2'));
+    const inside = await evaluate(`(() => {
+      const tools=document.querySelector('#node-structure-tools'),t=tools.getBoundingClientRect(),p=tools.parentElement.getBoundingClientRect();
+      return t.left>=p.left-1&&t.right<=p.right+1&&t.top>=p.top-1&&t.bottom<=p.bottom+1;
+    })()`);
+    assert.equal(inside, true, '按钮必须内嵌在纸张边界以内');
     assert.equal(R.findNode(after, 'grid-body').node.children.length, 3);
     assert.equal(R.findNode(after, 'grid-row-1').node.children.length, 3);
     operations++;
+  }
+  await click('#zoom-button');
+  await click('#zoom-menu [data-zoom="1"]', false);
+  // Native section output from visual models: date/title is only an anchor,
+  // its sibling description belongs to the same repeated experience subtree.
+  for (const zoom of ['1', '1.25', '1.5']) {
+    const before = await reset(require('./fixtures/full-resume-comparison').document());
+    await click('#zoom-button');
+    await click(`#zoom-menu [data-zoom="${zoom}"]`, false);
+    await hover(nodeSelector('work-1-name'));
+    await until('nodeStructureState && nodeStructureState.nodeId==="work-1-name"');
+    const placement = await evaluate(`(() => {
+      const t=document.querySelector("#node-structure-tools").getBoundingClientRect();
+      const node=document.querySelector('[data-node-id="work-1-name"]'),n=node.getBoundingClientRect();
+      const range=document.createRange();range.selectNodeContents(node);
+      return {right:t.right,left:t.left,nodeRight:n.right,overlap:[...range.getClientRects()].some(r=>t.left<r.right-1&&t.right>r.left+1&&t.top<r.bottom&&t.bottom>r.top)};
+    })()`);
+    assert.equal(placement.overlap, false, JSON.stringify(placement));
+    const after = await action('work-1-name', 'add_sibling');
+    const added = ids(after.root).filter(id => !ids(before.root).includes(id));
+    const copyId = added.find(id => R.findNode(after, id).parent?.id === 'work');
+    assert.deepEqual(shape(R.findNode(after, copyId).node), shape(R.findNode(before, 'work-1').node));
+    await undo(before);
   }
   await click('#zoom-button');
   await click('#zoom-menu [data-zoom="1"]', false);
@@ -154,8 +188,7 @@ test('真实浏览器 +/-：表格、合并行、多层列表、整块/内部、
   assert.ok(R.findNode(contentDeleted, 'grid-row-2')); operations++;
   await undo(beforeDelete); operations++;
   await hover(nodeSelector('overview-title'));
-  await click('#node-structure-remove', false);
-  await click('#node-structure-menu .cancel', false);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
   assert.deepEqual((await workspace()).draft.resume_json, beforeDelete);
 
   // Save the text actually typed in Chromium before duplicating a different

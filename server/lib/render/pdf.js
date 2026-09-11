@@ -40,11 +40,15 @@ class PdfDoc {
   text(x, top, content, { size = 9.5, color = '#414448', bold = false, letterSpacing = 0 } = {}) {
     const y = this.height - top - size;
     const rgb = hexToRgb01(color);
-    let line = `${rgb} rg\n`;
+    // Different Unicode characters can share a font glyph (e.g. 舟/⾈).
+    // Preserve the actual input per text run; reverse cmap lookup cannot
+    // determine which character the user supplied.
+    const actualText = Buffer.from(String(content), 'utf16le').swap16().toString('hex');
+    let line = `/Span << /ActualText <feff${actualText}> >> BDC\n${rgb} rg\n`;
     if (bold) line += `2 Tr 0.35 w\n`; // 无粗体字形时用填充+描边模拟
     line += `BT /F1 ${size} Tf ${letterSpacing} Tc 1 0 0 1 ${fmt(x)} ${fmt(y)} Tm <${toHexGids(content)}> Tj ET\n`;
     if (bold) line += `0 Tr\n`;
-    this.currentOps.push(line);
+    this.currentOps.push(line + 'EMC\n');
     return this;
   }
 
@@ -86,7 +90,9 @@ let activeFont = null;
 function toHexGids(text) {
   let out = '';
   for (const char of String(text)) {
-    const gid = activeFont.glyphId(char.codePointAt(0));
+    const code = char.codePointAt(0);
+    const gid = activeFont.glyphId(code);
+    if (!gidToUnicode.has(gid)) gidToUnicode.set(gid, code);
     out += gid.toString(16).padStart(4, '0');
   }
   return out;
@@ -319,7 +325,7 @@ function buildToUnicode(usedGids) {
     .map((gid) => {
       const code = gidToUnicode.get(gid);
       if (code === undefined) return null;
-      const uni = code.toString(16).padStart(4, '0');
+      const uni = Buffer.from(String.fromCodePoint(code), 'utf16le').swap16().toString('hex');
       return `<${gid.toString(16).padStart(4, '0')}> <${uni}>`;
     })
     .filter(Boolean);
@@ -525,4 +531,9 @@ function renderPdf({ resume, template = {} }) {
   return { buffer, pages: pageCount };
 }
 
-module.exports = { renderPdf, FONT_PATH, PAGE_WIDTH, PAGE_HEIGHT, wrapText };
+async function renderPdfAsync({ resume, ownerId }) {
+  const { document } = await require('./document-images').prepareDocumentImages(resume, ownerId);
+  const { printDocumentHtml } = require('./print-document');
+  return require('./chromium').printPdf(printDocumentHtml(document), ResumeDom.resolvePageLayout(document));
+}
+module.exports = { renderPdf, renderPdfAsync, FONT_PATH, PAGE_WIDTH, PAGE_HEIGHT, wrapText };

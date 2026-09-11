@@ -221,11 +221,16 @@ async function recognizeDocument({ inputPath, originalName, mimeType, workDir })
     }
   }
   const blocks = parsed.pages.flatMap((page) => page.blocks || []);
+  if (parsed.nativeDocument?.has_embedded_images && !pageScene?.has_text_layer) {
+    throw new DocumentRecognitionError('DOCUMENT_IMAGES_UNAVAILABLE',
+      'Word 中的图片版式未能完整读取，请改用 PDF 或清晰截图上传');
+  }
   const semanticResult = await analyzeDocument({ blocks, previews: parsed.previews });
   const warnings = [
     ...(parsed.warnings || []),
     ...(parsed.pageCount > RECOMMENDED_MAX_PAGES ? ['PAGE_COUNT_RECOMMENDED_EXCEEDED'] : []),
     ...(semanticResult.warning ? [semanticResult.warning] : []),
+    ...(parsed.nativeDocument?.has_embedded_images ? ['WORD_IMAGES_PRESERVED_IN_PAGE_SCENE'] : []),
   ];
   const contentCandidate = buildContentCandidate({
     blocks,

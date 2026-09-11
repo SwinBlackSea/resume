@@ -715,8 +715,23 @@ function assertMinimalTargets(base, normalized) {
 
 function materializeTargetFragments(baseValue, rawFragments) {
   const base = ResumeDom.toResumeDocument(baseValue);
+  const envelope = normalizeFragments(rawFragments);
+  // A sparse container CSS/attribute patch and an insertion into that container
+  // are disjoint field writes. Keep presentation separate while validating and
+  // rebuilding structure, then merge only those fields onto the resulting tree.
+  // Explicit text/children replacements still go through overlap rejection.
+  const insertionAncestors = new Set(envelope.insertions.flatMap((insertion) => {
+    const parent = ResumeDom.findNode(base, insertion.parent_id);
+    return parent ? parent.ancestors.concat(parent.node).map(node => node.id) : [];
+  }));
+  const presentation = envelope.format === TARGET_FRAGMENTS_FORMAT
+    ? envelope.changes.filter(change => insertionAncestors.has(change.target_id)
+      && change.replacement_subtree && Object.keys(change.replacement_subtree)
+        .every(key => ['id', 'style', 'attributes'].includes(key))) : [];
+  const separated = new Set(presentation.map(change => change.target_id));
   const normalized = hydrateCompactFragments(base,
-    coalescePresentationTargets(base, normalizeFragments(rawFragments)));
+    coalescePresentationTargets(base, { ...envelope,
+      changes: envelope.changes.filter(change => !separated.has(change.target_id)) }));
   assertTargets(base, normalized);
   assertMinimalTargets(base, normalized);
   const replacements = new Map(
@@ -758,6 +773,20 @@ function materializeTargetFragments(baseValue, rawFragments) {
       ...deepClone(base),
       root,
     }, { allowLegacyAiScope: false });
+    if (presentation.length) {
+      const patches = new Map(presentation.map(change => [change.target_id, change.replacement_subtree]));
+      const currentIndex = indexNodes(document.root);
+      for (const id of patches.keys()) {
+        if (!currentIndex.has(id)) throw fragmentError('TARGET_FRAGMENT_TARGET_NOT_FOUND', `展示修改目标已不存在：${id}`);
+      }
+      const applyPresentation = (node) => {
+        const next = patches.has(node.id) ? hydrateCompactNode(patches.get(node.id), currentIndex) : deepClone(node);
+        if (Array.isArray(next.children)) next.children = next.children.map(applyPresentation);
+        return next;
+      };
+      document = ResumeDom.toResumeDocument({ ...document, root: applyPresentation(document.root) },
+        { allowLegacyAiScope: false });
+    }
   } catch (error) {
     throw fragmentError(
       error.code || 'TARGET_FRAGMENT_DOCUMENT_INVALID',
@@ -767,7 +796,7 @@ function materializeTargetFragments(baseValue, rawFragments) {
   }
   return {
     format: normalized.format,
-    changes: normalized.changes.map((change) => {
+    changes: normalized.changes.concat(presentation).map((change) => {
       const { _compact_text_target: _ignored, ...publicChange } = change;
       return publicChange;
     }),

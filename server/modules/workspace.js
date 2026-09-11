@@ -1,4 +1,5 @@
 'use strict';
+const { latestConversationTask, continuationView } = require('../lib/chat-continuation');
 /**
  * 工作区聚合：返回当前简历、对话及按需材料所需的服务端状态。
  * 保留既有资料接口与数据；界面围绕简历和对话，不要求先建资料档案。
@@ -18,6 +19,7 @@ const {
 } = require('../lib/model-client');
 const ResumeDom = require('../../resume-dom');
 const { withIdempotency } = require('../lib/idempotency');
+const { messageAttachments } = require('../lib/message-attachments');
 
 function toExperienceView(row) {
   const meta = JSON.parse(row.meta_json || '{}');
@@ -153,16 +155,8 @@ function toMessageView(row, options = {}) {
     role: row.role,
     content: row.content,
     client_request_id: modelMetadata.client_request_id || null,
-    attachments: (modelMetadata.attachment_ids || []).flatMap((id) => {
-      const upload = db.get('SELECT id, original_name FROM uploads WHERE id = ? AND owner_id = ?', [id, row.owner_id]);
-      return upload ? [{ id: upload.id, file_name: upload.original_name,
-        preview_url: `/api/v1/uploads/${upload.id}/preview` }] : [];
-    }),
-    documents: (modelMetadata.document_import_ids || []).flatMap((id) => {
-      const item = db.get(`SELECT d.id, u.original_name FROM document_imports d
-        JOIN uploads u ON u.id = d.upload_id WHERE d.id = ? AND d.owner_id = ?`, [id, row.owner_id]);
-      return item ? [{ id: item.id, file_name: item.original_name }] : [];
-    }),
+    context_mode: modelMetadata.context_mode === 'fresh' ? 'fresh' : 'continue',
+    ...messageAttachments(row, modelMetadata),
     scope_type: row.scope_type,
     scope_label: row.scope_type ? SCOPE_LABEL[row.scope_type] || row.scope_type : '',
     scope_id: row.scope_id,
@@ -231,6 +225,12 @@ function toActionView(row, options = {}) {
   );
   const taskId = payload.task_id || null;
   const task = taskId ? db.get('SELECT active_proposal_id, status FROM ai_tasks WHERE id = ?', [taskId]) : null;
+  const proposal = payload.proposal || payload;
+  const canReapply = row.action_type === 'RESUME_REWRITE_PROPOSAL'
+    && ['applied', 'reverted'].includes(row.status)
+    && Boolean(proposal.reapply_material || (proposal.base_resume_json && proposal.target_resume_document));
+  // Do not inflate every chat refresh with compressed replay material.
+  delete proposal.reapply_material;
   return {
     id: row.id,
     task_id: taskId,
@@ -240,6 +240,7 @@ function toActionView(row, options = {}) {
     target_type: row.target_type,
     target_id: row.target_id,
     status: row.status,
+    can_reapply: canReapply,
     requires_user_action: Boolean(row.requires_user_action),
     payload,
     expected_revision: row.expected_revision,
@@ -407,7 +408,10 @@ function buildWorkspace(projectId, user, options = {}) {
     },
     versions,
     conversation: conversation
-      ? { id: conversation.id, status: conversation.status, messages, tasks }
+      ? { id: conversation.id, status: conversation.status, messages, tasks,
+        continuation: continuationView(latestConversationTask({
+          conversationId: conversation.id, projectId: project.id, ownerId: user.id,
+        })) }
       : null,
     pending_actions_count: pendingActionsCount,
     readiness,

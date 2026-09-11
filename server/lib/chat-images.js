@@ -23,26 +23,25 @@ async function loadChatImages(ids, user, conversationId) {
   }
   return Promise.all([...new Set(ids)].map(async (id) => {
     const upload = imageUpload(id, user, conversationId);
-    const bytes = getObject(upload.object_key);
-    if (!bytes) throw problem.notFound('图片文件已不存在，请重新上传');
-    let buffer;
+    let image;
     try {
-      // Keep the original once in object storage; derive bounded model input in
-      // memory. Decoder limits protect against compressed image bombs.
-      buffer = await sharp(bytes, { limitInputPixels: 64 * 1024 * 1024, animated: false })
-        .rotate().resize({ width: 2560, height: 2560, fit: 'inside', withoutEnlargement: true })
-        .flatten({ background: '#fff' }).jpeg({ quality: 90 }).toBuffer();
+      const assets = require('./document-assets');
+      const candidates = await assets.prepareUploadImages(id, { ownerId: user.id, conversationId });
+      image = await assets.modelImage(candidates[0], user.id);
     } catch (_) {
       throw problem.badRequest('图片无法读取或分辨率过大，请重新导出为 PNG、JPG 或 WEBP');
     }
-    return { id, file_name: upload.original_name, mime_type: 'image/jpeg',
-      content_base64: buffer.toString('base64') };
+    return { ...image, id, file_name: upload.original_name };
   }));
 }
 
 function isReferenced(id) {
   return db.get(`SELECT m.id FROM ai_messages m, json_each(m.model_metadata_json, '$.attachment_ids') j
     WHERE j.value = ? LIMIT 1`, [id])
+    || db.get(`SELECT h.id FROM home_intakes h, json_each(h.state_json) role
+      WHERE json_extract(role.value,'$.upload_id')=? LIMIT 1`, [id])
+    || db.get(`SELECT m.id FROM ai_messages m, json_each(m.model_metadata_json,'$.home_materials.roles') role
+      WHERE json_extract(role.value,'$.upload_id')=? LIMIT 1`, [id])
     || db.get('SELECT id FROM job_files WHERE upload_id = ?', [id])
     || db.get('SELECT id FROM document_imports WHERE upload_id = ?', [id])
     || db.get('SELECT id FROM template_definitions WHERE template_upload_id = ?', [id]);
@@ -57,9 +56,14 @@ function releaseClosedChatImages(ownerId) {
   for (const upload of rows) {
     if (isReferenced(upload.id)) continue;
     try {
-      removeObject(upload.object_key);
+      // An applied document/history may still use the exact original object.
+      // Removing chat ownership must not unlink that immutable document image.
+      if (!db.get('SELECT id FROM document_assets WHERE object_key = ?', [upload.object_key])) {
+        removeObject(upload.object_key);
+      }
       db.run('DELETE FROM uploads WHERE id = ?', [upload.id]);
     } catch (_) { /* retain metadata for the next cleanup attempt */ }
   }
+  require('./document-assets').collectUnusedAssets(ownerId, { graceMs: 0 });
 }
 module.exports = { loadChatImages, imageUpload, isReferenced, releaseClosedChatImages, MAX_IMAGES };

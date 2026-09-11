@@ -1,7 +1,9 @@
 # 简历星球 TECH
 
-- 版本：v2.15.0
-- 日期：2026-09-08
+真实入口的首页与编辑页共用纯文字 `resume` 品牌样式；窄屏保留可读文字，编辑页标识可通过键盘或点击返回首页。新导出 Word 的应用元数据同步使用 `resume`，不改写既有下载文件。
+
+- 版本：v2.16.0
+- 日期：2026-09-10
 - 对应产品文档：[PRD.md](./PRD.md)
 - 真实交互入口：`index.html`；独立原型停止维护和验收。
 - 系统提示词协议：[SYSTEM_PROMPT.md](./SYSTEM_PROMPT.md)
@@ -13,6 +15,7 @@
 
 | 日期 | 版本 | 核心变更 |
 |---|---|---|
+| 2026-09-10 | v2.16.0 | 三类材料 intake 与语义岗位链接验证，复用全局生成和首页预览；不可变图片资源、原生提取与裁剪、完整文档带图导出 |
 | 2026-09-08 | v2.15.0 | resume-first 首页/项目导航；复用项目复制、Harness、文档识别与版本事务；只读附件上下文和安全链接读取；首次空白生成自动成版；版本与撤销窗口解耦 |
 | 2026-09-08 | v2.14.1 | 稳定增删锚点、完整重复单元及 rowspan 闭合行组；聊天私有图片、历史视觉参考、事务后附件清理；多页文档请求预算 |
 | 2026-09-08 | v2.14.0 | 去掉复杂修改确认闸门；会话级串行生成、运行 ID 取消隔离、无正文状态查询、后端重试重建、独立片段恢复与建议批次事务 |
@@ -82,12 +85,15 @@
 - 继续调整必须分别提供任务基线 A、上一版目标 B、最新草稿 C 与任务内对话；不得先把 B 合入 C 后让模型误以为正文已经应用；
 - 服务端保存 base=A 与 target=B，应用时以 current=C 做确定性三方合并：B 只覆盖 A→B 实际改变的字段，其余保留 C；
 - change_preview 由 C 与合并结果 D 派生，不参与写入判断；正文节点和页面、样式、资源等文档元数据均纳入差异；
+- 差异弹框复用同一次 `/preview` 返回的 `current_resume_document`（C）与 `target_resume_document`（D）及 revision。`resume-review.js` 生成一次性只读阅读投影，在语义区域内渲染整行增删、完整未改正文及折叠的展示变化。投影不参与持久化、应用或导出；绝对定位、固定高度不进入阅读布局，实际版式仍由原文档 Renderer 预览。展示字段的 node_id 仅作内部定位，不显示给用户。
 - 用户语义不明确时 Harness 只返回澄清问题，不生成动作；内部节点编排失败不能伪装成用户歧义；
 - 明确修改直接返回建议，不根据文字、结构、样式修改数量追加确认；只有结果歧义或用户要求讨论才先沟通；
 - 模型输出先经过目标子树校验与装配、ResumeDocument 规范化、单一编辑节点不变量和 Change Policy 校验，再进入待确认状态；
 - 旧草稿读取可以迁移 `data-ai-scope`，模型目标子树、完整目标文档和任何新写入都必须严格拒绝该字段；
 - 不建立 Word 编辑会话、DOCX 草稿修订或人工/AI 编辑模式；
-- 不建立模板、模板版本、排版预设或正文到模板槽位的绑定对象；
+- 首页上传或内置版式参考是完整文档输入，不建立模板版本或正文到模板槽位的绑定对象；
+- 内置图库在 `assets/builtin-layouts/manifest.json` 登记 20 款固定上游提交的参考图、许可、SHA-256 与 WebP 缩略图，通过受控 `/home/layouts/:id/image` 路由读取；不在用户预览时访问上游。前端分离预览 ID 与已确认材料 ID，仅应用请求成功后更新第三卡片。模型使用同一 ID 的完整参考图，标记 `reference_only`，不得将模板截图或其中头像作为本人图片资源；
+- 浏览器内部资源 URL 统一由真实入口 `toApiUrl` 按页面部署目录转换，支持根路径及 `/resume/` 等多层子目录；只匹配完整 `/api/v1` 路径段，不重写外链、data/blob 或已带前缀的地址。文档 Renderer、差异审阅与首页均注入同一转换函数，在设置图片 src 前解析；不得将部署前缀写回 ResumeDocument、资源记录或导出文件。`tests/deployment-images-browser.test.js` 使用真实 Chromium 和剥离前缀的隔离反向代理，禁止错误根路径请求也“碰巧成功”。
 - 资料、简历、岗位和对话没有内容归因或自动同步关系。
 
 ## 1. 技术目标
@@ -140,7 +146,7 @@ MVP 也可采用单仓库 pnpm workspace：apps/web、apps/api、apps/worker、p
 ```mermaid
 flowchart TB
     User["用户"]
-    Web["Web Application<br/>统一输入｜当前简历与对话｜浮层"]
+    Web["Web Application<br/>三类材料与预览｜当前简历与对话｜浮层"]
     API["API Server<br/>路由｜认证授权｜限流｜请求校验｜实时连接"]
     App["Application Server<br/>领域规则｜revision｜事务｜AI 写入策略｜快照与版本编排"]
     Orchestrator["任务编排<br/>事务 Outbox｜Redis / BullMQ｜幂等｜重试｜超时｜取消"]
@@ -207,7 +213,7 @@ flowchart TB
 - 主结构严格按 Web → API Server → Application Server → 任务编排 → 专用服务与 Worker → LLM 等底层能力自上而下排列；
 - 实线表示同步请求、受控调用或设施连接，虚线表示经 Outbox 和队列触发的异步任务；
 - PostgreSQL、Redis、对象存储和可观测性位于侧边，只提供数据、文件和运行保障，不作为主调用层级；
-- 首页统一输入，编辑页为当前简历与 AI 对话；资料按需提供，画布继续允许直接修正现有文字；
+- 首页三个独立材料区，三项准备完成后生成并就地预览；编辑页为当前简历与 AI 对话，画布继续允许直接修正现有文字；
 - AI、OCR 和文档识别只产生回复、结构化建议或临时候选结果。已有简历未经用户“应用修改”“保存到资料”“设为当前岗位”或导入确认，不得改变业务状态；首页明确授权的首次空白生成可原子保存草稿与不可变版本；
 - 所有业务写入统一经过 API 鉴权、revision、幂等和目标校验。模型、识别服务和客户端都不能绕过领域服务直接写数据库；
 - 当前草稿和修改事件是可变工作状态；生成快照与历史版本是冻结状态。成功生成通过 finalize 事务创建唯一不可变版本；文件导入应用事务创建唯一 `imported` 版本；失败任务只保留内部诊断；
@@ -222,7 +228,7 @@ flowchart TB
 关键依赖方向：
 
 - Web Canvas → Renderer / ResumeDocument Engine：文字直改、导入预览、历史详情和比较复用同一个文档模型；
-- AI Module → Resume Harness → Model Client Interface → DeepSeek Responses Adapter → DeepSeek LLM；
+- AI Module → Resume Harness → Model Gateway → 能力路由 → DeepSeek/OpenAI Responses Adapter；
 - Inline AI Module → Inline Rewrite Harness → Model Client Interface；返回纯文字建议，不进入全局对话任务；
 - Resume Harness → Target Fragments → Document B Assembler → Three-way Merge / Resume Change Policy → Resume DOM Engine：语义理解只表达变化区域的最终状态；确定性服务负责形成完整 B、授权、差异和 A/B/C 合并；DOM 引擎负责规范化与安全校验；
 - Document Import Module → Recognition Client → Runner / Service → 格式解析器 → Semantic Analyzer → Candidate Builder → Quality Gate；
@@ -296,7 +302,7 @@ Application Server → 事务 Outbox → Redis / BullMQ → 专用服务或 Work
 - Resume Harness：组装工作区和锁定范围上下文，管理对话记忆、Prompt、输出 Schema 与模型调用编排；
 - Resume Three-way Merge：使用稳定节点 ID 合并 base、target 和 current；AI 未触及处保留 current，同字段竞争在用户点击应用后采用 target；
 - Resume Change Policy：把用户允许的内容、结构、样式和作用范围与真实文档差异进行确定性比对，不理解自然语言，也不执行文档操作；
-- Model Client：以供应商无关的 capability 契约隔离 Harness 与供应商；DeepSeek 适配器封装 Responses HTTP/SSE、严格 Schema、超时、取消、JSON 解析和安全错误；
+- Model Client：以供应商无关的 capability 契约隔离 Harness 与供应商；DeepSeek/OpenAI 适配器配置各自地址、密钥、型号和支持的请求参数，共用 Responses HTTP/SSE、严格 Schema、超时、取消、JSON 解析和安全错误；
 - Worker：执行耗时或不可信文件处理；
 - PostgreSQL：保存平级资料、对话、可编辑草稿、修改事件、不可变版本、生成快照、任务状态和操作审计；
 - Redis：队列、短期缓存、分布式锁、限流；
@@ -310,15 +316,43 @@ Application Server → 事务 Outbox → Redis / BullMQ → 专用服务或 Work
 
 | 路由 | 页面 |
 |---|---|
-| / | 首页统一输入及已有简历列表 |
+| / | 三类材料、生成与预览首页，不展示独立简历列表 |
 | /?project=:id | 该份简历及独立 AI 对话 |
 | /?new_from=:id | 首页，可选完整复用指定简历 |
 | 编辑页内 Dialog | 历史版本、版本详情与比较、文档导入、预览与下载 |
 
 首页与编辑页复用同一个 `index.html`。切换项目采用带明确 project ID 的页面导航，离开前 flush 文本事务并检查保存失败，不在一个全局 WS 中并发切换不同项目。历史、文档导入与预览继续使用 Dialog 和原文档渲染器。画布独立滚动，移动端恢复页面滚动；资料卡片不再占据左侧或顶部。全局聊天仍支持收缩和移动端浮层。
 
-#### 统一输入与模块边界
+取消“我的简历”独立界面与列表，resume 标识在首页与当前详情之间导航；个人中心始终在顶栏最右侧（含窄屏），包含制作另一份、历史版本与设置。预览/下载收进文档工具栏；工具栏首位保存图标直接调用既有版本保存链，先 flush 待保存文字，生成期间锁定按钮，无新修改不重复创建版本。编辑页删除旧 `/generations` 触发器，保留后端存量接口，首页首次生成与编辑页后续 AI 建议继续复用现有聊天链。
 
+`resumeManualStructureEnabled` 是浏览器内持久化的 UI 偏好，默认 false，仅显式保存为字符串 `"true"` 才开启；不是后端权限或文档属性。关闭后悬停、恢复悬停与增删执行入口均停止，按钮与外框隐藏；不修改编辑节点语义或禁用文字/AI/撤销。当前指针位置用于正文重渲染后恢复悬停，不依赖 focusin。布局框始终只有一个，按钮在纸张内部，优先避开真实文字范围。
+
+空白点击统一调用 `dismissResumeSelection`，清除 `.selected`、`selectionToolsAnchor`、临时选中文字及 DOM Selection，并 blur 正文编辑节点以沿用既有保存链；清空旧悬停坐标以阻止保存刷新恢复已取消的范围框。点击正文、AI 快捷工具条、局部浮层和增删按钮不走此清除逻辑，不改变全局任务/建议/作用范围。
+
+人工结构选择的 `mouseover`/`mousemove` 共用 `updateNodeStructureHover`：同目标移动时记录实际指针锚点；从锚点到当前按钮矩形之间的窄凸包作为通行区域，区域内不重新选择底下的父/子/兄弟节点，也不布置拦截点击的透明 DOM。正文重渲染保留稳定节点 ID 与锚点，重新测量按钮后仅在通行区域仍成立时恢复旧目标；空白取消或目标已删除时不恢复。按钮 `mousedown` 继续锁定这一已展示对象，执行阶段不重新命中。
+
+全局建议卡片不内嵌两份正文，“查看差异”打开共享居中弹框。有界 LCS 以完整行匹配，以安全 `textContent` 写入 `ins/del`；新增整行绿底，删除整行红底及删除线，单字修改也显示两条完整行，不做字符级拼接。未修改行可以折叠但修改不能截断；大输入回退完整增删展示而非丢弃。`GET /ai/actions/:id/preview` 从当前草稿 C 和建议 A/B 调用与应用一致的 `mergeResumeDocuments`，返回实际 D、C→D 的 `change_preview` 与 `preview_revision`，不直接返回历史 B。差异弹框和整份预览均使用这一路径。首次/再次应用携带可选 `preview_revision`，不匹配时返回 `PREVIEW_OUTDATED` 且正文不变。前端保留已查看预览的 revision，聊天重渲染不清除，成功应用后才释放；无预览时保留已有三方合并语义。
+
+`change_preview.presentation_changes` 从实际 C/D 字段派生结构、位置、原生样式和文档元数据的逐项前后值；只作展示、不生成写入操作。资源二进制不复制进差异明细。父级修改所涉及的可见正文不能因非 editable 而遗漏。预览弹框持有自己的 action/revision/apply 回调，首次及再次应用走原事务接口；失败保留弹框。`GET /ai/actions/:id/preview/download?format=pdf|docx&revision=N` 与预览复用归属、有效会话、执行材料和三方合并解析，revision 必须与当前草稿一致；复用既有渲染器直接返回文件，不写草稿、版本或 artifact，不默认导出当前 C。
+
+模型超时可按 text/complex/vision 配置 `RESUME_MODEL_{CAPABILITY}_FIRST_TOKEN_MS`、`IDLE_MS`、`TOTAL_MS`，未配置时继承通用配置。当前部署全局 complex/vision 首响应 90 秒，局部仍 40 秒，空闲 60 秒、总时限 360 秒不变。适配器诊断 first_response/stream_idle/total/canceled 和耗时，不保存请求正文；用户主动取消不误报 MODEL_TIMEOUT。无响应不无限重试、不改写要求或降低功能；失败保留本轮原话与图片，用户重试复用原消息身份。
+
+全局续聊由 `lib/chat-continuation.js` 共享解析当前 owner/project/conversation 的最近任务；工作区返回无正文 `conversation.continuation`（task_id/scope/status/proposal_id/editing_base），请求解析复用同一来源。未提供 task_id 且最近任务范围相同则承接，取消任务、不同范围和不同对话不隐式串接；显式 ID 仍执行归属、范围及生命周期校验。前端临时选区与持久对话身份分离：被动刷新仅在没有显式范围选择时恢复会话范围，“继续调整”明确恢复建议对应范围并锁定父建议身份。自然续聊不用关键词分类，沿用完整历史、滚动记忆与 B/C 文档上下文；只点开范围或取消选区不创建后台任务。
+
+显式单次 `context_mode:"fresh"` 是自动承接的例外；默认/省略为 `"continue"`。fresh 与 task_id、parent_proposal_id、quick_reply_id 互斥，服务端校验后建立同一 conversation 内的新任务，不 purge 旧任务、不清空旧建议。新任务只读取当前草稿与本轮材料；文件和链接与文字、图片一样按 task_id 隔离，旧数据兼容 metadata 中的任务 ID。已有资料和已确认岗位按原工作区权限保留。失败重试由 retry_message_id 重建原任务，不再次解释 fresh，不复制用户消息；client_request_id 防止同一次发送创建多个新任务。
+
+前端 `#conversation-continuity` 为原生下拉框，sessionStorage 仅保存项目/对话内的单次选择与提交身份，不保存模型正文。被动刷新或重新加载后，若工作区已出现该 client_request_id，清除单次选择并恢复 continue；受理前失败保留 fresh。生成期间锁定选择，显式继续旧建议恢复 continue。移除全局简历卡片 reject 按钮，后台独立动作拒绝接口仍保留。聊天头部删去固定岗位与材料工具条，附件和岗位确认能力不删。
+
+resume 标识两端均为原生按钮：详情到首页复用 flushCurrentEdits；首页按当前标签页最近访问项目返回。最近项目 ID 必须在服务端返回的有权限项目列表中校验，失效时回退到有效项目，无项目则禁用；不会以跳转动作调用新建或复制接口。首页尚未发送的输入沿用现有 sessionStorage 保存链。
+
+#### 首页三类材料与模块边界
+
+- 首页截图使用 `image_material:true` 绑定上传，校验真实图片格式及像素边界后保存 `kind:image/upload_id/asset_id` 引用，不触发 OCR 队列。生成时按冻结的材料角色复用视觉原图；Word/PDF 沿用一次识别链。前端本地 Blob 即时预览、XHR 进度与取消、同角色绑定/删除串行及刷新 epoch；后端异步绑定 token 和重新读取材料状态共同阻止迟到覆盖与并行角色丢失。有效首页选择与已受理消息的冻结图片引用均受上传/资源清理保护。
+- 首页结果复用同一 Renderer、草稿 revision 及下载接口，在原生 dialog 中展示；关闭不删除草稿，可重新打开。图片大图预览组件 `home-image-preview.js` 仅访问同源受控资源，支持原始尺寸、失败重试、关闭取消读取、焦点恢复和临时 URL 回收。
+
+- `home-controller.js` 只负责首页状态编排，`server/modules/home.js` 负责 intake 归属、角色材料和生成准入，`home-materials.js` 负责只读角色投影；不另建模型生成引擎。三个状态独立维护，任一上传、识别或岗位验证未完成时都不能生成。提交后的材料组合固定，重试沿用原任务，更换材料创建新组合和独立项目。
+- `GET /home/layouts` 提供静态完整文档参考清单；`POST/GET /home/intakes` 创建/恢复材料组合；`PUT/DELETE /home/intakes/:id/materials/:role` 替换/移除材料；`POST /home/intakes/:id/job-link` 读取并语义验证岗位；`POST /home/intakes/:id/prepare` 校验三项可用并形成既有 AI 请求。岗位读取复用 SSRF 防护，语义验证通过 model-gateway，不按中文关键词或 HTTP 200 判定。验证 token 防迟到覆盖，超时/失败可改用附件。
+- 首页生成通过既有 `/ai/messages`、任务状态与取消接口进行，刷新不重复发起；生成结果复用 ResumeDom.Renderer，留在首页提供预览、下载和继续编辑。`home_intake_id` 将个人材料、岗位要求和版式参考分开投影，不把第三方示例事实或头像拼入用户事实。主页不再显示项目列表，但既有项目、对话、草稿、版本和地址不删除。
 - `POST /projects` 增加 `copy_project_id`、必填的 `copy_draft_revision`（复制时）以及幂等保护。复制的是完整 ResumeDocument，岗位创建独立记录，档案保持空白，对话和历史不复制；原项目完全保留。资源继续引用同一 owner 的不可变资源，不建立版本树。
 - 新建空白文档使用 `resume-document-v3` 空根，不注入固定模板或示例经历。首页提交复用 `/ai/messages`，不走需要完整档案/JD的旧 `/generations` 兼容链。
 - 复用当前简历时复制完整文档、岗位及独立岗位附件记录；不可变文件字节按同一所有者复用，不重传、不重复识别。原项目和新项目不共用可变岗位行、对话或历史。
@@ -327,6 +361,15 @@ Application Server → 事务 Outbox → Redis / BullMQ → 专用服务或 Work
 - 上传只创建附件。PDF/DOC/DOCX 在发送时复用 `document-imports` 识别队列与安全检查，`document_import_ids` 记录在用户消息元数据中；`workspace.materials.documents` 读取唯一识别结果，不逐轮识别、也不复制进个人档案。图片继续走原私有上传与多模态链。
 - `workspace.materials.links` 是用户链接公开网页文本。`job-links` 只允许 HTTP(S) 标准端口、公开 IPv4 地址，DNS 结果锁定到连接、逐跳校验、不发送 Cookie，最多三次跳转/1 MiB/15 秒。IPv6-only、登录页和读取失败明确报错，不绕过访问限制。前端“搜索岗位”明确打开外部搜索页，未集成站内招聘搜索 API。
 - `/resume-draft/download?format=pdf|docx&revision=N` 从当前草稿直接复用导出器，校验归属和 revision，不增加版本或存储副本。
+
+#### 私有图片与完整文档导出
+
+- 正文直接换图由 `resume-image-edit.js` 与 `document-image-edit.js` 实现，不调用 gateway/harness。`POST /projects/:id/resume-draft/images/:nodeId` 接收已校验上传 ID、`expected_revision`、`mutation_id`，资源注册之后再次锁定 revision，并委托既有草稿 `transactions` 的 `replace_image` 操作。客户端先 flush 文字，服务端验证独立 img、所有者与图片格式；页面场景背景明确拒绝。仅更新资源引用，保留节点和样式，原文件不可变。节点撤销差量只追加 `document_assets` 前后描述，不保存两份完整正文；清理上传身份时保留文档资源字节。真实浏览器及归属、并发、幂等、撤销回归见 `tests/document-image-edit.test.js`。
+- 头像和通用图片的候选提取、归一化裁剪、私有不可变资源、API/数据库及缓存设计见 [PORTRAIT_ARCHITECTURE.md](./PORTRAIT_ARCHITECTURE.md)。`img.attributes.data-document-asset-id` 指向同一所有者资源；模型只返回 `asset_requests`，不能编造资源 URL。独立头像、Word/PDF 原生图片和截图候选走同一资源协议。
+- `render/document-images.js` 为导出生成临时完整文档投影，将授权资源解析成内嵌栅格图片，不持久化第二份正文。只读取本人文档资源、本人导入页面资源或已有栅格 data URL，禁止导出器任意抓取网络/本地文件。缺失、损坏或越权资源明确失败，防止静默丢图。
+- 所有实际 PDF 下载调用 `renderPdfAsync`：从真实入口的文档 CSS 和完整 ResumeDocument 生成无脚本打印页，Chromium 等待字体/图片完成，禁止外部请求再打印。保留可复制正文、页面设置、原生布局和照片；并发最多 2、排队最多 8，每个等待/生成阶段有界 30 秒。部署配置 `RESUME_CHROMIUM_PATH` 或 `CHROME_BIN`，启动环境需安装中文字体。当前容器默认无 Chromium 内核 sandbox，正式隔离部署应设置 `RESUME_CHROMIUM_SANDBOX=1` 并确保系统支持；CSP 和网络阻断不能替代进程隔离。
+- Word 带图导出用 OOXML 原生图片关系和 media 字节，正文可编辑；保留照片比例/cover 裁剪、常见分栏及表格合并。不把整页截图伪装成可编辑 Word，复杂 CSS 与 Word 排版引擎差异仍需真实样本验证。HTML 导出同样内嵌图片，不暴露私有资源链接。旧同步渲染接口只保留兼容测试，实际下载、版本导出、生成和缩略图均走异步完整资源链。
+- 建议与草稿导出均在异步生成前后检查 revision，正文变化要求重新预览；版本导出先完整生成文件再统一登记。文件渲染失败不修改正文或历史版本。
 
 #### 存量兼容与迁移
 
@@ -781,9 +824,15 @@ scope_type 使用稳定枚举 DATA_PROFILE、DATA_JOB、RESUME_BLOCK、RESUME_DO
 
 两类 Harness 共用 `resume-model-conversation-v1`：第一条 system 是行为规则，第二条 system 是不可执行的只读上下文，随后按真实顺序发送当前任务的 `user/assistant` 历史，最后一条独立 user 消息承载本轮请求。全局直接发送用户原话；局部使用 `resume-inline-turn-v1` JSON，把用户原话原样放入 `instruction`，把上一版候选或首轮锁定文字放入 `editing_text`，让快速模型只聚焦当前工作集。对话按 `owner → project → conversation → task` 归属：同一会话可先后包含多个任务，但本轮模型上下文只读取当前 task；当前用户消息不能在历史中重复。模型调用按无状态 Responses 接口处理，服务端每轮重建消息与必要上下文；模型供应商的缓存命中不得成为正确性依赖。
 
-模型路由按接口能力而非用户关键词：局部首轮与记忆整理使用text/deepseek-v4-flash且不推理，全局请求和协议恢复使用complex/deepseek-v4-pro。全局RESUME_GLOBAL_AI_REASONING_EFFORT默认low，经gateway传给adapter；none/low/medium/high均支持配置，预算预留推理空间但不突破部署硬上限。图片请求使用vision。complex表示完整文档能力，不代表型号。全局即使措辞简单也保留完整文档，不能把scope当写权限边界。型号只在供应商客户端配置。
+模型路由按接口能力而非用户关键词：当前部署局部首轮与记忆整理使用text/gpt-6-astra，全局请求和协议恢复使用complex/gpt-6-astra，图片请求使用vision/gpt-6-astra。局部 harness 仍声明轻量 `thinking:false`；实测网关不支持 none，OpenAI adapter 通过 `RESUME_OPENAI_MIN_REASONING_EFFORT=low` 将最低请求映射到 low，不修改输入或用户要求，不影响显式更高强度。全局RESUME_GLOBAL_AI_REASONING_EFFORT默认low，经gateway传给adapter；预算预留推理空间但不突破部署硬上限。complex表示完整文档能力，不代表型号。全局即使措辞简单也保留完整文档，不能把scope当写权限边界。型号只在供应商客户端配置。
 
 调用分层：业务server持有归属、任务、动作和事务；harness组装上下文、记忆、解码/校验并最多恢复一次生成；model-gateway只放行messages、Schema、capability、预算、取消信号等字段，不把领域input送给供应商。adapter负责HTTP/Responses/SSE，不拼业务提示词、不做语义重试。gateway_metrics只记录耗时、输入字符数、消息数和阶段。
+
+供应商可按全局能力独立配置：`RESUME_MODEL_PROVIDER` 决定基础供应商；`RESUME_GLOBAL_MODEL_PROVIDER=openai` 同时接管 `complex` 和 `vision`（包括协议恢复）。当前按用户追加要求两项均设为 openai，使局部 text 也使用 Astra。OpenAI 仅使用独立的 `RESUME_OPENAI_API_KEY`、`RESUME_OPENAI_BASE_URL` 与 `RESUME_OPENAI_MODEL`，不借用 DeepSeek 密钥或 Codex 凭据；未配置全局覆盖时保留原路由。原示例 `gpt-5.5` 在网关当前账号组返回 `model_not_found`，用户已确认使用 `gpt-6-astra`；不据模型名称断言第三方网关实际模型身份。`npm run ai:activate-astra -- --apply --include-local` 显式将私有测试配置复制到 `.env` 并同步局部路由及最低推理兼容配置；不加 `--include-local` 则保留原局部路由。保留其他配置，将旧配置备份到 Git 忽略的 `.runtime/config-backups/`，配置及备份权限均为 600；随后须重启服务。启动日志与客户端复用同一实际路由解析，不再误报基础型号。
+
+OpenAI 适配器保持 `/v1/responses` 路径，传 `store:false`、`stream:true`、`text.format` 严格 Schema、`reasoning.effort`、输出预算与文本/图片消息；不发送不可移植的 temperature。共用 SSE 层区分拒绝、截断、供应商错误与提前断流，完成事件后释放连接，不等待代理关闭；HTTP 及流错误不回显供应商原始正文。禁止跟随重定向，以免密钥被转发至非指定网关。
+
+`npm run ai:configure-openai` 仅写权限 600 的 `.env.openai-qa`；`npm run ai:compare -- --live --rounds 5` 在独立进程加载测试配置与原 DeepSeek 基线，使用虚构数据调用同一 harness/gateway，不加载业务数据库。默认 dry-run、轮数 1—10；9 场景对照、交替模型先后顺序，短对话不增加记忆请求。保存无正文用量/耗时/请求哈希与错误类别，连续追问使用各自前一建议；前一步失败则记跳过，不伪造上一版。400/401/403/404/429 或配置错误立即停。测试不改业务提示词、事实补写规则或应用确认边界。
 
 正常与恢复调用都保持最后一条为原始user（局部为原始working set）；恢复错误作为独立system诊断插在本轮user之前，不作为用户新要求或有效assistant建议。主提示词只保留通用产品与协议契约，不按具体话术堆补丁。
 
@@ -791,7 +840,9 @@ scope_type 使用稳定枚举 DATA_PROFILE、DATA_JOB、RESUME_BLOCK、RESUME_DO
 
 完整target_resume_document也继承省略字段：root表达目标层级，已有ID未返回字段保留；page_setup和styles逐字段继承，资源/注释按ID保留未返回载荷，显式资源数组决定保留项目。page_setup中合法的max_pages=null必须保留，不把无变化文档误判成样式修改。
 
-所有生产模型调用必须携带严格 Schema。全局 `resume_assistant_response_v2` 固定字段为 `type/content/awaiting_user/message_kind/quick_replies/resume_proposal/data_actions`。`resume_proposal` 使用 `anyOf(object,null)`；changes直接给出target_id与replacement_json，insertions给出parent_id/after_id/new_nodes_json，change_constraints直接结构化；只有单个开放节点、资料动作和真正完整重构分别使用JSON字符串，不再整体双重序列化。Harness解码为现有target fragments，再校验ID、父子关系、编辑边界和可执行性。旧外壳仅兼容解码，不能替代领域校验。
+所有生产模型调用必须携带严格 Schema。全局 `resume_assistant_response_v3` 固定字段为 `type/content/awaiting_user/message_kind/quick_replies/resume_proposal/data_actions`。`resume_proposal` 使用 `anyOf(object,null)`；changes直接给出target_id与replacement_json，insertions给出parent_id/after_id/new_nodes_json，change_constraints直接结构化。资料和岗位动作使用按类型区分的严格对象：岗位payload为title/company/confirmed_text，资料payload为field/value；所有字段必需，正文与值不能为空。只有开放节点与真正完整重构使用JSON字符串。Harness解码为既有内部动作及target fragments，资料field/value转换为update_basics/values；旧字符串外壳仅兼容解码，不能替代领域校验。
+
+可执行性预检为失败动作提供action_index/type/code诊断。混合批次中有独立有效动作时，使用`resume_assistant_action_repair_v1`（从v3按失败动作数量、类型及是否涉及简历收窄）只修复失败部分；恢复输入不重复成功简历正文，最后一条user保持原文。通过校验的动作仅在本轮内存中保留，不持久化额外草稿。恢复不允许改写已保留动作、改变类型或丢弃动作，最终整批再次校验并在同一事务提交；仍失败时不伪装部分成功。全局仍最多一次自动恢复，不靠无限重试。失败回执仅追加无正文诊断码、动作类型及恢复次数，用户提示区分岗位、资料和简历结果问题，不虚构“已保留处理思路”。
 
 editable节点是富文本修改的最小语义单元，不能因内部span/run变化就拒绝整段建议。继续调整时，只有在A/C中确实存在、但B中已删除的节点允许幂等归一化重复删除；未知ID和缺失替换目标仍拒绝。删除与编辑祖先/后代的真实矛盾必须由模型解决，不由服务端猜测。
 
@@ -888,6 +939,8 @@ Resume Harness 使用双结果协议。明确修改直接返回 `proposal`；真
 
 局部 AI 的快捷工具条只保存当前目标元素和可选 Range 作为临时定位状态。UI 将 AI 标识、截断后的作用范围摘要和短动作分区渲染，完整文字只保存在 `title` 与输入浮层中；滚动画布时按当前 Range 或目标节点重新定位，目标离开视口或被重渲染后停止展示。输入浮层对长原文默认两行折叠，并通过显式“展开/收起”查看全文，不裁剪实际请求内容。
 
+局部及全局生成态复用 `setAiGenerationButton`、`renderAiGenerationStatus` 与同一套样式；按钮显示旋转标识和“生成中”，状态显示动态圆点。固定生成态尺寸，不对字号和尺寸作过渡动画；支持 `aria-busy`、礼貌状态播报与 `prefers-reduced-motion`。只复用展示，不合并两类请求的生命周期。真实浏览器核对计算样式、320px 窄屏及成功/失败后的恢复。
+
 节点模式必须保持原段落数量；选区模式不得返回整个段落。服务端只校验局部响应 Schema、长度和编辑边界，不校验新增或遗漏的数字与事实。用户明确写出“不超过 80 字”“精简到 80 字以内”等确定性上限时，服务端将其解析为最大字符数，按与界面一致的 Unicode 字符规则（包含标点和换行）校验；模型超限或原样返回时，恢复请求必须携带实际字符数，第二次仍不合格则拒绝进入待确认，不能用自然语言中的“已完成”代替真实结果。缺字段、截断或上述校验失败时在整个请求最多两次模型调用内恢复。所有 AI 调用统一显式关闭模型思考模式，避免推理内容占用最终 JSON 的生成额度；局部输出预算首轮最低 4096 tokens，恢复轮最低 8192 tokens，并分别按目标长度增长至 8192 和 16384。连续截断只提示本次生成未完成并允许重新生成，不要求用户缩小本来就很短的修改范围。局部模型永远不能返回节点增删、样式、页面或完整目标文档。
 
 应用阶段不依赖生成时的全局 revision：节点模式以 AI 建议覆盖该节点最新文字；选区模式使用稳定 segment ID、原始偏移和唯一左右上下文在最新文本中重定位，只替换对应范围。上下文歧义或范围相对原选区异常膨胀时不得按距离猜测。目标消失、编辑身份改变或选区无法准确定位时返回客观冲突。
@@ -930,7 +983,8 @@ RESUME_REWRITE_PROPOSAL 被用户应用后，只更新 resume_draft 并追加 re
 - RESUME_DOCUMENT 和 RESUME_BLOCK 默认返回最小目标子树；服务端装配完整目标 ResumeDocument，再从前后文档派生差异并执行三方合并；
 - 新增节点必须通过标签、属性、样式、深度、节点数和唯一 ID 校验；
 - 禁止脚本标签、事件属性、危险 URL 和可执行 CSS；
-- 应用前在副本上完整校验；可紧凑表达的变化记录节点差量，包含文档元数据或复杂结构时记录完整文档，二者都进入同一撤销/重做机制。
+- 应用前在副本上完整校验；可紧凑表达的变化记录节点差量，包含文档元数据或复杂结构时记录完整文档，二者都进入同一撤销/重做机制。根节点没有父节点，不得进入普通节点差量路径；全文重排涉及根节点时使用完整文档回退。文档级样式、页面设置、资源或语义标记变化时，即使同时只修改一个普通节点，也必须保留完整文档元数据以支持无损撤销/重做。
+- 全局生成 POST 遇到网络错误、空成功响应或网关 502/503/504 时，Web 以原 `client_request_id`（重试用原 `retry_message_id`）查询 `/ai/status`。该接口按 owner/project/conversation 查找对应用户消息，只返回身份与状态，不返回正文。最多确认三次，已受理则刷新结果或接入现有运行状态轮询；仍无法连接则停止自动检查、提供显式检查入口，不自动重发模型请求。恢复结果受当前页面请求身份保护，不回写已切换的会话。
 
 ### 9.7 状态与独立性
 
@@ -939,7 +993,7 @@ RESUME_REWRITE_PROPOSAL 被用户应用后，只更新 resume_draft 并追加 re
 - 资料保存后不自动修改简历；如有必要，创建新的 RESUME_REWRITE_PROPOSAL；
 - 简历应用后不自动写入资料；如适合长期复用，另行提出 PROFILE_SAVE_PROPOSAL；
 - 岗位切换后更新 current_job_id 并重新分析匹配，不直接重写简历；
-- 同一任务只有 active_proposal_id 指向的简历建议可应用；目标文档建议不因草稿 revision 变化失效，应用时统一执行 A/B/C 三方合并；
+- 未应用建议只有同一任务 active_proposal_id 指向的当前建议可首次应用；已应用建议可通过独立再次应用入口形成新事务。目标文档建议不因草稿 revision 变化失效，应用时统一执行 A/B/C 三方合并；
 - “应用”“确认”等短句只能绑定同一任务内唯一的当前动作；存在歧义时追问；
 - 开始新对话时先创建新 conversation，再在同一事务删除项目内此前会话、消息、任务与动作；事务成功后取消旧模型请求；已保存资料、当前岗位、当前简历和版本保持不变；
 - 旧对话结束后返回的异步结果以 CONVERSATION_ENDED 终止，不得补写消息或动作；
@@ -951,6 +1005,7 @@ RESUME_REWRITE_PROPOSAL 被用户应用后，只更新 resume_draft 并追加 re
 - 局部`session_id`由后端从已验证动作链确定。应用成功或明确放弃后清空问答、建议、基线文字和摘要；保留最小动作ID/状态/项目/会话ID回执以支持重复应用或关闭。正在处理、待应用、失败重试及其必要祖先不提前清理。
 - 全局当前会话保留聊天卡片，已终结的非活动建议移除A/B、operations等执行副本；新对话时一并删除。资料修改的独立撤销回执和最小动作身份保留并断开旧会话外键。
 - 幂等首个响应不变；AI应用、版本复制及导入应用的缓存去掉`resume_json`，重复请求返回同一操作回执，客户端刷新当前草稿。不删除幂等身份，不重复执行写入。
+- 全局已应用建议在清理明文 A/B 前保存一次 `resume-reapply-gzip-v1`（gzip、完整性摘要、解压大小上限）；这份执行材料随当前会话保留，不是另一份草稿。工作区只返回 `can_reapply`，按需 `GET /ai/actions/:id/preview` 读取目标；`POST /ai/actions/:id/reapply` 校验归属、会话、生成状态、当前 revision 与幂等键，复用三方合并和五步事务，不结束当前任务。新对话清理仍删除全部旧建议执行材料；旧材料已经丢失的动作返回明确错误，不从纯文字猜测排版。
 - 撤销窗口失效、重做分支失效或成版后即时清空变更正文，保留操作行与label；仍在有效重做窗口的内容不得因超过七天而归档。
 - 启动时幂等治理已关闭会话及终结的局部历史。运维`server/scripts/compact-storage.js --database /absolute/path/resume.db`默认只报告；`--apply`先保存受限权限压缩备份，再事务清理并比对草稿、资料、版本、文件、当前消息/任务和有效撤销记录，核验外键后提交，最后VACUUM回收空页。执行写模式前停止服务写入。
 
@@ -1131,13 +1186,14 @@ Schema 校验、完整度计算、revision 冲突、输入 hash、分页规则�
 - 现有文字的输入和粘贴写入同一草稿，并按文档事务自动保存，和 AI 结构操作共同支持最近五步撤销/重做；
 - 界面不提供 Word 编辑器、编辑模式切换或通用手工结构工具栏；
 - 客户端可在语义节点旁提交 `action + node_id` 的轻量增删意图；服务端根据当前 ResumeDocument 决定父子位置、删除边界、新节点结构和新 ID，客户端不得提交任意待插入子树；
-- `add_sibling/remove` 解析为最近的列表项、经历块、表格行或语义组；可编辑段落不是默认的结构边界。内部增删使用独立的 `add_content_sibling/remove_content`；菜单闭包锁定原始节点 ID，不根据按钮坐标再次猜测对象。增删前等待文字事务，执行中暂时锁定直接输入；
-- 表格跨度取闭合行组；复制时重建所有节点 ID 与分组 ID，保留整个子树与展示字段。`rowspan=0` 或越界跨度先冻结实际行数，防止原单元格扩张至副本；删除最后一组行清理空表格，统一进入五步撤销/重做；
+- 当前画布通过 `manualSelectionNodes/manualSelectionCapabilities` 提供明确结构选择；正文命中当前 editable，父容器从边缘选中，只显示单个外框。发送 `duplicate_node/delete_node`，服务端按精确节点执行，不自动向上提升；按下按钮锁定 ID，点击不按按钮坐标猜测。旧 `add_sibling/remove/add_content_sibling/remove_content` 仅兼容已打开的旧客户端。增删前等待文字事务，执行中暂时锁定直接输入；
+- 表格跨度取闭合行组并框住整个范围；复制时重建所有节点 ID 与分组 ID，保留整个子树与展示字段。`rowspan=0` 或越界跨度先冻结实际行数，防止原单元格扩张至副本；精确删除末项不额外清理父容器，统一进入五步撤销/重做；
+- 人工增删由 `manual-node-actions` 编译，`manual-flow-layout` 处理确定性占位，不调用模型、不匹配模块名。显式 Grid 解析数字/负索引/命名行/区域/长短写及跨度，副本插入闭合行带之后，后续显式占位同步移动；自动 Grid 保持浏览器自动分配。删除仅收拢不再被其他节点占用的行。`display:contents` 沿真实布局父容器定位；Flex 复制多节点子树时统一调整顺序，防止新旧子树交错。布局改动与插入/删除同一事务，撤销恢复原文档。旧版已保存的同位置、同内容副本，在该网格再次新增时分配独立可见行，保留全部副本，不删除用户内容；不擅自整理内容不同的叠层。
 - 场景背景、坐标文本和显式绝对定位均视作固定布局；不能无布局调整直接复制重叠坐标，页面底图有原文字时也不能假装已删除。完整文档 PATCH 独立使用 16 MiB 预算，普通 JSON 仍为 1 MB，超限返回结构化错误，不直接销毁连接；
 - 聊天消息 `attachment_ids` 仅引用已校验、同 owner、同对话的私有图片。原图只在对象存储保留一份；模型输入临时解码、方向校正、最长边 2560px、JPEG quality90，二进制不写消息/任务/计量。受限像素解码拒绝损坏或超大图片；
 - 全局 `image_history` 在业务 server 按任务重建，harness 以带原始说明的只读历史图片消息置于最近文本历史之前；本轮 user 保持最后，不把历史图片当成本轮新指令。早期文本摘要不删除图像参考，有当前或历史图片均路由 vision。局部纯文本协议不变；
 - `uploads.chat_conversation_id` 标记聊天专用上传；新对话事务提交并清除旧消息后，仅回收无其他引用的旧图片，失败保留上传记录便于重试。已被有效消息引用的附件不得单独删除，预览按 owner 授权且禁缓存；
-- `+/-` 控件必须在光标指向可编辑 DOM 时才显示，内嵌定位于当前简历页面并随页面滚动和缩放，不使用相对浏览器视口的悬浮定位。标题节点的增加必须区分“增加模块内容”和“新增同级模块”；增加时递归复制对应的完整参考子树并刷新身份信息，删除按当前完整语义单元执行。固定坐标导入页不直接新增；页面底图包含原文字时也不直接删除，避免视觉内容无法真正消失；
+- `+/-` 控件在光标指向可选择节点或父容器边缘时显示，内嵌当前页面并随滚动和缩放定位，受可见画布边界约束，不能跑到聊天区下面；不显示层级菜单，不额外添加父子双重轮廓。固定坐标导入页不直接新增；页面底图包含原文字时也不直接删除，避免视觉内容无法真正消失；
 - 移动、合并、拆分以及结构、样式和页面调整由 AI 提案，应用前正文不变；
 - 文字直改命中 AI 建议的同一节点时，建议仍可执行并按最新草稿重算预览；
 - 目标文档建议不因 revision 或普通文字变化失效；只在目标节点或父位置消失、新增 ID 冲突、根文档切换或合并结构不安全时要求重新生成；
@@ -1223,7 +1279,7 @@ Worker 按队列分别扩容。AI 生成和渲染设置独立并发上限，防�
 11. PDF、DOCX、DOC 共用独立文档识别服务；确定性解析负责原始文字和几何信息，视觉模型只负责语义、阅读顺序和区域关系。
 12. 文件识别只产生临时候选结果，用户确认后才能应用到当前简历；保存到资料始终是独立动作。
 13. 历史属于简历项目，每个版本冻结完整文档；比较不假设版本与当前草稿结构连续，差异过大时并排浏览。
-14. 产品不建立模板或排版预设；每份简历的页面与样式属于自身文档，复制旧版本就是复制完整文档继续修改。
+14. 首页模板仅为上传或内置的完整文档版式参考，不建立模板版本或槽位绑定；每份简历的页面与样式属于自身文档，复制旧版本就是复制完整文档继续修改。
 15. 现有文字直改与 AI 修改共享同一草稿、revision、自动保存与撤销协议；结构、样式和页面操作只由 AI 提案，不建立编辑模式或 DOCX 草稿链路。
 16. 模型协议只保留 `message` 与 `proposal`：最终结果前自然沟通，最终结果后确定性校验；旧四态仅在读取历史消息时兼容。
 17. ResumeDocument 永远不允许 editable 父子嵌套；编辑节点合并与拆分必须直接形成合法最终文档，不允许持久化荒谬中间态。
@@ -1238,3 +1294,17 @@ Worker 按队列分别扩容。AI 生成和渲染设置独立并发上限，防�
 26. 全局模型只接收精简语义树，局部模型只接收纯文本投影；稀疏结果由服务端继承完整展示字段，不能因减少 token 破坏标题、富文本、页面或资源。
 27. 局部指令中的明确最大字符数由服务端确定性解析和校验；超限或无变化结果只恢复一次，仍失败则不创建可应用建议。
 28. 两类模型输入都必须保持真实对话角色顺序；全局最新用户原话直接作为独立 user 消息，局部最新原话原样放入本轮 working-set 的 `instruction` 字段，不得包进标记为不可信的只读上下文。
+
+## 账号认证实现（2026-09-10）
+
+`server/lib/accounts` 独立封装 config、crypto/passwords、schema、repository、service、password-service、runtime 与本机 admin 操作；`server/modules/accounts.js` 只处理 HTTP 契约，业务模块继续使用原 `users.id` owner 约束。真实认证解析 Cookie 会话，禁止生产 `x-user-id` 和 demo 回退；仅 `NODE_ENV=test` 与 `RESUME_TEST_AUTH=1` 同时成立时提供隔离测试替身。
+
+增量表为 `account_schema_versions`、`account_identities`、`account_password_credentials`、`account_sessions`、`account_challenges`、`account_rate_limits`、`account_security_events`。账号 schema v2 增加 `account_metadata`（持久角色、最近成功登录时间、凭证撤销计数）及 `account_admin_actions`（操作者、目标、操作、时间）。本机显式 `accounts-admin.js migrate --apply` 升级，为已有 password/admin 身份赋予 `superadmin`，仅从成功登录事件补记历史时间；普通注册固定 `user`。业务 owner 与正文不变，弱初始化标记禁止 HTTP 登录并阻断公开启动。
+
+`accounts/management.js` 通过真实会话及数据库角色授权，提供 `/auth/admin/accounts` 分页搜索、`PATCH /auth/admin/accounts/:id` 启停和 `POST /auth/admin/accounts/:id/revoke-sessions` 强制退出；全部写操作继续校验 Origin/CSRF。管理目标不得为超级管理员，事务内修改状态、撤销会话、递增 `auth_revision` 并记录审计，密码验证结束再次校验该计数，阻止停用后重新启用或强制退出前发起的迟到登录。成功登录时间与会话触碰/轮转分离，审计清理保留最近登录时间。
+
+密码用原生异步 scrypt（N=2^17/r=8/p=1、随机盐）；KDF 有并发和等待队列上限。注册的用户、凭证和首会话同一事务提交；登录 KDF 完成后事务内重新验证密码版本和用户状态，改密后的迟到校验不得建会话。令牌仅存哈希，授权结果不缓存，限流在数据库持久化；闲置/绝对过期、会话轮转、设备撤销及审计留存均有明确边界。
+
+HTTP 层强制可信 Origin、所有写请求 CSRF（包含 raw 上传）、owner 防旧页提交头、HttpOnly/Secure/部署路径 Cookie；私有响应统一 no-store，SSE 最多 30 秒重新认证。代理地址只从已配置可信连接按右向左链解析。生产必须配置独立账号与下载密钥，拒绝默认开发 secret。
+
+`account-client.js` 负责认证/CSRF/请求与 SSE 生命周期，`account-workspace.js` 在身份确认后启动实际工作区并清理切账号残留；独立 `login.html` 支持登录注册。真实账号进程在返回入口 HTML 时注入前端启动标记，旧运行进程不受静态增量文件影响；后端鉴权不依赖该标记。完整 API、数据库、缓存、迁移和发布门槛见 `ACCOUNT_SYSTEM.md`。

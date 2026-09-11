@@ -6,6 +6,7 @@ const {
   responsesEndpoint,
   schemaFormat,
 } = require('./deepseek');
+const { createOpenAIResponsesClient } = require('./openai');
 const {
   MODEL_ERROR_CODES,
   ModelClientError,
@@ -55,20 +56,33 @@ function configuredModels(options = {}) {
   };
 }
 
-function createModelClient(options = {}) {
+function configuredRouting(options = {}) {
   const provider = configuredProvider(options);
+  const globalProvider = String(options.globalProvider
+    || process.env.RESUME_GLOBAL_MODEL_PROVIDER || provider).toLowerCase();
+  const defaults = configuredModels(options);
+  const providers = { text: provider, complex: globalProvider, vision: globalProvider };
+  const models = Object.fromEntries(Object.entries(providers).map(([capability, selected]) => [
+    capability, selected === 'openai'
+      ? options.openai?.model || process.env.RESUME_OPENAI_MODEL || 'gpt-5.5'
+      : defaults[capability],
+  ]));
+  return { provider, globalProvider, providers, models };
+}
+
+function createModelClient(options = {}) {
+  const { provider, globalProvider, providers, models } = configuredRouting(options);
   if (!provider) {
     throw new ModelClientError('未配置模型供应商', {
       code: MODEL_ERROR_CODES.NOT_CONFIGURED,
     });
   }
-  if (provider !== 'deepseek') {
-    throw new ModelClientError(`暂不支持模型供应商：${provider}`, {
+  if (![provider, globalProvider].every((value) => ['deepseek', 'openai'].includes(value))) {
+    throw new ModelClientError(`暂不支持模型供应商：${provider}/${globalProvider}`, {
       code: MODEL_ERROR_CODES.NOT_CONFIGURED,
       provider,
     });
   }
-  const models = configuredModels(options);
   const shared = {
     ...options,
     provider: undefined,
@@ -76,20 +90,21 @@ function createModelClient(options = {}) {
     complexModel: undefined,
     visionModel: undefined,
   };
-  const clients = {
-    [CAPABILITIES.TEXT]: createDeepSeekResponsesClient({
-      ...shared,
-      model: models.text,
-    }),
-    [CAPABILITIES.COMPLEX]: createDeepSeekResponsesClient({
-      ...shared,
-      model: models.complex,
-    }),
-    [CAPABILITIES.VISION]: createDeepSeekResponsesClient({
-      ...shared,
-      model: models.vision,
-    }),
-  };
+  const clients = Object.fromEntries(Object.entries(providers).map(([capability, selected]) => {
+    const timeoutOptions = Object.fromEntries(['firstTokenMs', 'idleMs', 'totalMs'].map((key, index) => [
+      key, options.timeouts?.[capability]?.[key] || process.env[
+        `RESUME_MODEL_${capability.toUpperCase()}_${['FIRST_TOKEN_MS', 'IDLE_MS', 'TOTAL_MS'][index]}`
+      ],
+    ]).filter(([, value]) => value !== undefined));
+    return [capability, selected === 'openai'
+      ? createOpenAIResponsesClient({
+        fetchImpl: options.fetchImpl,
+        ...options.openai,
+        ...timeoutOptions,
+        model: models[capability],
+      })
+      : createDeepSeekResponsesClient({ ...shared, ...timeoutOptions, model: models[capability] })];
+  }));
 
   async function generate(request = {}) {
     const capability = Object.values(CAPABILITIES).includes(request.capability)
@@ -107,6 +122,7 @@ function createModelClient(options = {}) {
     provider,
     model: models.text,
     models,
+    providers,
     generate,
   };
 }
@@ -118,8 +134,10 @@ module.exports = {
   isModelServiceError,
   configuredProvider,
   configuredModels,
+  configuredRouting,
   createModelClient,
   createDeepSeekResponsesClient,
+  createOpenAIResponsesClient,
   responseInput,
   responsesEndpoint,
   schemaFormat,

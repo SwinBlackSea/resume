@@ -47,6 +47,33 @@ function decodeV2(raw) {
     throw protocolError('MODEL_OUTPUT_SCHEMA_INVALID', 'proposal 不能要求再次确认思路');
   }
   const actions = data.map((action) => {
+    if (action && Object.hasOwn(action, 'payload')) {
+      exactKeys(action, ['type', 'target_id', 'payload'], '结构化资料动作');
+      if (!(action.target_id === null || typeof action.target_id === 'string')) {
+        throw protocolError('MODEL_OUTPUT_SCHEMA_INVALID', '资料动作目标类型无效');
+      }
+      // Keep semantic payload validation at the action boundary. That lets
+      // recovery retain an independent valid resume if a provider violates
+      // its strict data-action schema, without trusting any missing fields.
+      const payload = action.payload;
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return { type: action.type, target_id: action.target_id, payload: {} };
+      }
+      if (action.type === 'PROFILE_SAVE_PROPOSAL') {
+        return { type: action.type, target_type: 'DATA_PROFILE', target_id: action.target_id,
+          payload: { operation: 'update_basics',
+            values: typeof payload.field === 'string' ? { [payload.field]: payload.value } : {},
+            ...(Object.keys(payload).length !== 2 || !Object.keys(payload).every((key) => ['field', 'value'].includes(key))
+              ? { invalid_typed_payload: true } : {}) } };
+      }
+      if (action.type === 'JOB_SET_CURRENT_PROPOSAL') {
+        return { type: action.type, target_type: 'DATA_JOB', target_id: action.target_id,
+          payload: { ...payload,
+            ...(Object.keys(payload).length !== 3 || !Object.keys(payload).every((key) => ['title', 'company', 'confirmed_text'].includes(key))
+              ? { invalid_typed_payload: true } : {}) } };
+      }
+      throw protocolError('MODEL_OUTPUT_SCHEMA_INVALID', '未知的结构化资料动作');
+    }
     exactKeys(action, ['type', 'target_type', 'target_id', 'payload_json'], '资料动作');
     if (!['PROFILE_SAVE_PROPOSAL', 'JOB_SET_CURRENT_PROPOSAL'].includes(action.type)
       || ![action.target_type, action.target_id].every((value) => value === null || typeof value === 'string')) {
@@ -57,7 +84,11 @@ function decodeV2(raw) {
   });
   let proposal;
   if (resume !== null) {
-    exactKeys(resume, ['changes', 'insertions', 'target_document_json', 'change_constraints'], '简历建议');
+    exactKeys(resume, ['changes', 'insertions', 'target_document_json', 'change_constraints',
+      ...(Object.hasOwn(resume, 'asset_requests') ? ['asset_requests'] : [])], '简历建议');
+    if (resume.asset_requests !== undefined && !Array.isArray(resume.asset_requests)) {
+      throw protocolError('MODEL_OUTPUT_SCHEMA_INVALID', '图片声明必须是数组');
+    }
     if (!Array.isArray(resume.changes) || !Array.isArray(resume.insertions)) {
       throw protocolError('MODEL_OUTPUT_SCHEMA_INVALID', '修改列表必须是数组');
     }
@@ -100,6 +131,7 @@ function decodeV2(raw) {
       throw protocolError('MODEL_OUTPUT_SCHEMA_INVALID', '完整目标文档不能与片段同时返回');
     }
     proposal = {
+      ...(resume.asset_requests?.length ? { asset_requests: resume.asset_requests } : {}),
       change_constraints: resume.change_constraints,
       ...(resume.target_document_json !== null
         ? { target_resume_document: objectJson(resume.target_document_json, '完整目标文档') }

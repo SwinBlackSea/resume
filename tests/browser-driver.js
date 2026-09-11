@@ -7,7 +7,7 @@ const { spawn } = require('node:child_process');
 const chrome = process.env.CHROME_BIN || path.join(os.homedir(),
   '.cache/ms-playwright/chromium-1187/chrome-linux/chrome');
 
-async function openBrowser(t, url, { home = false } = {}) {
+async function openBrowser(t, url, { home = false, manualStructure = false, readyExpression = 'Boolean(window.WS && WS.draft)' } = {}) {
   if (!home && !new URL(url).searchParams.has('project')) {
     const target = new URL(url);
     const projects = await (await fetch(new URL('api/v1/projects', target))).json();
@@ -69,10 +69,30 @@ async function openBrowser(t, url, { home = false } = {}) {
   await cdp('Runtime.enable');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await cdp('Page.addScriptToEvaluateOnNewDocument', {
-    source: 'sessionStorage.setItem("resumeGuideSeen","1");',
+    source: 'sessionStorage.setItem("resumeGuideSeen","1");' + (manualStructure
+      ? 'if(localStorage.getItem("resumeManualStructureEnabled")===null)localStorage.setItem("resumeManualStructureEnabled","true");' : ''),
   });
   async function evaluate(expression) {
-    const result = await cdp('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    let result;
+    try {
+      // CDP awaitPromise does not itself root a pending promise. Keep exactly
+      // one evaluation alive until settlement; never retry a potentially
+      // mutating expression such as refresh/save after a transport failure.
+      const retained = `(() => {
+        const value=(0,eval)(${JSON.stringify(expression)});
+        if(!value||typeof value.then!=='function')return value;
+        const key=Symbol.for('resume.browser-test.pending-evaluations');
+        const pending=globalThis[key]||(globalThis[key]=new Map());
+        const identity={};
+        const result=Promise.resolve(value).finally(()=>pending.delete(identity));
+        pending.set(identity,result);
+        return result;
+      })()`;
+      result = await cdp('Runtime.evaluate', { expression: retained, returnByValue: true, awaitPromise: true });
+    } catch (error) {
+      error.message += '\n浏览器表达式：' + expression.slice(0, 500);
+      throw error;
+    }
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
     return result.result.value;
   }
@@ -86,7 +106,7 @@ async function openBrowser(t, url, { home = false } = {}) {
       }
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
-    throw new Error(`浏览器状态超时：${expression}\n${await evaluate('JSON.stringify({toast:document.querySelector("#toast").textContent,target:nodeStructureState&&nodeStructureState.nodeId,hovered:[...document.querySelectorAll(":hover")].map(e=>e.id||e.dataset.nodeId||e.className)})')}`);
+    throw new Error(`浏览器状态超时：${expression}\n${await evaluate('JSON.stringify({url:location.href,toast:document.querySelector("#toast")?.textContent,error:document.querySelector("#error")?.textContent,target:window.nodeStructureState&&nodeStructureState.nodeId,hovered:[...document.querySelectorAll(":hover")].map(e=>e.id||e.dataset.nodeId||e.className)})')}`);
   }
   async function point(selector, scroll = true) {
     return evaluate(`(() => {
@@ -120,7 +140,7 @@ async function openBrowser(t, url, { home = false } = {}) {
     await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...position });
   }
   await cdp('Page.navigate', { url });
-  await until('Boolean(window.WS && WS.draft)');
+  await until(readyExpression);
   return { cdp, evaluate, until, hover, click, errors };
 }
 module.exports = { openBrowser, available: fs.existsSync(chrome) };

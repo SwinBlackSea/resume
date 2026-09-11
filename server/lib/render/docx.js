@@ -219,23 +219,23 @@ const NUMBERING = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 const CORE_PROPS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 <dc:title>简历</dc:title>
-<dc:creator>简历星球</dc:creator>
-<cp:lastModifiedBy>简历星球</cp:lastModifiedBy>
+<dc:creator>resume</dc:creator>
+<cp:lastModifiedBy>resume</cp:lastModifiedBy>
 <cp:revision>1</cp:revision>
 </cp:coreProperties>`;
 
 const APP_PROPS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
-<Application>简历星球</Application>
+<Application>resume</Application>
 </Properties>`;
 
 /**
  * 渲染 DOCX。
  * @returns {{buffer:Buffer, pages:number|null}} pages 为 null：DOCX 无固定页数
  */
-function renderDocx({ resume, template }) {
+function renderDocx({ resume, template, images }) {
   const documentXml = buildDocumentXml(resume, template);
-  const buffer = createZip([
+  const parts = [
     { name: '[Content_Types].xml', data: CONTENT_TYPES },
     { name: '_rels/.rels', data: ROOT_RELS },
     { name: 'word/document.xml', data: documentXml },
@@ -244,8 +244,14 @@ function renderDocx({ resume, template }) {
     { name: 'word/numbering.xml', data: NUMBERING },
     { name: 'docProps/core.xml', data: CORE_PROPS },
     { name: 'docProps/app.xml', data: APP_PROPS },
-  ]);
+  ];
+  if (images?.size) return require('./docx-images').buildImageDocx(resume, images, parts);
+  const buffer = createZip(parts);
   return { buffer, pages: null };
 }
 
-module.exports = { renderDocx, buildDocumentXml };
+async function renderDocxAsync({ resume, template, ownerId }) {
+  const { document, images } = await require('./document-images').prepareDocumentImages(resume, ownerId);
+  return renderDocx({ resume: document, template, images });
+}
+module.exports = { renderDocx, renderDocxAsync, buildDocumentXml };

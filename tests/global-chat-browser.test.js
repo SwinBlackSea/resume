@@ -177,12 +177,23 @@ test('真实浏览器：连续聊天、输入、长建议、重试、手改合�
   await until('!promptBusy && document.querySelectorAll(".chat-proposal").length === 2');
   assert.equal(requests[1].request.task.id, firstTask);
   assert.ok(requests[1].workspace.resume.proposal_content);
-  assert.equal(await evaluate('document.querySelector(".proposal-comparison").open'), false);
+  assert.equal(await evaluate('document.querySelector(".proposal-comparison")'), null);
+  assert.equal(await evaluate('document.querySelector("#chat-messages .proposal-diff")'), null);
+  await evaluate('[...document.querySelectorAll(".proposal-diff-open")].at(-1).click()');
+  await until('document.querySelector("#proposal-diff-modal").classList.contains("show")');
+  assert.ok(await evaluate('document.querySelector("#proposal-diff-modal ins")'));
+  await evaluate('document.querySelector("#proposal-diff-modal .close").click()');
   await evaluate('document.querySelector(".chat-proposal .replace").click()');
-  await until('WS.draft.revision > 1 && Boolean(document.querySelector(".chat-proposal button[disabled]"))');
+  await until('WS.draft.revision > 1 && Boolean(document.querySelector(".chat-proposal .reapply"))');
   await until('activeTaskId !== null');
   const applied = (await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body;
   assert.ok(applied.draft.revision > before.draft.revision);
+  await evaluate('document.querySelector("#undo-step").click()');
+  await until('Boolean(WS.draft.redo_stack.length)');
+  await evaluate('document.querySelector(".chat-proposal .reapply").click()');
+  await until('!WS.draft.redo_stack.length && document.querySelector("#resume-document").textContent.includes("真实浏览器建议第2版")');
+  assert.deepEqual((await helpers.call(ctx, 'GET', `/projects/${projectId}`)).body.draft.resume_json,
+    applied.draft.resume_json, '再次应用不依赖原五步记录，重新形成相同目标');
   await typeAndSend('再调一下排版');
   await pendingStarted;
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
@@ -196,8 +207,11 @@ test('真实浏览器：连续聊天、输入、长建议、重试、手改合�
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   assert.equal(await evaluate('getComputedStyle(document.querySelector(".chat-thinking-dots i")).animationName'), 'none');
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+  // Page.reload acknowledges navigation before the old JS context is gone.
+  // Wait for the new page, not the still-busy composer in the outgoing page.
+  await evaluate('window.__beforeChatReload = true');
   await cdp('Page.reload');
-  await until('Boolean(window.WS && WS.draft && promptBusy && !document.querySelector("#stop-ai-request").hidden)');
+  await until('Boolean(!window.__beforeChatReload && window.WS && WS.draft && promptBusy && !document.querySelector("#stop-ai-request").hidden)');
   assert.equal(await evaluate('document.querySelectorAll(".chat-thinking-dots i").length'), 3);
   assert.equal(await evaluate('document.querySelector(".chat-thinking-dots i").getAnimations()[0].playState'), 'running');
   await evaluate('document.querySelector("#stop-ai-request").click()');
@@ -214,13 +228,15 @@ test('真实浏览器：连续聊天、输入、长建议、重试、手改合�
   await until('!promptBusy && WS.conversation.messages.at(-1).error_code === "PROPOSAL_NOT_EXECUTABLE"');
   assert.equal(requests.length, 5);
   await evaluate('document.querySelector(".ai-retry-button").click()');
-  await until('!promptBusy && Boolean(document.querySelector(".proposal-expand"))');
+  await until('!promptBusy && WS.conversation.messages.at(-1).result_type==="PROPOSAL"');
   assert.equal(requests.length, 6);
   assert.equal(await evaluate('document.querySelector("#prompt").value'), '尚未发送的补充');
-  await evaluate('document.querySelector(".proposal-expand").click()');
-  assert.equal(await evaluate('document.querySelector(".proposal-expand").getAttribute("aria-expanded")'), 'true');
-  await evaluate('document.querySelector(".proposal-expand").click()');
-  assert.equal(await evaluate('document.querySelector(".proposal-expand").getAttribute("aria-expanded")'), 'false');
+  assert.equal(await evaluate('document.querySelector(".proposal-expand")'), null);
+  await evaluate('[...document.querySelectorAll(".proposal-diff-open")].at(-1).click()');
+  await until('document.querySelector("#proposal-diff-modal").classList.contains("show") && document.querySelector("#proposal-diff-content").textContent.length>360');
+  assert.equal(await evaluate('[...document.querySelectorAll(".proposal-diff")].every(e=>getComputedStyle(e).maxHeight==="none")'), true,
+    '完整显示修改，不把长建议截断；只有未改动行可折叠');
+  await evaluate('document.querySelector("#proposal-diff-modal .close").click()');
   const editable = [];
   function collect(node) {
     if (node.editable && node.id !== 'target-bullet') editable.push(node.id);
@@ -238,6 +254,9 @@ test('真实浏览器：连续聊天、输入、长建议、重试、手改合�
   await evaluate('document.querySelector("#prompt").focus()');
   await until(`ResumeDom.nodeText(ResumeDom.findNode(WS.draft.resume_json,"${manualId}").node).includes("并行手工补充须保留")`);
   const revisionBeforeApply = await evaluate('WS.draft.revision');
+  await evaluate('[...document.querySelectorAll(".proposal-diff-open")].at(-1).click()');
+  await until('document.querySelector("#proposal-diff-modal").classList.contains("show")');
+  await evaluate('document.querySelector("#proposal-diff-modal .close").click()');
   await evaluate('document.querySelector(".chat-proposal .replace").click()');
   await until(`WS.draft.revision > ${revisionBeforeApply}`);
   assert.equal(await evaluate(`ResumeDom.nodeText(ResumeDom.findNode(WS.draft.resume_json,"${manualId}").node)`),

@@ -62,6 +62,39 @@ test('多层列表复制整项、经历标题复制整个经历，不固定层�
     })(result.document.root);
   }
 });
+test('生成的原生 section 经历默认复制完整子树，不依赖 entry 标签或固定层数', () => {
+  const { document } = require('./fixtures/full-resume-comparison');
+  for (const layout of ['single', 'sidebar']) {
+    const before = document(layout);
+    for (const anchor of ['work-1-name', 'work-1-body', 'project-1-name', 'project-1-body']) {
+      const original = R.findNode(before, anchor).parent;
+      const capability = R.manualStructureCapabilities(before, anchor);
+      assert.equal(capability.target_id, original.id);
+      const result = act(before, 'add_sibling', anchor);
+      const added = R.findNode(result.document, result.changedNodeIds[0]);
+      assert.deepEqual(shape(added.node), shape(original));
+      assert.equal(added.parent.id, R.findNode(before, original.id).parent.id);
+      assert.deepEqual(act(result.document, 'remove', result.focusNodeId).document, before);
+      const inside = act(before, 'add_content_sibling', anchor);
+      assert.equal(R.findNode(inside.document, inside.focusNodeId).parent.id, original.id);
+    }
+    assert.equal(R.manualStructureCapabilities(before, 'overview-body').target_id, 'overview-body',
+      '普通模块不能被误识别为整段经历');
+    assert.equal(R.manualStructureCapabilities(before, 'contact').target_id, 'contact',
+      '不能误复制整个侧栏');
+  }
+});
+test('正文提取包含无 editable 标记的 div 与行内文本，不将编辑边界误当成可见性', () => {
+  const doc = { root: element('root', 'article', 'document', [
+    element('name', 'h1', 'document_title', [{ id: 'name-run', type: 'text', value: '林舟' }]),
+    element('detail', 'div', 'paragraph', [
+      { id: 'detail-run', type: 'text', value: '完整经历与12人团队' },
+      element('strong', 'strong', 'inline', [], { text: '降低25%' }),
+    ]),
+    element('editor', 'div', 'decoration', [], { text: '不应进入正文', attributes: { 'data-editor-only': 'true' } }),
+  ]) };
+  assert.equal(R.plainText(doc), '林舟\n完整经历与12人团队降低25%');
+});
 test('合并单元格按闭合行组复制与删除，不切断跨行关系', () => {
   for (const anchor of ['merged-label', 'merged-text-2']) {
     const before = fixture();

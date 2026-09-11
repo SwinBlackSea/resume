@@ -261,28 +261,21 @@ test('下载当前草稿不创建历史或副本文档，校验项目归属和 r
   assert.equal((await fetch(url.replace(id, 'not-owned'))).status, 404);
 });
 
-test('真实浏览器：首页输入→首份成稿预览→编辑保存→制作另一份→返回原稿；附件不自动生成', {
+test('真实浏览器：成稿预览、文字保存、制作另一份和返回原稿；项目复制仍完整隔离', {
   skip: available ? false : '需要 Chromium', timeout: 60000,
 }, async (t) => {
   const requests = [];
   t.after(harness.setModelClientForTests(generationModel(requests)));
-  const browser = await openBrowser(t, ctx.base.replace('/api/v1', '/'), { home: true });
+  // Homepage three-material generation is exercised in home-browser tests.
+  // Retain the original editor/preview/navigation/copy assertions here.
+  const project = await create();
+  const generated = await helpers.call(ctx, 'POST', `/projects/${project.id}/ai/messages`, {
+    body: { content: '我叫王青，负责企业服务产品需求与交付，请生成简历。',
+      initial_generation: true, conversation_id: project.conversation_id, client_request_id: uuidv7() },
+  });
+  assert.equal(generated.status, 200, JSON.stringify(generated.body));
+  const browser = await openBrowser(t, ctx.base.replace('/api/v1', '/?project=' + project.id));
   const { evaluate, until, click, cdp } = browser;
-  assert.equal(await evaluate('document.body.classList.contains("home-mode")'), true);
-  await evaluate(`(() => {
-    const file=new File([new Uint8Array([37,80,68,70,45,49,46,55])],'resume.pdf',{type:'application/pdf'});
-    const transfer=new DataTransfer();transfer.items.add(file);
-    const input=document.querySelector('#home-files');input.files=transfer.files;input.dispatchEvent(new Event('change'));
-  })()`);
-  await until('homeAttachments.length===1 && homeAttachments[0].status==="ready"');
-  assert.equal(requests.length, 0, '附件上传不能触发模型或生成');
-  await click('#home-attachments button');
-  await click('#home-prompt');
-  await cdp('Input.insertText', { text: '我叫王青，负责企业服务产品需求与交付。' });
-  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 8 });
-  // IME / Shift+Enter do not submit; explicit button starts the same path.
-  assert.equal(requests.length, 0);
-  await click('#home-submit');
   await until('window.WS && !document.body.classList.contains("home-mode") && WS.versions.length===1', 15000);
   const firstId = await evaluate('PROJECT_ID');
   assert.equal(requests.length, 1);
@@ -301,30 +294,27 @@ test('真实浏览器：首页输入→首份成稿预览→编辑保存→制�
   await evaluate('refresh()');
   assert.match(await evaluate('document.querySelector("#resume-document").textContent'), /客户沟通/,
     '聊天状态刷新不能重绘并吞掉尚未保存的正文输入');
+  await click('#account-button');
   await click('#another-resume');
-  await until('document.body.classList.contains("home-mode") && document.querySelector("#reuse-current")');
+  await until('document.body.classList.contains("home-mode") && document.querySelector("[data-home-role=personal]")');
   assert.match(ResumeDom.plainText((await ws(firstId)).draft.resume_json), /客户沟通/);
-  await evaluate('document.querySelector("#home-prompt").value="请先分析一下这份简历";');
-  await click('#home-submit');
-  await until(`window.WS && PROJECT_ID!==${JSON.stringify(firstId)} && !document.body.classList.contains("home-mode") && WS.conversation.messages.length>0`, 15000);
-  const secondId = await evaluate('PROJECT_ID');
+  const original = await ws(firstId);
+  const callsBeforeCopy = requests.length;
+  const copy = await create({ copy_project_id: firstId, copy_draft_revision: original.draft.revision });
+  const secondId = copy.id;
+  await evaluate(`navigateResume('?project='+${JSON.stringify(secondId)})`);
+  await until(`window.WS && PROJECT_ID===${JSON.stringify(secondId)} && !document.body.classList.contains("home-mode")`, 15000);
   assert.notEqual(secondId, firstId);
   assert.match(ResumeDom.plainText((await ws(secondId)).draft.resume_json), /客户沟通/);
-  await click('#resume-list-button');
-  await until('document.body.classList.contains("home-mode") && document.querySelector("#resume-list button")');
+  assert.equal(requests.length, callsBeforeCopy, '复制完整文档不重新调用模型');
+  assert.deepEqual((await ws(secondId)).draft.resume_json, original.draft.resume_json);
+  await click('.brand');
+  await until('document.body.classList.contains("home-mode") && Boolean(window.WS)');
+  assert.equal(await evaluate('document.querySelector("#resume-list")'), null, '取消列表不删除既有简历');
   await evaluate(`navigateResume('?project='+${JSON.stringify(firstId)})`);
   await until(`window.WS && PROJECT_ID===${JSON.stringify(firstId)} && !document.body.classList.contains("home-mode")`);
   assert.match(await evaluate('document.querySelector("#resume-document").textContent'), /客户沟通/);
   assert.equal(await evaluate('getComputedStyle(document.querySelector(".context")).display'), 'none');
-  await click('#another-resume');
-  await until('document.body.classList.contains("home-mode") && document.querySelector("#reuse-current")');
-  assert.equal(await evaluate('document.querySelector("#reuse-current").checked'), true);
-  await evaluate('document.querySelector("#home-prompt").value=""');
-  const callsBeforeCopy = requests.length;
-  await click('#home-submit');
-  await until(`window.WS && PROJECT_ID!==${JSON.stringify(firstId)} && !document.body.classList.contains("home-mode")`, 15000);
-  assert.equal(requests.length, callsBeforeCopy, '只复用当前简历不必触发模型');
-  assert.deepEqual((await ws(await evaluate('PROJECT_ID'))).draft.resume_json, (await ws(firstId)).draft.resume_json);
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await new Promise((resolve) => setTimeout(resolve, 200));
   const mobileLayout = await evaluate(`JSON.stringify({width:innerWidth, scroll:document.documentElement.scrollWidth,
@@ -355,8 +345,9 @@ test('真实浏览器：Word 附件取消后可继续，只识别一次；保存
   t.after(harness.setModelClientForTests(generationModel(requests)));
   const { evaluate, until, click, cdp, errors } = await openBrowser(t,
     ctx.base.replace('/api/v1', '/') + '?project=' + project.id);
+  const validDocx = require('../server/lib/render/docx').renderDocx({ resume: material }).buffer.toString('base64');
   await evaluate(`(() => {
-    const file=new File([new Uint8Array([80,75,3,4,20,0,0,0])],'resume.docx',
+    const file=new File([Uint8Array.from(atob(${JSON.stringify(validDocx)}),c=>c.charCodeAt(0))],'resume.docx',
       {type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
     const transfer=new DataTransfer();transfer.items.add(file);
     const input=document.querySelector('#file-input');input.files=transfer.files;input.dispatchEvent(new Event('change'));

@@ -34,7 +34,7 @@ test('聊天图片完整链路：上传/纯图/多轮视觉/权限/重试/新对
   let fail = false;
   harness.setModelClientForTests({ async generate(request) {
     requests.push(request);
-    if (fail) throw Object.assign(new Error('测试中断'), { code: 'MODEL_UNAVAILABLE' });
+    if (fail) throw Object.assign(new Error('测试中断'), { code: 'MODEL_TIMEOUT', timeout_phase: 'first_response', duration_ms: 40000 });
     return { output: { type: 'message', content: '已看到图片，可以继续告诉我如何修改简历。', quick_replies: [] } };
   } });
   const first = await send({ content: '', attachment_ids: [uploadId] });
@@ -60,8 +60,18 @@ test('聊天图片完整链路：上传/纯图/多轮视觉/权限/重试/新对
   fail = false;
   const failedMessage = (await workspace()).conversation.messages.at(-1);
   assert.ok(failedMessage.retry_message_id);
+  assert.match(failedMessage.content, /正文未变.*要求和附件已保留/);
+  const metadata = JSON.parse(db.get('SELECT model_metadata_json FROM ai_messages WHERE id = ?', [failedMessage.id]).model_metadata_json);
+  assert.equal(metadata.failure_diagnostics.timeout_phase, 'first_response');
+  assert.equal(metadata.failure_diagnostics.duration_ms, 40000);
+  const failedRequest = requests.at(-1);
+  const userCount = (await workspace()).conversation.messages.filter(m => m.role === 'user').length;
   assert.equal((await send({ retry_message_id: failedMessage.retry_message_id })).status, 200);
   assert.equal(requests.at(-1).capability, 'vision');
+  assert.deepEqual(requests.at(-1).messages.at(-1), failedRequest.messages.at(-1));
+  assert.equal((await workspace()).conversation.messages.filter(m => m.role === 'user').length, userCount);
+  assert.deepEqual((await workspace()).draft, before.draft);
+  assert.deepEqual((await workspace()).profile, before.profile);
   const row = db.get('SELECT * FROM uploads WHERE id = ?', [uploadId]);
   assert.ok(fs.existsSync(objectPath(row.object_key)));
   assert.equal((await send({ content: '超量', attachment_ids: Array(9).fill(uploadId) })).status, 400);

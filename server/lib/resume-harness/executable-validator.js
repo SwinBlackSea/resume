@@ -137,6 +137,9 @@ function validateResumeRewrite(action, input, index, diagnostics) {
       nextResume = compiled.document;
     }
     proposal.target_resume_document = nextResume;
+    if (input.asset_authorization?.ownerId) {
+      require('../document-assets').validateDocumentAssets(nextResume, input.asset_authorization.ownerId);
+    }
     if (hashJson(currentResume) === hashJson(nextResume)) {
       errors.push(`actions[${index}] 没有产生实际文档变化`);
     }
@@ -185,36 +188,43 @@ function validateExecutableResponse(response, input, diagnostics = []) {
   }
 
   actions.forEach((action, index) => {
+    const actionErrors = [];
+    const diagnosticStart = diagnostics.length;
     if (!action || typeof action !== 'object') {
-      errors.push(`actions[${index}] 不是动作对象`);
-      return;
-    }
-    if (!ACTION_TYPES.has(action.type)) {
-      errors.push(`actions[${index}] 使用了未知动作类型`);
-      return;
-    }
-    if (action.type === 'RESUME_REWRITE_PROPOSAL') {
-      errors.push(...validateResumeRewrite(action, input, index, diagnostics));
-      return;
-    }
-    if (action.type === 'PROFILE_SAVE_PROPOSAL') {
+      actionErrors.push(`actions[${index}] 不是动作对象`);
+    } else if (!ACTION_TYPES.has(action.type)) {
+      actionErrors.push(`actions[${index}] 使用了未知动作类型`);
+    } else if (action.type === 'RESUME_REWRITE_PROPOSAL') {
+      actionErrors.push(...validateResumeRewrite(action, input, index, diagnostics));
+    } else if (action.type === 'PROFILE_SAVE_PROPOSAL') {
       const payload = action.payload || {};
       if (
-        !payload.operation
+        payload.invalid_typed_payload
+        || payload.operation !== 'update_basics'
         || !payload.values
         || typeof payload.values !== 'object'
         || Array.isArray(payload.values)
         || !Object.keys(payload.values).length
+        || Object.entries(payload.values).some(([key, value]) =>
+          !['name', 'phone', 'email', 'city', 'current_title', 'job_status'].includes(key)
+          || typeof value !== 'string' || !value.trim())
       ) {
-        errors.push(`actions[${index}] 的资料保存动作不完整`);
+        actionErrors.push(`actions[${index}] 的资料保存动作不完整：需要 update_basics 与受支持字段的非空文字`);
       }
-      return;
-    }
-    if (action.type === 'JOB_SET_CURRENT_PROPOSAL') {
+    } else if (action.type === 'JOB_SET_CURRENT_PROPOSAL') {
       const payload = action.payload || {};
-      if (!String(payload.confirmed_text || '').trim()) {
-        errors.push(`actions[${index}] 的岗位动作缺少 confirmed_text`);
+      if (typeof payload.confirmed_text !== 'string' || !payload.confirmed_text.trim()) {
+        actionErrors.push(`actions[${index}] 的岗位动作缺少 confirmed_text（完整岗位描述）`);
       }
+      if (payload.invalid_typed_payload
+        || ['title', 'company'].some((key) => payload[key] !== undefined && typeof payload[key] !== 'string')) {
+        actionErrors.push(`actions[${index}] 的岗位动作字段类型无效`);
+      }
+    }
+    errors.push(...actionErrors);
+    if (actionErrors.length && diagnostics.length === diagnosticStart) {
+      diagnostics.push({ code: 'ACTION_INVALID', action_index: index,
+        action_type: action?.type || null, errors: actionErrors });
     }
   });
   return errors;

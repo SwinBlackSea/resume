@@ -1072,7 +1072,10 @@ function buildContentCandidate({
   // DOCX 已经提供确定性的段落、表格、run 字号/粗细/颜色和分页结构。
   // 由 DOCX 转出的 PDF text layer 只用于几何校准，不能反过来覆盖原生样式：
   // 某些 PDF 字体会把粗体子集报告为 Regular，造成标题等内容静默丢失粗体。
-  if (nativeDocument && Array.isArray(nativeDocument.pages)) {
+  // 含图片的 Word 则使用已有保真页面场景，避免原生文字树遗漏头像/图形；
+  // 原生图片另行缓存供后续 AI 使用，不再次识别正文。
+  if (nativeDocument && Array.isArray(nativeDocument.pages)
+    && !nativeDocument.has_embedded_images) {
     const domDocument = buildNativeDomDocument(nativeDocument, geometryPages, semantic);
     return {
       format,
@@ -1267,7 +1270,7 @@ function buildLayoutCandidate({ pages, semantic, format, nativeDocument, pageSce
   const usePageScene = Boolean(
     pageScene
     && pageScene.has_text_layer
-    && !nativeDocument,
+    && (!nativeDocument || nativeDocument.has_embedded_images),
   );
   const nativeSection = nativeDocument && nativeDocument.section;
   const nativeWidth = nativeSection ? Number(nativeSection.width || 11906) / 20 : null;

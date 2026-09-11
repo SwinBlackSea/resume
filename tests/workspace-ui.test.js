@@ -68,17 +68,34 @@ function loadApp(base, projectId) {
 }
 
 test('顶栏提供已有简历、独立制作、保存、历史和下载入口', () => {
-  assert.match(app.querySelector('.brand').textContent, /简历星球/);
-  for (const id of ['resume-list-button', 'another-resume', 'save-version-button', 'preview-current']) {
+  assert.equal(app.querySelector('.brand').textContent, 'resume');
+  assert.equal(app.querySelector('#resume-list-button'), null);
+  for (const id of ['account-button', 'another-resume', 'save-version-button', 'preview-current']) {
     assert.ok(app.querySelector('#' + id));
   }
   assert.match(app.querySelector('.history-open').textContent, new RegExp(String(app.defaultView.WS.versions.length)));
 });
 
-test('资料不再占据固定左栏，目标岗位由真实项目状态展示', () => {
+test('首页、编辑页和标签页统一使用纯文字 resume 标识', () => {
+  assert.equal(app.title, 'resume');
+  assert.equal(app.querySelector('.home-brand').textContent, 'resume');
+  assert.equal(app.querySelector('.brand').tagName, 'BUTTON');
+  assert.equal(app.querySelector('.brand').getAttribute('aria-label'), 'resume，返回首页');
+  assert.equal(app.querySelector('.brand-mark'), null);
+  for (const selector of ['.brand', '.home-brand']) {
+    assert.equal(app.querySelector(selector).children.length, 0);
+    // JSDOM may represent the initial background-image value as an empty
+    // string; the Chromium regression also checks the actual computed value.
+    assert.ok(['', 'none'].includes(app.defaultView.getComputedStyle(app.querySelector(selector)).backgroundImage));
+  }
+});
+
+test('资料不再占据固定左栏，聊天区不重复展示岗位和补充材料工具条', () => {
   assert.equal(app.defaultView.getComputedStyle(app.querySelector('.context')).display, 'none');
-  assert.ok(app.querySelector('#current-target-job').textContent.includes(app.defaultView.WS.job.title));
-  assert.deepEqual(texts(app, '.material-tools button').slice(0, 3), ['上传文件', '补充经历', '提供或更换岗位']);
+  assert.equal(app.querySelector('#current-target-job'), null);
+  assert.equal(app.querySelector('#assistant-panel .material-tools'), null);
+  assert.ok(app.querySelector('#composer .attach'));
+  assert.ok(app.defaultView.WS.job.title, '隐藏固定提示不删除已确认岗位');
 });
 
 test('中央画布保留实际文档的正文、节点身份和根样式', () => {
@@ -130,21 +147,22 @@ test('简历画布无需编辑模式切换，历史版本入口保持一致', ()
   assert.strictEqual(app.querySelector('#manual-edit-toolbar'), null);
   assert.strictEqual(app.querySelector('#inline-edit-hint'), null);
   assert.ok(app.querySelector('#inline-edit-status.visually-hidden'));
-  assert.equal(app.querySelector('.top-actions .history-open').textContent, '历史版本 · ' + app.defaultView.WS.versions.length);
+  assert.equal(app.querySelector('#account-menu .history-open').textContent, '历史版本 · ' + app.defaultView.WS.versions.length);
 });
 
-test('移动端在简历工具栏提供可见的历史版本入口', () => {
-  const mobileEntry = app.querySelector('.mobile-history-open.history-open');
-  assert.ok(mobileEntry, '移动端必须存在独立历史版本入口');
-  assert.match(mobileEntry.textContent, /^历史 · \d+$/);
-  assert.match(
-    APP_HTML,
-    /@media\(max-width:760px\)[\s\S]*?\.doc-tools \.mobile-history-open\{display:inline-flex!important\}/,
-    '移动端媒体查询必须显示历史版本入口',
-  );
+test('个人中心承载历史和设置，工具栏保存图标位于撤销旁边', () => {
+  const mobileEntry = app.querySelector('#account-menu .history-open');
+  assert.ok(mobileEntry);
+  assert.equal(app.querySelectorAll('.history-open').length, 1);
+  assert.match(mobileEntry.textContent, /^历史版本 · \d+$/);
+  app.querySelector('#account-button').click();
+  assert.equal(app.querySelector('#account-menu').hidden, false);
+  assert.ok(app.querySelector('#account-menu #settings-button'));
   mobileEntry.click();
   assert.ok(app.querySelector('#history-modal').classList.contains('show'));
   assert.ok(app.querySelector('#history-list').classList.contains('active'));
+  assert.ok(app.querySelector('#doc-toolbar #save-version-button svg'));
+  assert.equal(app.querySelector('#save-version-button').nextElementSibling.id, 'undo-step');
 });
 
 test('简历编辑栏在画布内保持悬浮，并在滚动后进入紧凑状态', async () => {
@@ -183,7 +201,7 @@ test('简历编辑栏在画布内保持悬浮，并在滚动后进入紧凑状�
   );
   assert.ok(toolbar.querySelector('#zoom-menu [data-zoom="1"]').classList.contains('active'));
   assert.ok(toolbar.querySelector('#document-import-button svg'));
-  assert.ok(toolbar.querySelector('.mobile-history-open svg'), '刷新历史数量后不应丢失图标');
+  assert.ok(toolbar.querySelector('#preview-current'), '预览下载统一放在文档工具栏');
   assert.match(
     APP_HTML,
     /\.doc-toolbar-mark\{[^}]*background:transparent/,
@@ -284,12 +302,17 @@ test('历史详情与比较复用完整 Resume DOM，并提供安全继续选项
   app.querySelector('#cancel-restore-version').click();
 });
 
-test('不再弹出先填资料的引导，首页提供统一输入与非自动提交附件', () => {
+test('不弹出建档引导，首页三类材料独立上传且未就绪不能生成', () => {
   assert.equal(app.querySelector('#guide-modal').classList.contains('show'), false);
-  assert.ok(app.querySelector('#home-prompt'));
-  assert.ok(app.querySelector('#home-files').accept.includes('.docx'));
-  assert.equal(app.querySelector('#home-submit').textContent, '开始生成');
-  assert.match(app.querySelector('#home-view').textContent, /上传后不会立即生成/);
+  assert.equal(app.querySelectorAll('[data-home-role]').length, 3);
+  for (const role of ['personal', 'job', 'layout']) {
+    const input = app.querySelector(`[data-home-file="${role}"]`);
+    assert.ok(input.accept.includes('.docx') && input.accept.includes('.pdf'));
+  }
+  assert.equal(app.querySelector('#home-submit').disabled, true);
+  assert.ok(app.querySelector('#home-job-link'));
+  assert.ok(app.querySelector('#home-layout-toggle'));
+  assert.equal(app.querySelector('#resume-list'), null);
 });
 
 test('AI 助手面板：保留全局入口并说明就地改写边界', () => {

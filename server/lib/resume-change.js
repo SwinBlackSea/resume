@@ -62,10 +62,15 @@ function captureNodes(resume, nodeIds, metadata = {}) {
 }
 
 function createNodeDeltaPair(beforeResume, afterResume, nodeIds, afterMetadata = {}) {
-  return {
+  const pair = {
     before: captureNodes(beforeResume, nodeIds),
     after: captureNodes(afterResume, nodeIds, afterMetadata),
   };
+  if (hashJson(beforeResume.assets || []) !== hashJson(afterResume.assets || [])) {
+    pair.before.document_assets = deepClone(beforeResume.assets || []);
+    pair.after.document_assets = deepClone(afterResume.assets || []);
+  }
+  return pair;
 }
 
 function restoreNodeDelta(resume, restorePayload, expectedPayload) {
@@ -94,6 +99,14 @@ function restoreNodeDelta(resume, restorePayload, expectedPayload) {
     document = ResumeDom.normalizeDocument(found.document);
   });
   const current = ResumeDom.toResumeDocument(resume);
+  if (Object.hasOwn(restorePayload, 'document_assets')) {
+    if (hashJson(current.assets || []) !== hashJson(expectedPayload.document_assets || [])) {
+      const error = new Error('相关图片资源在此后又发生了变化');
+      error.code = 'CHANGE_DOCUMENT_MODIFIED';
+      throw error;
+    }
+    current.assets = deepClone(restorePayload.document_assets);
+  }
   return ResumeDom.toResumeDocument({ ...current, root: document.root });
 }
 

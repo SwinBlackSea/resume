@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS profiles (
   updated_at   TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS home_intakes (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES users(id),
+  project_id TEXT NOT NULL REFERENCES resume_projects(id),
+  state_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_home_intakes_owner ON home_intakes(owner_id, updated_at);
+
 CREATE TABLE IF NOT EXISTS experiences (
   id           TEXT PRIMARY KEY,
   profile_id   TEXT NOT NULL REFERENCES profiles(id),
@@ -125,6 +135,32 @@ CREATE TABLE IF NOT EXISTS uploads (
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
+
+-- Immutable private image objects. References remain in the one ResumeDocument;
+-- these records never introduce a second document or a personal portrait profile.
+CREATE TABLE IF NOT EXISTS document_assets (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES users(id),
+  sha256 TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  byte_size INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(owner_id, sha256)
+);
+CREATE TABLE IF NOT EXISTS document_image_cache (
+  owner_id TEXT NOT NULL REFERENCES users(id),
+  upload_id TEXT NOT NULL,
+  input_sha256 TEXT NOT NULL,
+  parser_version TEXT NOT NULL,
+  candidates_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  accessed_at TEXT NOT NULL,
+  PRIMARY KEY(owner_id, upload_id, parser_version)
+);
+CREATE INDEX IF NOT EXISTS ix_document_assets_owner ON document_assets(owner_id);
 
 CREATE TABLE IF NOT EXISTS document_imports (
   id                   TEXT PRIMARY KEY,

@@ -17,7 +17,7 @@ const sharp = require('sharp');
 const db = require('./db');
 const { uuidv7, nowIso, sha256 } = require('./util');
 const { getObject, putObject } = require('./storage');
-const { renderPdf } = require('./render/pdf');
+const { renderPdfAsync } = require('./render/pdf');
 const ResumeDom = require('../../resume-dom');
 
 const execFileAsync = promisify(execFile);
@@ -170,10 +170,11 @@ async function createThumbnail(version) {
   );
   try {
     const storedPdf = pdfArtifact && getObject(pdfArtifact.object_key);
-    const pdf = storedPdf || renderPdf({
+    const pdf = storedPdf || (await renderPdfAsync({
       resume,
+      ownerId: version.owner_id,
       template: templatePayload.schema ? templatePayload : { schema: {} },
-    }).buffer;
+    })).buffer;
     return { buffer: await rasterizePdf(pdf), mimeType: 'image/png' };
   } catch (_) {
     const buffer = await sharp(fallbackSvg(resume, templatePayload))

@@ -89,7 +89,7 @@ function groupedChildTexts(documentValue, nodeId) {
   }
   const texts = [];
   const visit = (node) => {
-    if (node.type === 'element' && node.editable) {
+    if (node.type === 'text' || node.type === 'element' && (node.editable || node.text !== undefined)) {
       const text = ResumeDom.nodeText(node).trim();
       if (text) texts.push(text);
       return;
@@ -371,8 +371,63 @@ function buildChangePreview(beforeValue, afterValue, options = {}) {
       text: afterText,
     },
     changes,
+    presentation_changes: presentationChanges(comparison.changes, before, after),
     counts: comparison.counts,
   };
+}
+
+// Display-only values: never used to reconstruct a proposal or authorize writes.
+function presentationChanges(changes, before, after) {
+  const result = [];
+  function fields(label, left, right, prefix = '', nodeId = '') {
+    for (const key of [...new Set([...Object.keys(left || {}), ...Object.keys(right || {})])].sort()) {
+      const a = left && left[key], b = right && right[key];
+      if (a === b || a !== undefined && b !== undefined && hashJson(a) === hashJson(b)) continue;
+      const path = prefix ? `${prefix}.${key}` : key;
+      const object = value => value && typeof value === 'object';
+      if ((object(a) || a == null) && (object(b) || b == null) && (object(a) || object(b))) {
+        fields(label, a || {}, b || {}, path, nodeId);
+      } else {
+        // Resource payloads are not readable differences and must not become a
+        // second base64 copy in stored preview metadata.
+        const visible = value => {
+          if (value === undefined) return null;
+          if (typeof value === 'string' && (/^data:/i.test(value) || /base64|binary/i.test(path))) {
+            return `内嵌资源（${value.length} 字符，${hashJson(value).slice(0, 12)}）`;
+          }
+          return value;
+        };
+        result.push({ label, node_id: nodeId, property: path, before: visible(a), after: visible(b) });
+      }
+    }
+  }
+  function location(document, id) {
+    const found = ResumeDom.findNode(document, id);
+    if (!found) return '无';
+    const parent = found.ancestors[found.ancestors.length - 1];
+    return parent ? `${parent.label || '所在区域'} · 第 ${(parent.children || []).findIndex(n => n.id === id) + 1} 项` : '整份简历';
+  }
+  for (const change of changes) {
+    if (change.metadata_key) {
+      const key = change.metadata_key;
+      fields(change.label, { [key]: before[key] }, { [key]: after[key] });
+      continue;
+    }
+    const left = ResumeDom.findNode(before, change.node_id)?.node;
+    const right = ResumeDom.findNode(after, change.node_id)?.node;
+    if (!left || !right) continue;
+    const label = change.label || '简历内容';
+    if (change.type === 'style' || change.type === 'attributes') {
+      const key = change.type === 'style' ? 'style' : 'attributes';
+      fields(label, left[key], right[key], '', change.node_id);
+    } else if (change.type === 'moved') {
+      result.push({ label, node_id: change.node_id, property: 'position', before: location(before, change.node_id), after: location(after, change.node_id) });
+    } else if (change.type === 'structure') {
+      fields(label, { tag: left.tag, editable: left.editable, semantic: left.semantic },
+        { tag: right.tag, editable: right.editable, semantic: right.semantic }, '', change.node_id);
+    }
+  }
+  return result;
 }
 
 function previewProposalOnResume(proposal, resume, revision) {

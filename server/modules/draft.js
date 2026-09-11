@@ -262,7 +262,7 @@ const routes = [
     method: 'GET',
     pattern: '/projects/:id/resume-draft/download',
     raw: true,
-    handler: ({ params, query, user, res }) => {
+    handler: async ({ params, query, user, res }) => {
       const draft = db.get('SELECT * FROM resume_drafts WHERE project_id = ? AND owner_id = ?', [params.id, user.id]);
       if (!draft) throw problem.notFound('简历不存在');
       if (Number(query.get('revision')) !== draft.revision) {
@@ -272,8 +272,10 @@ const routes = [
       if (!['pdf', 'docx'].includes(format)) throw problem.badRequest('支持 PDF 和 Word 下载');
       const resume = ResumeDom.toResumeDocument(JSON.parse(draft.resume_json));
       if (!ResumeDom.plainText(resume).trim()) throw problem.badRequest('简历还没有内容');
-      const render = format === 'pdf' ? require('../lib/render/pdf').renderPdf : require('../lib/render/docx').renderDocx;
-      const buffer = render({ resume, template: {} }).buffer;
+      const render = format === 'pdf' ? require('../lib/render/pdf').renderPdfAsync : require('../lib/render/docx').renderDocxAsync;
+      const buffer = (await render({ resume, template: {}, ownerId: user.id })).buffer;
+      const live = db.get('SELECT revision FROM resume_drafts WHERE id = ? AND owner_id = ?', [draft.id, user.id]);
+      if (!live || live.revision !== draft.revision) throw problem.conflict('REVISION_CONFLICT', '简历已变化，请刷新后重新下载');
       const project = db.get('SELECT name FROM resume_projects WHERE id = ? AND owner_id = ?', [params.id, user.id]);
       const name = require('./artifacts').safeFileName(project.name, format);
       res.writeHead(200, {
@@ -326,6 +328,7 @@ const routes = [
             `简历文档无效：${error.message}`,
           );
         }
+        require('../lib/document-assets').validateDocumentAssets(resume, user.id);
         const revision = draft.revision + 1;
         db.run(
           `UPDATE resume_drafts SET resume_json = ?, revision = ?, has_unsnapshotted_changes = 1, updated_at = ? WHERE id = ?`,
@@ -397,6 +400,53 @@ const routes = [
   },
   {
     method: 'POST',
+    pattern: '/projects/:id/resume-draft/images/:nodeId',
+    handler: async (request) => {
+      const { params, body, user } = request;
+      const draft = loadDraft(params.id, user);
+      if (!body.mutation_id || !Number.isInteger(body.expected_revision) || !body.upload_id) {
+        throw problem.badRequest('图片更换需要上传文件、当前简历状态和操作标识');
+      }
+      const existing = db.get('SELECT * FROM resume_change_events WHERE project_id = ? AND mutation_id = ?',
+        [params.id, String(body.mutation_id)]);
+      if (existing) {
+        const metadata = JSON.parse(existing.after_json || '{}');
+        if (metadata.input_type !== 'image_replace' || existing.scope_id !== params.nodeId
+          || metadata.image_upload_id !== body.upload_id) {
+          throw problem.conflict('MUTATION_ID_REUSED', '这次操作标识已经用于其他修改，请重新操作');
+        }
+        return { revision: draft.revision, resume_json: JSON.parse(draft.resume_json),
+          change_id: existing.id, idempotent_replay: true, version_created: false };
+      }
+      if (body.expected_revision !== draft.revision) {
+        throw problem.conflict('REVISION_CONFLICT', '简历已变化，请重新选择要更换的图片');
+      }
+      const { canReplaceImage } = require('../../resume-image-edit');
+      if (!canReplaceImage(ResumeDom.toResumeDocument(JSON.parse(draft.resume_json)), params.nodeId)) {
+        throw problem.unprocessable('IMAGE_REPLACEMENT_UNAVAILABLE',
+          '这里只支持更换独立图片；整页扫描背景请通过 AI 调整或提供独立照片');
+      }
+      const upload = db.get("SELECT * FROM uploads WHERE id = ? AND owner_id = ? AND status = 'ready'",
+        [body.upload_id, user.id]);
+      if (!upload || upload.chat_conversation_id || !['image/png', 'image/jpeg', 'image/webp'].includes(upload.mime_type)) {
+        throw problem.badRequest('请选择新上传的 PNG、JPG 或 WEBP 图片');
+      }
+      const assetService = require('../lib/document-assets');
+      const asset = await assetService.storeImage(require('../lib/storage').getObject(upload.object_key),
+        user.id, { existingObjectKey: upload.object_key });
+      // The existing transaction rechecks revision after asynchronous parsing.
+      // No parallel undo stack and no model request are introduced.
+      return routes.find(route => route.pattern === '/projects/:id/resume-draft/transactions').handler({
+        ...request,
+        body: { expected_revision: body.expected_revision, mutation_id: body.mutation_id,
+          operations: [{ op: 'replace_image', node_id: params.nodeId, asset_id: asset.id }],
+          label: '更换简历图片', input_type: 'image_replace', scope_id: params.nodeId,
+          image_upload_id: body.upload_id },
+      });
+    },
+  },
+  {
+    method: 'POST',
     pattern: '/projects/:id/resume-draft/transactions',
     handler: ({ params, body, user, requestId, ipHash }) =>
       db.tx(() => {
@@ -407,6 +457,13 @@ const routes = [
           [draft.project_id, mutationId],
         );
         if (existing) {
+          const metadata = JSON.parse(existing.after_json || '{}');
+          if (body.operations?.some(operation => operation?.op === 'replace_image')
+            || metadata.input_type === 'image_replace') {
+            if (hashJson(metadata.image_operation || null) !== hashJson(body.operations?.[0] || null)) {
+              throw problem.conflict('MUTATION_ID_REUSED', '这次操作标识已经用于其他修改，请重新操作');
+            }
+          }
           return {
             id: draft.id,
             revision: draft.revision,
@@ -426,8 +483,19 @@ const routes = [
         if (!Array.isArray(body.operations) || !body.operations.length) {
           throw problem.badRequest('文档事务至少需要一个操作');
         }
+        const imageEdit = body.operations.some(operation => operation?.op === 'replace_image');
+        if (imageEdit && (!Number.isInteger(body.expected_revision) || body.operations.length !== 1)) {
+          throw problem.badRequest('每次只能替换一张图片，且必须提供当前简历状态');
+        }
         const beforeResume = ResumeDom.toResumeDocument(JSON.parse(draft.resume_json || '{}'));
         body.operations.forEach((operation) => {
+          if (operation?.op === 'replace_image') {
+            if (Object.keys(operation).sort().join(',') !== 'asset_id,node_id,op'
+              || typeof operation.node_id !== 'string' || typeof operation.asset_id !== 'string') {
+              throw problem.badRequest('图片更换操作格式无效');
+            }
+            return;
+          }
           if (!operation || operation.op !== 'replace_text') {
             throw problem.unprocessable(
               'DIRECT_EDIT_TEXT_ONLY',
@@ -444,12 +512,19 @@ const routes = [
         });
         let nextResume;
         try {
-          nextResume = ResumeDom.applyDocumentOperations(beforeResume, body.operations, {
+          if (imageEdit) {
+            const operation = body.operations[0];
+            const asset = require('../lib/document-assets').readDocumentAsset(operation.asset_id, user.id);
+            nextResume = require('../lib/document-image-edit').replaceDocumentImage(beforeResume,
+              operation.node_id, { id: asset.id, url: asset.url, mime_type: asset.mime_type,
+                width: asset.width, height: asset.height }, user.id);
+          } else nextResume = ResumeDom.applyDocumentOperations(beforeResume, body.operations, {
             allowStructure: false,
           });
         } catch (error) {
           throw problem.unprocessable('DOCUMENT_TRANSACTION_INVALID', error.message);
         }
+        require('../lib/document-assets').validateDocumentAssets(nextResume, user.id);
         const revision = draft.revision + 1;
         const changedAt = nowIso();
         const changeId = uuidv7();
@@ -459,6 +534,8 @@ const routes = [
         const delta = createNodeDeltaPair(beforeResume, nextResume, changedNodeIds, {
           label: String(body.label || '修改简历文字').slice(0, 120),
           input_type: String(body.input_type || 'inline_text').slice(0, 40),
+          ...(imageEdit ? { image_upload_id: body.image_upload_id || null,
+            image_operation: body.operations[0] } : {}),
         });
         db.run(
           `UPDATE resume_drafts

@@ -11,6 +11,7 @@ process.env.RESUME_DB_PATH = path.join(
 );
 process.env.RESUME_DOWNLOAD_SECRET = 'test-secret';
 process.env.NODE_ENV = 'test';
+process.env.RESUME_TEST_AUTH = '1';
 // AI 行为契约测试验证的是「动作 → 策略矩阵 → 执行/待确认」链路，
 // 与真实模型的分类波动无关；因此通过 Harness 注入测试模型。
 process.env.RESUME_LLM_PROVIDER = 'test';

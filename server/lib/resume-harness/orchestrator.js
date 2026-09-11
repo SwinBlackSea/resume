@@ -12,6 +12,8 @@ const { GLOBAL_RESPONSE_SCHEMA } = require('./output-json-schema');
 const { routeResumeRequest, repairCapability } = require('./model-routing');
 const { decodeGlobalStructuredOutput } = require('./structured-envelope');
 const { buildFragmentRecovery, recoveryContext, restoreIndependentFragments } = require('./fragment-recovery');
+const { buildActionRecovery, actionRecoveryInstruction, restoreIndependentActions } = require('./action-recovery');
+const { materializeImages } = require('./image-materializer');
 
 function harnessError(code, message, details = {}) {
   const error = new Error(message);
@@ -26,8 +28,9 @@ function repairInstruction(output, errors, input, routing, diagnostics, recovery
     '上一次返回的 JSON 无法形成合法的目标简历，请依据同一份工作区和用户请求重新返回完整 JSON。',
     `校验问题：${errors.join('；')}`,
     `结构诊断：${JSON.stringify(diagnostics)}`,
-    '使用当前严格 v2 Schema：type、content、awaiting_user、message_kind、quick_replies、resume_proposal、data_actions。message 时resume_proposal=null且data_actions=[]。',
-    'proposal时resume_proposal直接包含changes、insertions、target_document_json、change_constraints；changes使用target_id和replacement_json，insertions使用parent_id、after_id和new_nodes_json。节点分别序列化为JSON字符串，禁止把整个proposal塞进payload_json。',
+    '使用当前严格 v3 Schema：type、content、awaiting_user、message_kind、quick_replies、resume_proposal、data_actions。message 时resume_proposal=null且data_actions=[]。',
+    'proposal时resume_proposal直接包含asset_requests、changes、insertions、target_document_json、change_constraints；无插图时asset_requests=[]，需要插图时使用输入图片input_image_id、目标img节点target_node_id、purpose、crop（null或归一化矩形）。changes使用target_id和replacement_json，insertions使用parent_id、after_id和new_nodes_json。节点分别序列化为JSON字符串，禁止把整个proposal塞进payload_json。',
+    'data_actions使用结构化对象：岗位{type:"JOB_SET_CURRENT_PROPOSAL",target_id:null,payload:{title,company,confirmed_text}}；资料{type:"PROFILE_SAVE_PROPOSAL",target_id:null,payload:{field,value}}。confirmed_text必须是非空完整岗位描述，不使用payload_json。',
     '不要改变用户意图，不新增用户未提供的事实。每个简历修改必须包含change_constraints，准确区分是否允许修改内容、结构和样式；删除任何节点都属于structure=modify，哪怕视觉上只是删除一段文字。',
     '只有最终完整保留全部原文字的合并、拆分、移动或容器调整才使用 content=preserve。删除任何包含文字的节点、段落或模块都会删除内容，必须使用 content=modify。',
     '后端将changes/insertions转换为resume-target-fragments-v2并重建ResumeDocument。只有文档元数据或整份重构才使用target_document_json（内部target_resume_document）。不得返回DOM operations。',
@@ -56,11 +59,12 @@ function protocolRetryInstruction(error, previousOutput) {
         ? `上一次输出虽然是 JSON，但不符合返回协议：${error.message}`
         : '上一次输出没有形成可解析的 JSON。',
     '请重新返回一个符合严格输出外壳的完整 JSON 对象，不输出 Markdown 或额外说明。',
-    '当前v2字段为type、content、awaiting_user、message_kind、quick_replies、resume_proposal、data_actions。message时resume_proposal=null、data_actions=[]。',
-    'proposal时resume_proposal直接包含changes、insertions、target_document_json、change_constraints，禁止把整份proposal序列化到payload_json。',
+    '当前v3字段为type、content、awaiting_user、message_kind、quick_replies、resume_proposal、data_actions。message时resume_proposal=null、data_actions=[]。',
+    'proposal时resume_proposal直接包含asset_requests、changes、insertions、target_document_json、change_constraints，无图片变更asset_requests=[]，禁止把整份proposal序列化到payload_json。',
     'changes只返回实际变化的最小内容：target_id和replacement_json，后者是单个节点JSON字符串或null（删除）。现有节点只需id及变化字段，不复制坐标、CSS、背景、富文本run。',
     'insertions包含parent_id、after_id、new_nodes_json（各个新节点的JSON字符串数组），父节点和非空锚点必须是当前文档的直接父子。',
     '只有page_setup、styles、assets、annotations或整份重构使用target_document_json字符串（内部target_resume_document），其他情况必须为null。',
+    'data_actions不使用payload_json：岗位动作payload直接包含title、company、confirmed_text（非空完整岗位描述）；资料动作payload为{field,value}；两者含type和target_id，无需target_type。',
     ...(previous ? [`上一次 JSON 仅供修正：${previous}`] : []),
   ].join('\n');
 }
@@ -139,22 +143,27 @@ async function runResumeHarness({ input, modelClient, signal, onActivity, onMemo
   // Validation materializes B in-place. Retain the compact model payload before
   // that step, otherwise recovery would resend a second, expanded document.
   const originalOutput = JSON.parse(JSON.stringify(result.output));
+  const originalResponse = JSON.parse(JSON.stringify(response));
   let diagnostics = [];
-  let executableErrors = validateExecutableResponse(response, input, diagnostics);
+  let executableErrors = await materializeImages(response, input, signal, diagnostics);
+  if (!executableErrors.length) executableErrors = validateExecutableResponse(response, input, diagnostics);
   let repairCount = protocolRetryCount;
   if (executableErrors.length) {
     if (protocolRetryCount) {
       throw harnessError(
         'PROPOSAL_NOT_EXECUTABLE',
         `模型没有生成可执行动作：${executableErrors.join('；')}`,
-        { validation_errors: executableErrors, validation_diagnostics: diagnostics },
+        { validation_errors: executableErrors, validation_diagnostics: diagnostics,
+          repair_count: protocolRetryCount, finish_reason: result.finish_reason || null },
       );
     }
     if (executableErrors.length) {
       repairCount += 1;
-      const recovery = buildFragmentRecovery(response, input, diagnostics);
+      const actionRecovery = buildActionRecovery(originalResponse, diagnostics);
+      const recovery = actionRecovery ? null : buildFragmentRecovery(response, input, diagnostics);
       const repairedMessages = buildRetryMessages(
-        messages, repairInstruction(originalOutput, executableErrors, input, routing, diagnostics, recovery),
+        messages, actionRecovery ? actionRecoveryInstruction(actionRecovery, diagnostics)
+          : repairInstruction(originalOutput, executableErrors, input, routing, diagnostics, recovery),
       );
       result = await modelClient.generate({
         input,
@@ -163,15 +172,17 @@ async function runResumeHarness({ input, modelClient, signal, onActivity, onMemo
         onActivity,
         maxTokens: outputBudget.retry,
         reasoningEffort,
-        outputSchema: GLOBAL_RESPONSE_SCHEMA,
+        outputSchema: actionRecovery?.schema || GLOBAL_RESPONSE_SCHEMA,
         capability: recoveryCapability,
         routingReason: `executable_repair:${routing.reason}`,
       });
       response = normalizeResult(result, input);
       diagnostics = [];
-      executableErrors = restoreIndependentFragments(response, recovery);
+      executableErrors = restoreIndependentActions(response, actionRecovery);
+      if (!executableErrors.length) executableErrors = restoreIndependentFragments(response, recovery);
       if (!executableErrors.length) {
-        executableErrors = validateExecutableResponse(response, input, diagnostics);
+        executableErrors = await materializeImages(response, input, signal, diagnostics);
+        if (!executableErrors.length) executableErrors = validateExecutableResponse(response, input, diagnostics);
       }
       if (executableErrors.length) {
         throw harnessError(
@@ -180,6 +191,7 @@ async function runResumeHarness({ input, modelClient, signal, onActivity, onMemo
           {
             validation_errors: executableErrors,
             validation_diagnostics: diagnostics,
+            repair_count: repairCount,
             finish_reason: result.finish_reason || null,
             content_length: JSON.stringify(result.output || {}).length,
             max_tokens: outputBudget.retry,

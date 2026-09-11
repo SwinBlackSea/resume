@@ -1170,7 +1170,7 @@ test('生成中切换到另一处时只展示新位置结果，迟到结果会�
   }
 });
 
-test('画布在语义节点旁显示通用 +/-，模块标题的增加操作明确区分两种结果', async () => {
+test('画布悬停显示一个框和一对 +/-，标题按当前节点处理而不弹出层级菜单', async () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const origin = ctx.base.replace('/api/v1', '');
   const dom = new JSDOM(html, {
@@ -1194,6 +1194,9 @@ test('画布在语义节点旁显示通用 +/-，模块标题的增加操作明�
     const semanticIndex = dom.window.ResumeDom.buildSemanticIndex(
       dom.window.WS.draft.resume_json,
     );
+    dom.window.manualStructureEnabled = true;
+    // jsdom has no layout engine; geometry is covered by Chromium regressions.
+    dom.window.Range.prototype.getClientRects = () => [];
     const titleEntry = [...semanticIndex.entries.values()].find((entry) => {
       const capability = dom.window.ResumeDom.manualStructureCapabilities(
         dom.window.WS.draft.resume_json,
@@ -1214,16 +1217,11 @@ test('画布在语义节点旁显示通用 +/-，模块标题的增加操作明�
     assert.strictEqual(tools.dataset.editorOnly, 'true');
     assert.strictEqual(dom.window.getComputedStyle(tools).position, 'absolute');
 
-    document.querySelector('#node-structure-add').click();
-    const menu = document.querySelector('#node-structure-menu');
-    assert.strictEqual(menu.classList.contains('show'), true);
-    assert.deepStrictEqual(
-      [...menu.querySelectorAll('button')].map((button) => button.textContent),
-      ['增加模块内容', '新增同级模块', '取消'],
-    );
-
-    document.querySelector('#node-structure-remove').click();
-    assert.match(menu.textContent, /确认删除整个模块/);
+    assert.equal(document.querySelector('#node-structure-menu'), null);
+    assert.equal(dom.window.nodeStructureState.capability.target_id, titleEntry.node_id);
+    assert.equal(dom.window.nodeStructureState.capability.add.length, 1);
+    assert.equal(dom.window.nodeStructureState.capability.add[0].action, 'duplicate_node');
+    assert.equal(document.querySelector('#node-structure-outline').classList.contains('show'), true);
     await wait(280);
   } finally {
     dom.window.close();
@@ -1297,6 +1295,8 @@ test('点击页面内 + 保持实际悬停的稳定节点，不因按钮坐标�
     await wait(1000);
     const document = dom.window.document;
     const firstTitle = document.querySelector(`[data-node-id="${firstTitleId}"]`);
+    dom.window.manualStructureEnabled = true;
+    dom.window.Range.prototype.getClientRects = () => [];
     const secondTitle = document.querySelector(`[data-node-id="${secondTitleId}"]`);
     const tools = document.querySelector('#node-structure-tools');
     assert.ok(firstTitle);
@@ -1315,21 +1315,17 @@ test('点击页面内 + 保持实际悬停的稳定节点，不因按钮坐标�
     // 模拟缩放/滚动使工具坐标靠近其他标题；真实悬停仍明确指向第二个标题。
     secondTitle.dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
     document.querySelector('#node-structure-add').click();
-    const addSection = [...document.querySelectorAll('#node-structure-menu button')]
-      .find((button) => button.textContent === '新增同级模块');
-    assert.ok(addSection);
-    addSection.click();
     await wait(500);
 
     assert.strictEqual(requests.length, 1);
     assert.strictEqual(requests[0].node_id, secondTitleId);
-    assert.strictEqual(requests[0].action, 'add_section_after');
+    assert.strictEqual(requests[0].action, 'duplicate_node');
   } finally {
     dom.window.close();
   }
 });
 
-test('新增或编辑后的聚焦节点无需刷新即可确认删除，失焦保存不会提前销毁菜单', async () => {
+test('编辑后的聚焦节点无需刷新即可直接删除，失焦保存不会丢失锁定目标', async () => {
   let titleId;
   let sectionId;
   const project = await createProject('focused-structure-delete', (document, meta) => {
@@ -1389,6 +1385,8 @@ test('新增或编辑后的聚焦节点无需刷新即可确认删除，失焦�
     await wait(1000);
     const document = dom.window.document;
     let title = document.querySelector(`[data-node-id="${titleId}"]`);
+    dom.window.manualStructureEnabled = true;
+    dom.window.Range.prototype.getClientRects = () => [];
     assert.ok(title);
 
     // 先形成一次真实自动保存，使 inlineSaveChain 持有历史成功结果。
@@ -1407,10 +1405,7 @@ test('新增或编辑后的聚焦节点无需刷新即可确认删除，失焦�
 
     title = document.querySelector(`[data-node-id="${titleId}"]`);
     title.dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }));
-    document.querySelector('#node-structure-remove').click();
-    const menu = document.querySelector('#node-structure-menu');
-    const confirm = [...menu.querySelectorAll('button')]
-      .find((button) => /确认删除整个模块/.test(button.textContent));
+    const confirm = document.querySelector('#node-structure-remove');
     assert.ok(confirm);
 
     const mouseDown = new dom.window.MouseEvent('mousedown', {
@@ -1423,7 +1418,7 @@ test('新增或编辑后的聚焦节点无需刷新即可确认删除，失焦�
     confirm.focus();
     await wait(30);
     assert.strictEqual(confirm.isConnected, true);
-    assert.strictEqual(menu.classList.contains('show'), true);
+    assert.strictEqual(document.querySelector('#node-structure-tools').classList.contains('show'), true);
 
     confirm.click();
     await wait(500);
@@ -1432,9 +1427,10 @@ test('新增或编辑后的聚焦节点无需刷新即可确认删除，失焦�
     const latest = await helpers.call(ctx, 'GET', `/projects/${project.projectId}`);
     assert.strictEqual(latest.status, 200, JSON.stringify(latest.body));
     assert.strictEqual(
-      ResumeDom.findNode(latest.body.draft.resume_json, sectionId),
+      ResumeDom.findNode(latest.body.draft.resume_json, titleId),
       null,
     );
+    assert.ok(ResumeDom.findNode(latest.body.draft.resume_json, sectionId), '删除标题不应自动删除父模块');
   } finally {
     dom.window.close();
   }

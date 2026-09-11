@@ -1,8 +1,8 @@
 {
   "name": "resume-planet",
-  "version": "2.15.0",
+  "version": "2.16.0",
   "private": true,
-  "description": "简历星球 · AI Native 简历工作台（PRD v2.15.0 / TECH v2.15.0）",
+  "description": "resume · AI 简历服务（PRD v2.16.0 / TECH v2.16.0）",
   "type": "commonjs",
   "engines": {
     "node": ">=22.5"
@@ -11,8 +11,13 @@
     "start": "node --env-file-if-exists=.env server/index.js",
     "reset": "node --env-file-if-exists=.env server/index.js --reset",
     "test": "node --test tests/*.test.js",
+    "test:accounts": "node --test tests/accounts-*.test.js",
     "test:ai": "node --test tests/ai-behavior.test.js",
     "test:policy": "node --test tests/policy.test.js",
+    "ai:configure-openai": "node server/scripts/openai-qa-config.js",
+    "ai:activate-astra": "node server/scripts/activate-global-openai.js",
+    "ai:compare": "node server/scripts/compare-global-ai.js",
+    "ai:compare-browser": "node server/scripts/compare-global-ai-browser.js",
     "test:ui": "node --test tests/workspace-ui.test.js tests/resume-first-flow.test.js",
     "setup:document-recognition": "python3 -m venv .runtime/document-recognition/venv && .runtime/document-recognition/venv/bin/python -m pip install -r server/lib/document-recognition/requirements.txt",
     "start:rule": "node server/index.js"

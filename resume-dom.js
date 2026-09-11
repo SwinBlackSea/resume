@@ -1602,7 +1602,20 @@
     const document = normalizeDocument(documentValue);
     const blocks = [];
     walk(document, (node) => {
-      if (node.type === 'element' && (node.editable || /^h[1-6]$/.test(node.tag))) {
+      if (isEditorOnly(node)) return false;
+      if (node.type === 'text') {
+        const value = String(node.value || '').trim();
+        if (value) blocks.push(value);
+        return false;
+      }
+      const inlineChildren = (node.children || []).length > 0 && node.children.every((child) =>
+        child.type === 'text' || (child.type === 'element'
+          && ['span', 'b', 'strong', 'em', 'i', 'u', 's', 'a', 'small', 'time', 'br'].includes(child.tag)));
+      // Visible content is not synonymous with an editor marker. Imported or
+      // generated div/text-run paragraphs must remain in model context,
+      // previews and completeness checks even when editable was omitted.
+      if (node.type === 'element' && (node.editable || /^h[1-6]$/.test(node.tag)
+        || inlineChildren || node.text !== undefined)) {
         const value = exportNodeText(node).trim();
         if (value) blocks.push(value);
         return false;
@@ -2184,7 +2197,24 @@
     let wrapper = null;
     for (const ancestor of found.ancestors.slice().reverse()) {
       const kind = semanticKind(ancestor);
-      if (['section', 'page', 'document', 'header'].includes(kind)) break;
+      if (kind === 'section') {
+        // Generated/imported experience blocks may be native sections, not
+        // explicitly tagged entries. A content section inside a titled module
+        // is still one complete repeatable unit. Never promote the module or a
+        // sidebar/page just because it contains the selected paragraph.
+        const hasTitle = (node) => (node.children || []).some((child) =>
+          semanticKind(child) === 'section_title'
+          || (semanticKind(child) === 'group' && hasTitle(child)));
+        const index = found.ancestors.indexOf(ancestor);
+        const containers = found.ancestors.slice(0, index).reverse();
+        const module = containers.find((node) =>
+          ['section', 'document', 'page', 'header'].includes(semanticKind(node)));
+        if (!hasTitle(ancestor) && module && semanticKind(module) === 'section' && hasTitle(module)) {
+          return ancestor;
+        }
+        break;
+      }
+      if (['page', 'document', 'header'].includes(kind)) break;
       if (['list_item', 'entry', 'table_row'].includes(kind)) return ancestor;
       if (!wrapper && kind === 'group' && !['tbody', 'thead', 'tfoot'].includes(ancestor.tag)) wrapper = ancestor;
     }
@@ -2222,6 +2252,8 @@
    * 始终表示在下方增加同级内容。固定坐标 PDF 的新增会造成版面重叠；
    * 页面底图带原文字时，删除覆盖文字也不能让原内容真正消失。
    */
+  // Compatibility for requests from already-open clients. The current canvas
+  // uses manualSelectionCapabilities and never promotes a selected paragraph.
   function manualStructureCapabilities(documentValue, nodeId) {
     const document = toResumeDocument(documentValue);
     const found = findNode(document, String(nodeId || ''));
@@ -2328,6 +2360,51 @@
     };
   }
 
+  function manualSelectionAllowed(node, ancestors, parent) {
+    if (!parent || node.type !== 'element' || isEditorOnly(node)) return false;
+    const kind = semanticKind(node);
+    if (ancestors.some(item => item.editable === true || semanticKind(item) === 'header')) return false;
+    if (['document', 'page', 'header', 'document_title', 'inline', 'layout_line',
+      'decoration', 'table_cell'].includes(kind)) return false;
+    if (['tbody', 'thead', 'tfoot'].includes(node.tag)) return false;
+    return node.editable === true || ['section', 'entry', 'group', 'list', 'list_item',
+      'table', 'table_row'].includes(kind);
+  }
+
+  function manualSelectionNodes(documentValue) {
+    const document = toResumeDocument(documentValue);
+    const result = [];
+    (function visit(node, ancestors, parent) {
+      if (manualSelectionAllowed(node, ancestors, parent)) {
+        result.push({ node_id: node.id, depth: ancestors.length, container: !node.editable });
+      }
+      (node.children || []).forEach(child => visit(child, ancestors.concat(node), node));
+    })(document.root, [], null);
+    return result;
+  }
+
+  function manualSelectionCapabilities(documentValue, nodeId) {
+    const document = toResumeDocument(documentValue);
+    const found = findNode(document, String(nodeId || ''));
+    if (!found || !manualSelectionAllowed(found.node, found.ancestors, found.parent)) return null;
+    const kind = semanticKind(found.node);
+    // A merged table row is a closed row band, shown as ONE encompassing frame.
+    // Paragraphs inside cells remain independently selectable.
+    const targets = kind === 'table_row' ? manualRowGroup(document, found.node) : [found.node];
+    const targetIds = targets.map(node => node.id);
+    const fixed = fixedSceneInfo(found);
+    return {
+      node_id: found.node.id,
+      target_id: found.node.id,
+      target_ids: targetIds,
+      kind,
+      fixed_layout: fixed.fixed,
+      add: [{ action: 'duplicate_node', label: '复制框内内容', enabled: !fixed.fixed }],
+      remove: { action: 'delete_node', label: '删除框内内容', target_id: found.node.id,
+        target_ids: targetIds, enabled: !fixed.backgroundContainsText },
+    };
+  }
+
   function escapeHtml(text) {
     return String(text == null ? '' : text)
       .replace(/&/g, '&amp;')
@@ -2399,7 +2476,11 @@
         element.dataset.semanticKind = node.semantic.kind;
       }
       Object.entries(node.attributes || {}).forEach(([name, value]) => {
-        element.setAttribute(name, value);
+        // Deployment paths belong only to the browser DOM, never the saved
+        // document or export projection. Resolve before assigning to avoid an
+        // initial request to the wrong origin-root endpoint.
+        const resource = (name === 'src' || name === 'href') && this.options.resolveResourceUrl;
+        element.setAttribute(name, resource ? this.options.resolveResourceUrl(value) : value);
       });
       Object.entries(node.style || {}).forEach(([name, value]) => {
         element.style.setProperty(name, value);
@@ -2495,6 +2576,8 @@
     toAiContextDocument,
     buildSemanticIndex,
     manualStructureCapabilities,
+    manualSelectionCapabilities,
+    manualSelectionNodes,
     plainText,
     exportNodeText,
     toRenderBlocks,

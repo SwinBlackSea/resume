@@ -60,4 +60,8 @@ function renderHtml({ resume, template = {}, ownerId }) {
 <style>${pageCss}</style></head><body>${body}</body></html>`;
 }
 
-module.exports = { renderHtml, inlineSceneAssets };
+async function renderHtmlAsync({ resume, ownerId }) {
+  const { document } = await require('./document-images').prepareDocumentImages(resume, ownerId);
+  return require('./print-document').printDocumentHtml(document);
+}
+module.exports = { renderHtml, renderHtmlAsync, inlineSceneAssets };

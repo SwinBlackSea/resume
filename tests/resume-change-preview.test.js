@@ -50,6 +50,43 @@ function documentWithItems() {
   });
 }
 
+test('排版、页面设置和结构明细均来自真实字段差异，包含删除的属性', () => {
+  const before = documentWithItems();
+  before.root.style = { padding: '40px', color: '#333333' };
+  const after = structuredClone(before);
+  after.root.style = { padding: '20px', 'text-align': 'left' };
+  after.page_setup = { ...before.page_setup, width: '210mm' };
+  after.root.children[0].children[1].tag = 'div';
+  const preview = buildChangePreview(before, after);
+  assert.equal(preview.before.text, preview.after.text);
+  assert.ok(preview.presentation_changes.some(c => c.property === 'padding' && c.before === '40px' && c.after === '20px'));
+  assert.ok(preview.presentation_changes.some(c => c.property === 'color' && c.after === null));
+  assert.ok(preview.presentation_changes.some(c => c.property === 'text-align' && c.before === null && c.after === 'left'));
+  assert.ok(preview.presentation_changes.some(c => c.property === 'page_setup.width'));
+  assert.ok(preview.presentation_changes.some(c => c.property === 'tag' && c.before === 'p' && c.after === 'div'));
+  assert.deepEqual(buildChangePreview(after, after).presentation_changes, []);
+});
+
+test('父节点同时改排版时差异仍包含不可编辑的可见正文', () => {
+  const before = documentWithItems();
+  before.root.children[0].children.push({ id: 'visible', type: 'element', tag: 'p', text: '原先可见文字' });
+  const after = structuredClone(before);
+  after.root.style = { padding: '20px' };
+  after.root.children[0].children.at(-1).text = '新的可见文字';
+  const preview = buildChangePreview(before, after);
+  assert.match(preview.before.text, /原先可见文字/);
+  assert.match(preview.after.text, /新的可见文字/);
+});
+
+test('资源差异仅描述变化，不在预览元数据复制二进制内容', () => {
+  const before = documentWithItems(), after = structuredClone(before);
+  const binary = 'data:image/png;base64,' + 'a'.repeat(1000);
+  after.assets = [{ id: 'portrait', data_url: binary }];
+  const details = JSON.stringify(buildChangePreview(before, after).presentation_changes);
+  assert.match(details, /内嵌资源/);
+  assert.ok(!details.includes(binary));
+});
+
 test('结构建议预览从真实文档差异提取内容，不暴露底层操作名称', () => {
   const before = documentWithItems();
   const proposal = {

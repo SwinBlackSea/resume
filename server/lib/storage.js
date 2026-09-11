@@ -8,7 +8,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const OBJECTS_DIR = path.join(__dirname, '..', '..', 'data', 'objects');
+const OBJECTS_DIR = process.env.RESUME_OBJECTS_DIR
+  ? path.resolve(process.env.RESUME_OBJECTS_DIR)
+  : path.join(__dirname, '..', '..', 'data', 'objects');
 
 function ensureDir() {
   if (!fs.existsSync(OBJECTS_DIR)) fs.mkdirSync(OBJECTS_DIR, { recursive: true });

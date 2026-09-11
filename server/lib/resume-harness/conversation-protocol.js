@@ -28,13 +28,26 @@ function currentUserMessage(text, attachments) {
   const imageParts = (attachments || [])
     .filter((attachment) =>
       attachment && attachment.content_base64 && attachment.mime_type)
-    .map((attachment) => ({
+    .flatMap((attachment) => [
+      ...(attachment.input_image_id ? [{
+        type: 'text',
+        text: JSON.stringify({ image_reference: {
+          input_image_id: attachment.input_image_id, width: attachment.width, height: attachment.height,
+          model_width: attachment.model_width, model_height: attachment.model_height,
+          kind: attachment.kind, page: attachment.page, placement: attachment.placement,
+          material_role: attachment.material_role,
+          reference_only: attachment.reference_only,
+          coordinate_system: 'normalized_0_1_after_orientation',
+        } }),
+      }] : []),
+      {
       type: 'image_url',
       image_url: {
         url: `data:${attachment.mime_type};base64,${attachment.content_base64}`,
         detail: attachment.detail || 'high',
       },
-    }));
+      },
+    ]);
   return imageParts.length
     ? {
         role: 'user',

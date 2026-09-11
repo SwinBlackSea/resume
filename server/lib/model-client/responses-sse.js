@@ -71,12 +71,19 @@ async function consumeResponsesStream(body, { idleMs = 30000, onActivity } = {})
   let status = 'in_progress';
   let responseError = null;
   let finalResponse = null;
+  let refused = false;
 
   const consumeLine = (line) => {
     const event = parseDataLine(line);
     if (!event) return;
     if (onActivity) onActivity({ type: 'response' });
     const type = String(event.type || '');
+    if (type === 'response.refusal.delta' || type === 'response.refusal.done') refused = true;
+    if (type === 'error') {
+      status = 'failed';
+      finishReason = 'failed';
+      return;
+    }
     if (type === 'response.output_text.delta' && event.delta) {
       content += String(event.delta);
       if (onActivity) onActivity({ type: 'content', delta: String(event.delta) });
@@ -108,18 +115,26 @@ async function consumeResponsesStream(body, { idleMs = 30000, onActivity } = {})
     }
   };
 
-  while (true) {
-    const { done, value } = await readWithIdleTimeout(reader, idleMs);
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-    lines.forEach(consumeLine);
+  try {
+    while (status === 'in_progress') {
+      const { done, value } = await readWithIdleTimeout(reader, idleMs);
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      lines.forEach(consumeLine);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) buffer.split(/\r?\n/).forEach(consumeLine);
+  } finally {
+    // Stop at the terminal event even if a proxy leaves the connection open.
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
-  buffer += decoder.decode();
-  if (buffer.trim()) buffer.split(/\r?\n/).forEach(consumeLine);
 
   if (!content && finalResponse) content = outputTextFromResponse(finalResponse);
+  refused ||= (finalResponse?.output || []).some((item) =>
+    (item.content || []).some((part) => part.type === 'refusal'));
   return {
     content,
     reasoningLength,
@@ -127,6 +142,7 @@ async function consumeResponsesStream(body, { idleMs = 30000, onActivity } = {})
     finishReason,
     status,
     responseError,
+    refused,
   };
 }
 

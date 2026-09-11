@@ -8,6 +8,7 @@
  */
 const ResumeDom = require('../../resume-dom');
 const { uuidv7, deepClone } = require('./util');
+const { insertionLayout, removalLayout } = require('./manual-flow-layout');
 
 const STRIPPED_ATTRIBUTES = new Set([
   'id',
@@ -185,11 +186,14 @@ function buildSection(section, title) {
 
 function compileManualNodeAction(documentValue, action, nodeId) {
   const document = ResumeDom.toResumeDocument(documentValue);
-  const capability = ResumeDom.manualStructureCapabilities(document, nodeId);
+  const normalizedAction = String(action || '');
+  const exactSelection = ['duplicate_node', 'delete_node'].includes(normalizedAction);
+  const capability = exactSelection
+    ? ResumeDom.manualSelectionCapabilities(document, nodeId)
+    : ResumeDom.manualStructureCapabilities(document, nodeId);
   if (!capability) {
     throw actionError('MANUAL_NODE_ACTION_UNAVAILABLE', '这处内容不支持直接增删');
   }
-  const normalizedAction = String(action || '');
   const allowed = new Set([
     ...(capability.add || []).filter((item) => item.enabled).map((item) => item.action),
     ...(capability.remove_choices || [capability.remove])
@@ -216,7 +220,7 @@ function compileManualNodeAction(documentValue, action, nodeId) {
     throw actionError('MANUAL_NODE_TARGET_MISSING', '这处内容已经不存在，请刷新后重试');
   }
 
-  if (['remove', 'remove_content'].includes(normalizedAction)) {
+  if (['remove', 'remove_content', 'delete_node'].includes(normalizedAction)) {
     const choice = (capability.remove_choices || [capability.remove])
       .find((item) => item.action === normalizedAction);
     const targetIds = choice.target_ids || [choice.target_id];
@@ -224,14 +228,15 @@ function compileManualNodeAction(documentValue, action, nodeId) {
       throw actionError('MANUAL_NODE_TARGET_MISSING', '要删除的内容已经不存在');
     }
     return {
-      operations: targetIds.slice().reverse().map((id) => ({ op: 'remove_node', node_id: id })),
+      operations: removalLayout(document, targetIds.map(id => ResumeDom.findNode(document, id).node))
+        .concat(targetIds.slice().reverse().map((id) => ({ op: 'remove_node', node_id: id }))),
       changedNodeIds: targetIds,
       focusNodeId: null,
       label: choice.label,
     };
   }
 
-  if (['add_sibling', 'add_content_sibling'].includes(normalizedAction)) {
+  if (['add_sibling', 'add_content_sibling', 'duplicate_node'].includes(normalizedAction)) {
     const targetIds = normalizedAction === 'add_content_sibling'
       ? [found.node.id] : capability.target_ids || [found.node.id];
     const targets = targetIds.map((id) => ResumeDom.findNode(document, id));
@@ -242,6 +247,7 @@ function compileManualNodeAction(documentValue, action, nodeId) {
     const nodes = duplicated.node.children;
     const parent = targets[0].parent;
     const preparation = [];
+    preparation.push(...insertionLayout(document, targets.map(target => target.node), nodes));
     if (ResumeDom.semanticKind(targets[0].node) === 'table_row') {
       const rows = parent.children || [];
       targets.forEach((target, index) => {
@@ -264,7 +270,9 @@ function compileManualNodeAction(documentValue, action, nodeId) {
         node,
       }))),
       changedNodeIds: nodes.map((node) => node.id),
-      focusNodeId: duplicated.nodeIds.get(String(found.node.id)) || nodes[0].id,
+      focusNodeId: duplicated.nodeIds.get(String(
+        exactSelection ? (editableDescendants(found.node)[0] || found.node).id : found.node.id,
+      )) || nodes[0].id,
       label: capability.add.find((item) => item.action === normalizedAction).label,
     };
   }
@@ -284,12 +292,12 @@ function compileManualNodeAction(documentValue, action, nodeId) {
       ? editableDescendants(reference, [])[0] || reference
       : null;
     return {
-      operations: [{
+      operations: (reference ? insertionLayout(document, [reference], [node]) : []).concat([{
         op: 'insert_node',
         parent_id: referenceFound ? referenceFound.parent.id : sectionFound.node.id,
         after_node_id: reference ? reference.id : (sectionFound.node.children || []).at(-1)?.id,
         node,
-      }],
+      }]),
       changedNodeIds: [node.id],
       focusNodeId: duplicated && referenceFocus
         ? duplicated.nodeIds.get(String(referenceFocus.id)) || node.id
@@ -301,12 +309,12 @@ function compileManualNodeAction(documentValue, action, nodeId) {
   if (normalizedAction === 'add_section_after') {
     const built = buildSection(sectionFound.node, found.node);
     return {
-      operations: [{
+      operations: insertionLayout(document, [sectionFound.node], [built.node]).concat([{
         op: 'insert_node',
         parent_id: sectionFound.parent.id,
         after_node_id: sectionFound.node.id,
         node: built.node,
-      }],
+      }]),
       changedNodeIds: [built.node.id],
       focusNodeId: built.focusNodeId,
       label: '新增同级模块',

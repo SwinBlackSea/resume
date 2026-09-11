@@ -196,7 +196,7 @@ test('复杂请求的处理思路以自然对话和克制的快捷回复展示',
   dom.window.close();
 });
 
-test('AI 沟通区展示 A、B、C，并且只有当前建议可操作', async () => {
+test('AI 沟通区以统一差异呈现当前建议，不再重复前后全文及上一版', async () => {
   const first = await helpers.call(ctx, 'POST', `/projects/${projectId}/ai/messages`, {
     body: { content: '写得更专业', scope_type: 'RESUME_BLOCK', scope_id: 'target-bullet' },
   });
@@ -236,7 +236,7 @@ test('AI 沟通区展示 A、B、C，并且只有当前建议可操作', async (
   await new Promise((resolve) => setTimeout(resolve, 1200));
 
   const cards = [...dom.window.document.querySelectorAll('#chat-messages .chat-proposal')];
-  const proposalCards = cards.filter((card) => card.querySelector('.suggestion-copy'));
+  const proposalCards = cards.filter((card) => card.querySelector('.proposal-diff-open'));
   assert.strictEqual(proposalCards.length, 2);
   assert.ok(proposalCards[1].closest('.assistant-proposal-group'));
   assert.match(
@@ -244,15 +244,33 @@ test('AI 沟通区展示 A、B、C，并且只有当前建议可操作', async (
     /建议|调整|修改/,
   );
   assert.match(proposalCards[0].textContent, /已有新版建议/);
-  assert.match(proposalCards[1].textContent, /简历当前内容/);
-  assert.match(proposalCards[1].textContent, /沿用上一版建议/);
-  assert.match(proposalCards[1].textContent, /本轮建议/);
+  assert.match(proposalCards[1].textContent, /查看差异/);
+  assert.equal(proposalCards[1].querySelector('.proposal-diff'), null);
+  assert.equal(proposalCards[1].querySelector('.proposal-comparison'), null);
+  proposalCards[1].querySelector('.proposal-diff-open').click();
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const modal = dom.window.document.querySelector('#proposal-diff-modal');
+  assert.equal(modal.classList.contains('show'), true);
+  const paper = modal.querySelector('.resume-review-paper');
+  assert.ok(paper, '差异主体应是一份完整简历，而非节点变化列表');
+  assert.match(paper.textContent, /教育经历/);
+  assert.match(paper.textContent, /专业技能/);
+  const changedRegion = paper.querySelector('[data-review-node="target-bullet"]');
+  assert.ok(changedRegion);
+  function diffText(side) {
+    return [...changedRegion.querySelectorAll('.proposal-diff-row')].filter(row =>
+      row.dataset.diffKind !== (side === 'before' ? 'add' : 'remove')).map(row => {
+      const clone = row.cloneNode(true);
+      clone.querySelectorAll(side === 'before' ? 'ins,summary' : 'del,summary').forEach(el => el.remove());
+      return clone.textContent;
+    }).join('\n');
+  }
   assert.strictEqual(
-    proposalCards[1].querySelector('.current-copy').textContent,
+    diffText('before'),
     proposalC.payload.proposal.change_preview.before.text,
   );
   assert.strictEqual(
-    proposalCards[1].querySelector('.suggestion-copy').textContent,
+    diffText('after'),
     proposalC.payload.proposal.change_preview.after.text,
   );
   assert.strictEqual(
@@ -261,7 +279,7 @@ test('AI 沟通区展示 A、B、C，并且只有当前建议可操作', async (
   );
   assert.deepStrictEqual(
     [...proposalCards[1].querySelectorAll('.proposal-actions button')].map((button) => button.textContent),
-    ['预览整份简历', '应用修改', '继续调整', '暂不使用'],
+    ['预览整份简历', '查看差异', '应用修改', '继续调整'],
   );
   dom.window.close();
 });
@@ -376,7 +394,7 @@ test('AI 沟通区可确认后开始新对话，并说明保留与失效内容',
   document.querySelector('#new-chat-button').click();
   assert.strictEqual(document.querySelector('#new-chat-modal').classList.contains('show'), true);
   assert.match(document.querySelector('#new-chat-summary').textContent, /个人信息、岗位、简历和历史版本不会改变/);
-  assert.match(document.querySelector('#new-chat-summary').textContent, /未应用建议将不再可用/);
+  assert.match(document.querySelector('#new-chat-summary').textContent, /删除此前对话和旧建议/);
 
   document.querySelector('#confirm-new-chat').click();
   await new Promise((resolve) => setTimeout(resolve, 900));
@@ -386,6 +404,9 @@ test('AI 沟通区可确认后开始新对话，并说明保留与失效内容',
   assert.match(document.querySelector('#chat-messages').textContent, /就地改写/);
   assert.match(document.querySelector('#chat-messages').textContent, /调整结构或联动其他内容/);
   assert.strictEqual(document.querySelector('#selection-label').textContent, '@整份简历');
+  assert.strictEqual(dom.window.activeTaskId, null);
+  assert.strictEqual(dom.window.activeContext, null);
+  assert.strictEqual(dom.window.WS.conversation.continuation, null);
   assert.strictEqual(Object.hasOwn(dom.window.WS, 'pending_facts'), false);
   dom.window.close();
 });
@@ -541,10 +562,15 @@ test('点击单一编辑节点内任一格式段落时只提供整体 AI 入口'
     '作用范围与操作名称应分层展示，不能把长内容塞进操作按钮',
   );
 
+  const previousGlobalContext = JSON.stringify(window.activeContext);
+  const previousGlobalTaskId = window.activeTaskId;
   document.querySelector('.rewrite-action').click();
   assert.strictEqual(window.localAiState.targetNodeId, groupId);
   assert.strictEqual(document.querySelector('#local-ai-popover').classList.contains('show'), true);
-  assert.strictEqual(window.activeContext, null);
+  assert.strictEqual(JSON.stringify(window.activeContext), previousGlobalContext,
+    '局部改写不应清空或改变已存在的全局聊天范围');
+  assert.strictEqual(window.activeTaskId, previousGlobalTaskId,
+    '局部改写不应改变全局续聊任务');
   document.querySelector('#local-ai-close').click();
 
   firstParagraph.click();

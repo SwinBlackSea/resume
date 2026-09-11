@@ -20,9 +20,9 @@ const documentRecognition = require('./document-recognition');
 const fs = require('node:fs');
 const { putObject } = require('./storage');
 const { objectPath } = require('./storage');
-const { renderPdf } = require('./render/pdf');
-const { renderDocx } = require('./render/docx');
-const { renderHtml } = require('./render/html');
+const { renderPdfAsync } = require('./render/pdf');
+const { renderDocxAsync } = require('./render/docx');
+const { renderHtmlAsync } = require('./render/html');
 const ResumeDom = require('../../resume-dom');
 
 const STEPS = [
@@ -68,7 +68,7 @@ function stepOf(key) {
 
 /** 保存产物并登记 artifacts（先写对象，再在 finalize 事务中登记，保证原子性）。 */
 function writeArtifactFile(ownerId, snapshotId, type, buffer, mimeType) {
-  const key = `${ownerId}/artifacts/${snapshotId}-${type}`;
+  const key = `${ownerId}/document-export-v2/${snapshotId}-${type}`;
   putObject(key, buffer);
   return { key, size: buffer.length, sha256: sha256(buffer), mimeType };
 }
@@ -177,14 +177,14 @@ async function runGeneration(snapshotId) {
     }
     // ---- render_html ----
     advance('render_html');
-    const htmlString = renderHtml({ resume, template: {}, ownerId: owner.id });
+    const htmlString = await renderHtmlAsync({ resume, template: {}, ownerId: owner.id });
     const htmlFile = writeArtifactFile(owner.id, snapshotId, 'html', Buffer.from(htmlString, 'utf8'), 'text/html; charset=utf-8');
 
     // ---- render_pdf ∥ render_docx（并行，允许部分成功） ----
     advance('render_artifacts');
     const [pdfResult, docxResult] = await Promise.allSettled([
-      Promise.resolve().then(() => renderPdf({ resume, template: {} })),
-      Promise.resolve().then(() => renderDocx({ resume, template: {} })),
+      renderPdfAsync({ resume, template: {}, ownerId: owner.id }),
+      renderDocxAsync({ resume, template: {}, ownerId: owner.id }),
     ]);
 
     const pdfFile = pdfResult.status === 'fulfilled'
@@ -495,7 +495,7 @@ function attachSceneBackgroundArtifacts(contentCandidate, pageArtifactIds) {
 
 async function runDocumentImport(importId) {
   const row = db.get(
-    `SELECT di.*, u.object_key, u.original_name, u.mime_type, u.size
+    `SELECT di.*, u.object_key, u.original_name, u.mime_type, u.size, u.chat_conversation_id
      FROM document_imports di
      JOIN uploads u ON u.id = di.upload_id
      WHERE di.id = ?`,
@@ -602,6 +602,19 @@ async function runDocumentImport(importId) {
         importId,
       ],
     );
+    if (['pdf', 'docx', 'doc', 'png', 'jpg', 'jpeg', 'webp'].includes(result.detected_format)) {
+      try {
+        await require('./document-assets').prepareUploadImages(row.upload_id, {
+          ownerId: row.owner_id, projectId: row.project_id, conversationId: row.chat_conversation_id,
+        });
+      } catch (_) {
+        // Import already retains the faithful page/background. Unsupported
+        // standalone artwork must not destroy usable editable text or photos.
+        const warnings = [...new Set([...(result.warning_codes || []), 'IMAGE_CANDIDATES_UNAVAILABLE'])];
+        result.warning_codes = warnings;
+        db.run('UPDATE document_imports SET warning_codes = ? WHERE id = ?', [JSON.stringify(warnings), importId]);
+      }
+    }
     emitDocumentImport(importId, {
       status: 'needs_review',
       progress: 100,

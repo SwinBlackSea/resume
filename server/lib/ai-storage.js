@@ -2,6 +2,7 @@
 
 // 此模块只接收现成数据库连接，不初始化服务或修改草稿/版本。
 const { archivedPayload } = require('./resume-change');
+const { retainReapply } = require('./proposal-reapply');
 const INLINE = 'RESUME_INLINE_REWRITE_PROPOSAL';
 const RECEIPT = 'ai-action-receipt-v1';
 
@@ -174,7 +175,7 @@ function compactDuplicateProposals(database) {
 function compactGlobalHistory(database, ownerId = null) {
   let changed = 0;
   const rows = database.prepare(
-    `SELECT id, payload_json FROM ai_action_requests
+    `SELECT id, status, payload_json FROM ai_action_requests
      WHERE action_type = 'RESUME_REWRITE_PROPOSAL'
        AND (? IS NULL OR owner_id = ?)
        AND status IN ('applied','rejected','reverted','superseded','stale')
@@ -183,7 +184,9 @@ function compactGlobalHistory(database, ownerId = null) {
   for (const row of rows) {
     const value = parse(row.payload_json);
     const proposal = value.proposal || value;
-    // 旧卡片仍可显示结果；不能再应用的执行材料不随聊天无限重复保存。
+    // Applied suggestions remain replayable independently of the five-step
+    // undo window. Compress once; do not retain duplicate full JSON trees.
+    if (['applied', 'reverted'].includes(row.status)) retainReapply(proposal);
     for (const key of ['base_resume_json', 'target_resume_document', 'resume_json',
       'target_resume_fragments', 'operations', 'operation_preconditions']) delete proposal[key];
     const next = JSON.stringify(value);

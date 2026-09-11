@@ -70,6 +70,8 @@ function buildHarnessInput(options) {
     ...structured,
     attachments: attachments || [],
     image_history: options.imageHistory || [],
+    image_sources: options.imageSources || [],
+    asset_authorization: options.assetAuthorization || null,
     // 兼容动作执行层读取，语义判断只使用上面的结构化对象。
     text: structured.request.text,
     messageId: structured.request.message_id,
@@ -159,6 +161,8 @@ function buildMessages(input) {
       existing_fragment_fields_omitted: 'inherit_from_base_document',
       response_scope: 'minimum_changed_subtrees_only',
     },
+    image_candidates: (input.image_sources || []).map(({ input_image_id, width, height, kind, page, placement, material_role, reference_only }) =>
+      ({ input_image_id, width, height, kind, page, placement, material_role, reference_only })),
   };
   return buildConversationMessages({
     systemPrompt: SYSTEM_PROMPT,
